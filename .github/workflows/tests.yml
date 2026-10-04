@@ -1,0 +1,38 @@
+name: tests
+
+# The whole suite, on Linux and macOS: the wrappers depend on each platform's bash, sed, ps and
+# jq, so a change that only works on one of them fails here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: "3.9"}
+          - {os: ubuntu-latest, python: "3.13"}
+          - {os: macos-latest, python: "3.13"}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Tools the suites use
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y jq zip unzip
+          else command -v jq || brew install jq; fi
+      - name: Validate the example overlay
+        run: bash scripts/roster.sh validate
+        env:
+          ACCESS_OVERLAY: ${{ github.workspace }}/examples/access-overlay.example.json
+      - name: Every suite
+        run: bash tests/run-all.sh

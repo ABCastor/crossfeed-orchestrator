@@ -1,0 +1,582 @@
+/* The console · the Castor signature worn by a tool. Paper and ink. Source Serif reads, Commissioner
+   labels, Literata carries the name, Martian Mono is measurement only. Teal is the machine following
+   its gauges; terracotta is the human's hand, so it marks what the person set past the machine: a
+   pool forced past its gauges, a model switched off by hand. Olive is where the two meet: allowance
+   about to expire, which both should want spent. */
+@font-face{font-family:Face;font-weight:100 900;src:url(fonts/commissioner.woff2) format('woff2');font-display:swap}
+@font-face{font-family:Word;font-weight:200 900;src:url(fonts/literata.woff2) format('woff2');font-display:swap}
+@font-face{font-family:Read;font-weight:200 900;src:url(fonts/crossfeedreadserif.woff2) format('woff2');font-display:swap}
+@font-face{font-family:Machine;font-weight:100 800;src:url(fonts/martianmono.woff2) format('woff2');font-display:swap}
+@font-face{font-family:Hand;font-weight:500;src:url(fonts/randosans-500-sharpie.woff2) format('woff2');font-display:swap}
+
+:root{color-scheme:light dark;
+  --paper:light-dark(#FAF9F4,#141311);--ink:light-dark(#14130F,#E9E6DF);--quiet:light-dark(#5A554C,#A6A199);--tab:light-dark(#3B3731,#C2BDB4);
+  --human:#C4552A;--machine:light-dark(#006770,#00858F);--machine-text:light-dark(#006770,#48A2AA);--between:#667D2F;
+  --human-text:light-dark(color-mix(in srgb,#C4552A 78%,#14130F),color-mix(in srgb,#C4552A 72%,#E9E6DF));
+  --rule:light-dark(#DDD8CC,#37342E);--rule-strong:light-dark(#8C877C,#777268);--surface:light-dark(#F3F1E9,#1F1E1A);
+  --face:Face,"Commissioner",system-ui,sans-serif;--ui:var(--face);--read:Read,"Source Serif 4",Georgia,serif;
+  --word:Word,"Literata",Georgia,serif;--mono:Machine,"Martian Mono",ui-monospace,Menlo,monospace;--hand:Hand,"Bradley Hand",cursive;
+  --T:.9s;--ease:cubic-bezier(.45,0,.55,1)}
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--paper)}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 14px/1.45 var(--face);-webkit-font-smoothing:antialiased}
+::selection{background:color-mix(in srgb,var(--machine) 22%,transparent)}
+:focus-visible{outline:2px solid var(--between);outline-offset:2px;border-radius:3px}
+a{color:var(--machine-text);text-decoration:none}
+a:hover{text-decoration:underline;text-underline-offset:.14em}
+.wrap{max-width:62rem;margin:0 auto;padding:0 1.25rem 4rem}
+
+
+.mast a{text-decoration:none}
+:focus-visible{outline:2px solid var(--between);outline-offset:2px;border-radius:3px}
+/* The standard Castor product header, "on the line". The page opens the way it closes, with
+   things standing on a line: the name and the navigation stand on the header's hairline, their baselines 10px above
+   it, as "by Castor" stands above the footer's. The name is set like Castor in the footer (Literata 560, opsz 72,
+   -0.055em, 30px). The product drawing replaces the studio's orbit mark. */
+/* THE LINE IS THE COLUMN: the header's line runs exactly the width of the text column, the name starts at its left
+   end and the light/dark button's box ends at its right end, as on the website. How it holds while the page scrolls:
+   "v2.8 header". */
+.mast{position:relative;z-index:20;display:flex;align-items:flex-end;flex-wrap:wrap;row-gap:14px;margin:0;padding:28px 0 10px}
+body{overflow-x:clip}
+.mast a{text-decoration:none}  /* the header never underlines, whatever the product's links do */
+.nav{margin-left:auto;display:flex;align-items:flex-end;gap:1.1rem;font-size:14px;font-weight:400;letter-spacing:.01em}
+.nav a{position:relative;display:block;padding:14px 0 10px;margin:-14px 0 -10px;line-height:1;text-box:trim-both cap alphabetic;color:var(--tab)}  /* padding widens the target to 33px and the negative margin gives the space back, so the baseline stays on the name's */
+.nav a:hover{color:var(--ink);text-decoration:none}
+.nav a[aria-current]{color:var(--ink);anchor-name:--here}
+.nav .tl{display:inline-flex;flex-direction:column;align-items:center}
+.nav .tl::after{content:attr(data-t) / "";height:0;overflow:hidden;visibility:hidden;font-weight:700;pointer-events:none}
+.nav a[aria-current] .tl{font-weight:700}
+
+
+/* the page */
+h1{font:600 32px/1.12 var(--read);letter-spacing:-.012em;margin:17px 0 .55rem}  /* cap top 24px under the line (was 47) */
+.lede{font:400 17.5px/1.5 var(--read);color:var(--ink);max-width:54ch;margin:0}
+.stamp{font:400 13px/1.5 var(--mono);letter-spacing:0;color:var(--quiet);margin:.9rem 0 1.9rem}
+.quiet{color:var(--quiet)}
+.num{font-family:var(--mono);font-size:max(13px,.86em);font-weight:400;letter-spacing:0;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* one row per pool: who it is, what it has left, how much to spend */
+.pools{border-top:1px solid var(--ink)}
+.pool{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 20.5rem;grid-template-areas:"who gauge ctl" "pick pick pick" "pins pins pins";column-gap:2rem;align-items:center;padding:1.15rem 0 .35rem;border-bottom:1px solid var(--rule);scroll-margin-top:calc(var(--mast-stuck) + 1rem)}
+.who{grid-area:who}.gauge{grid-area:gauge}.ctl{grid-area:ctl}.pick{grid-area:pick}
+.pool:target{animation:settle 1.4s var(--ease) both}
+@keyframes settle{0%{background:color-mix(in srgb,var(--between) 14%,transparent);box-shadow:0 0 0 .7rem color-mix(in srgb,var(--between) 14%,transparent)}100%{background:transparent;box-shadow:none}}
+.who h2{font:600 16.5px/1.25 var(--face);letter-spacing:-.005em;margin:0}
+.plan{margin:.28rem 0 0;color:var(--quiet);font-size:13.5px}
+.allow{margin:.12rem 0 0;color:var(--quiet);font-size:13px}
+.gauge{min-width:0}
+.bar{display:block;width:100%;height:4px;margin:0 0 .5rem;overflow:visible}
+.bar .track{fill:var(--rule)}
+.bar.hot .fill{fill:var(--human)}
+.q{margin:0;font-size:13px;color:var(--quiet)}
+.q b.num{color:var(--ink);font-weight:500;font-size:max(13px,.9em)}
+.q .hot{color:var(--human-text)}
+.use{color:var(--quiet);font-weight:600}
+
+.pool.lvl-off h2{text-decoration:line-through;text-decoration-color:var(--ink);text-decoration-thickness:1px}
+
+/* the slider: five stops on one line. The filled part of the line is how much of the plan
+   the agents may spend; the thumb is where it stands. Every stop is a button, so it works
+   without scripts, from the keyboard, and on a phone. */
+.ctl{min-width:0}
+.lv{position:relative;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin:0}
+.lv .rail{position:absolute;left:10%;right:10%;top:10px;height:2px;border-radius:2px;background:var(--rule);pointer-events:none}
+.lv .fill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:2px;background:var(--machine);transition:width 120ms var(--ease)}
+.lv.at-1 .fill{width:25%}.lv.at-2 .fill{width:50%}.lv.at-3 .fill{width:75%}.lv.at-4 .fill{width:100%}
+.lv.is-forced .fill{background:var(--human)}
+.stop{position:relative;display:flex;flex-direction:column;align-items:center;gap:.55rem;border:0;background:none;margin:0;padding:0 0 .15rem;cursor:pointer;color:var(--quiet);font:500 13px/1 var(--face);letter-spacing:.03em}
+.stop i{display:block;width:10px;height:10px;margin:6px 0 5px;border-radius:50%;background:var(--paper);border:1.5px solid var(--rule-strong);transition:transform calc(var(--T) / 4) var(--ease),border-color calc(var(--T) / 4) var(--ease),background calc(var(--T) / 4) var(--ease)}
+.stop span{display:block;padding-top:1px}
+.stop:hover i{transform:scale(1.3);border-color:var(--ink)}
+.stop:hover{color:var(--ink)}
+.stop:focus-visible{outline-offset:4px;border-radius:6px}
+.lv .stop:has(~ .on) i{background:var(--machine);border-color:var(--machine)}
+.lv.is-forced .stop:has(~ .on) i{background:var(--human);border-color:var(--human)}
+.stop.on{cursor:default;color:var(--ink);font-weight:600}
+.stop.on i{width:20px;height:20px;margin:1px 0 0;background:var(--machine);border:0;box-shadow:0 0 0 4px var(--paper)}
+.stop.on:hover i{transform:none}
+.stop.on.forced i{background:var(--human)}
+.stop.on.off i{background:var(--paper);border:1.5px solid var(--ink);position:relative}
+.stop.on.off i::after{content:"";position:absolute;left:50%;top:-1px;bottom:-1px;width:1.5px;margin-left:-.75px;background:var(--ink);transform:rotate(45deg)}
+.means{margin:.6rem 0 0;font-size:13px;line-height:1.35;color:var(--quiet);text-align:center;min-height:2.7em}
+.lvl-forced .means{color:var(--human-text)}
+
+/* what agents read: the same state, as the text they receive */
+.sc{font:600 13px/1.45 var(--face);letter-spacing:.09em;text-transform:uppercase;color:var(--quiet);margin:2.6rem 0 .6rem}
+
+@media (max-width:760px){
+  .wrap{padding:0 1rem 3.5rem}
+  h1{font-size:27px;margin-top:15px}  /* cap top 20px under the line (was 36) */
+  .lede{font-size:16.5px}
+  .pool{grid-template-columns:minmax(0,1fr);grid-template-areas:"who" "gauge" "ctl" "pick" "pins";row-gap:.85rem;padding:1rem 0}
+  .ctl{max-width:26rem}
+}
+@media (prefers-reduced-motion:reduce){.pool:target{animation:none}.lv .fill,.stop i{transition:none}}
+
+
+/* Chip stands ON the line: the drawing's ground (y 88 of 92) lands on the rule's centre. "by Castor" sits 8px
+   beside it; Castor's asterisk is typed, not drawn: the Literata glyph at the word's own size and weight, in
+   --human, on the word's baseline, exactly where typing "Castor*" puts it. Under the line,
+   bottom-left like a footnote, "we give a dam*": the words start 2px from Chip's left edge with their cap line
+   10px under the rule's centre, and the drawn underline lives inside the words, 1px past each end, never under
+   the asterisk. No arrow. Vertical geometry rides the browser's cap and baseline edges (text-box: trim-both
+   cap alphabetic), the typed asterisk included. */
+.sig{position:relative;display:flex;align-items:flex-end;margin:3rem 0 40px;padding:0;border-bottom:1px solid var(--rule)}
+.water{position:relative;top:2.26px;display:block;flex:0 0 auto;width:44px;height:40.48px}
+.chip{display:block;width:100%;height:auto;overflow:visible;color:var(--ink)}  /* never crop the tail: at the low end of the wag it swings 2.5px below the drawing's own frame, and a browser clips an inline svg to its frame by default */
+.c-tail{transform-box:view-box;transform-origin:37px 77px}
+.c-eye{transform-box:fill-box;transform-origin:50% 50%}
+.sig:hover .c-tail{animation:wag .9s var(--ease) .35s 2}
+.sig:hover .c-eye{animation:blink .5s var(--ease) .7s 1}
+@keyframes wag{0%,100%{transform:rotate(0)}30%{transform:rotate(18deg)}70%{transform:rotate(6deg)}}
+@keyframes blink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.08)}}
+.sig .words{display:flex;flex-direction:column;align-items:flex-start;margin-left:8px;padding-bottom:10px}
+.sig .qt,.sig .byt,.sig .wordmark{display:block;line-height:1;text-box:trim-both cap alphabetic}
+.sig .quip{position:absolute;left:2px;top:calc(100% + 10.5px);display:flex;align-items:flex-start;font-family:var(--hand);font-weight:500;font-size:17px;color:var(--ink)}
+.sig .qt{position:relative}
+.sig .qt .ul{position:absolute;left:-1px;width:calc(100% + 2px);top:calc(100% + 4px);height:6px;color:var(--human);overflow:visible}  /* inside the words: 1px past each end, never under the asterisk. The width is explicit because an inline svg is a replaced element: left plus right never stretched it, and its 120:8 ratio at 6px tall held it at 90px whatever the words */
+.sig .by{display:flex;align-items:flex-end;gap:6px}
+.sig .byt{font-size:14px;color:var(--quiet)}
+.sig .lock{display:flex;align-items:baseline}
+.sig a.lock{color:inherit;text-decoration:none}  /* the lockup is the way to the studio, on every product */
+.sig .wordmark{font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.055em;font-size:30px;color:var(--ink)}
+.sig .ast{display:block;flex:0 0 auto}
+.sig .quip .ast{width:8.89px;height:8.89px;margin:-1.2px 0 0 .5px}  /* a typed asterisk's size in Rando Sans at 17px: a 7.04px span, its top on the ascender; six arms hold at 1x from a 6.8px span */
+.sig .lock .ast{display:inline;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;font-size:30px;font-style:normal;line-height:1;color:var(--human);margin:0;text-box:trim-both cap alphabetic}  /* a typed asterisk, as everywhere on the site: the glyph, the word's size, on the baseline. It carries the word's own trim so both boxes are cap-to-baseline: without it the untrimmed glyph box hangs a descender below the baseline, and "by" and the line itself move with it */
+.sig .ast svg{display:block;width:100%;height:100%}
+.sig .ast .star{fill:var(--human)}
+.sig .ast .key{fill:var(--paper);stroke:var(--paper)}
+@media (prefers-reduced-motion:reduce){.sig:hover .c-tail,.sig:hover .c-eye{animation:none}}
+
+/* Website theme control */
+.theme-toggle {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: .35rem;
+  cursor: pointer;
+  color: var(--machine);
+  line-height: 0;
+  border-radius: 2px;
+}
+.theme-toggle svg { display: block; width: 1.15rem; height: 1.15rem; overflow: visible; }
+.theme-toggle .t-disc { fill: currentColor; transition: r var(--t-move) var(--ease); }
+.theme-toggle .t-rays { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round;
+                        transition: opacity var(--t-move) var(--ease),
+                                    transform var(--t-move) var(--ease);
+                        transform-origin: 12px 12px; }
+.theme-toggle .t-bite { fill: var(--paper); transform: translateX(12px);
+                        transition: transform var(--t-move) var(--ease); }
+
+.theme-toggle .t-half { fill: var(--paper); opacity: 0;
+                        transition: opacity var(--t-move) var(--ease); }
+.theme-toggle .t-ring { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: 0;
+                        transition: opacity var(--t-move) var(--ease); }
+
+/* THE ICON SHOWS THE CHOICE, NOT THE RESOLUTION, and the difference is the whole
+   classic bug (a moon shown even in light mode). In SYSTEM
+   the page may be painted dark, but the control is not set to dark: it is set to
+   "follow", and a moon there would be the same lie in a new place.
+
+   So these three rules key off data-theme-choice. The one place the resolution is
+   still allowed to matter is nothing at all: the face is the state. */
+html[data-theme-choice="light"] .theme-toggle .t-rays { opacity: 1; }
+html[data-theme-choice="light"] .theme-toggle .t-bite { transform: translateX(14px); }
+
+html[data-theme-choice="dark"] .theme-toggle .t-rays { opacity: 0; transform: rotate(45deg) scale(.6); }
+html[data-theme-choice="dark"] .theme-toggle .t-bite { transform: translateX(4.4px); }
+
+/* Follow-the-system: a disc half in light and half in dark, with a ring so the
+   unlit half still reads as part of a circle rather than as a broken shape. The
+   rays fold away because the machine, not the reader, is choosing. */
+html[data-theme-choice="system"] .theme-toggle .t-rays { opacity: 0; transform: rotate(45deg) scale(.6); }
+html[data-theme-choice="system"] .theme-toggle .t-bite { transform: translateX(14px); }
+html[data-theme-choice="system"] .theme-toggle .t-half,
+html[data-theme-choice="system"] .theme-toggle .t-ring { opacity: 1; }
+/* Product signature, with independent mark and name hover targets. */
+:root{--t-move:450ms;--i:var(--ink);--p:var(--paper);--h:var(--human);--t:light-dark(#F1DFD4,#301E15)}
+html[data-theme-choice="light"]{color-scheme:light}
+html[data-theme-choice="dark"]{color-scheme:dark}
+.brand{display:flex;align-items:flex-end;margin-bottom:-10px;gap:.6em;font-size:var(--nm);color:var(--ink);white-space:nowrap;transform-origin:0 100%}
+.product-mark{display:block;flex:none;--fall:7px}
+.product-mark svg.head{display:block;height:calc((10px + .73em) * 1.0119 * var(--logo));width:auto;aspect-ratio:48.280/25.500;overflow:visible}
+.product-mark .castor{overflow:visible}
+.compact-brand{display:block;padding-bottom:10px;color:var(--ink);font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.055em;line-height:.88;text-box:trim-both cap alphabetic}
+.compact-brand .star{display:inline-block;margin-left:.1em;line-height:.88;color:var(--human);letter-spacing:0}
+.nav{align-items:flex-end}
+.theme-toggle{display:none;position:relative;min-width:24.4px;height:29.6px;padding:0;color:light-dark(var(--human),var(--machine))}
+.js .theme-toggle{display:block}
+.theme-toggle::after{content:"";position:absolute;inset:-7px -10px}
+.theme-toggle svg{translate:0 1.12px}
+.cf-bar{transform-box:view-box;transform-origin:0 0}
+.cf-flow{stroke-dasharray:1 2;stroke-dashoffset:1}
+.hm-h{transform-box:view-box;transform-origin:12px 12px}
+@media(prefers-reduced-motion:no-preference){
+  .compact-brand .star,.hm-h{transition:transform .45s var(--ease)}
+  .compact-brand:is(:hover,:focus-visible) .star,.product-mark:is(:hover,:focus-visible) .hm-h{transform:rotate(90deg)}
+  .cf-bar{transition:transform .45s var(--ease) .9s}
+  .cf-flow{transition:stroke-dashoffset .45s var(--ease) .675s}
+  .cf-l,.cf-r{transition:transform .9s var(--ease)}
+  .product-mark:is(:hover,:focus-visible) .cf-bar{transform:rotate(90deg);transition-delay:0s}
+  .product-mark:is(:hover,:focus-visible) .cf-flow{stroke-dashoffset:0;transition-delay:.225s}
+  .product-mark:is(:hover,:focus-visible) .cf-l{transform:translateY(var(--fall));transition-delay:.45s}
+  .product-mark:is(:hover,:focus-visible) .cf-r{transform:translateY(calc(-1 * var(--fall)));transition-delay:.45s}
+}
+.quota-reading .stamp{margin:0}
+/* The tabs stand on the rule, independent of the website icon boxes. */
+.bar-tools{display:flex;align-items:center;flex:none;align-self:flex-end;margin:-10px 0 calc(1.15rem * 6.15 / 24 - 14.8px) 1.1rem}  /* the drawings' centre 4.7px over the name's baseline, the toggle disc's radius; the last box ends at the line's end */
+.find{display:none;position:relative;color:light-dark(var(--human),var(--machine))}
+.js .find{display:flex}
+.find-lens{background:none;border:0;color:inherit;cursor:pointer}
+.find svg{display:block;width:1.15rem;height:1.15rem}
+.bar-tools .find-lens,.bar-tools .theme-toggle{position:relative;padding:0 3px;width:24.4px;min-width:24.4px;height:29.6px;align-items:center;justify-content:center;border-radius:2px}
+.js .bar-tools .theme-toggle,.bar-tools .find-lens{display:flex}
+.bar-tools .theme-toggle svg{translate:none}
+.bar-tools .find-lens::after,.bar-tools .theme-toggle::after{content:"";position:absolute;inset:auto;top:calc(50% - 22px);width:24.4px;height:44px}
+.find-panel{position:absolute;z-index:5;top:calc(100% + var(--line-w));right:0;width:min(25rem,100%);padding:1rem;border:1px solid var(--rule);border-top:0;background:var(--paper);color:var(--ink);max-height:65vh;overflow:auto}  /* inside the bar, so it opens under the line wherever the page is scrolled */
+.find-field{position:relative;display:block}
+.find-panel .find-field input{padding-right:3.2rem}
+.find-field input::-webkit-search-cancel-button{display:none}
+.key-hint{position:absolute;right:.55rem;top:50%;translate:0 -50%;font:500 11.5px/1 var(--face);letter-spacing:.04em;color:var(--quiet);border:1px solid var(--rule-strong);border-radius:4px;padding:.28rem .38rem .22rem;pointer-events:none}
+.find-panel label{display:block;font-weight:600;margin-bottom:.5rem}
+.find-panel input{width:100%;padding:.6rem;font:inherit;background:var(--paper);color:var(--ink);border:1px solid var(--rule-strong);border-radius:2px;caret-color:var(--human)}
+.find-panel ul{list-style:none;padding:0;margin:0}
+.find-panel a{display:block;padding:.65rem 0;border-top:1px solid var(--rule);font-size:14px;overflow-wrap:anywhere}
+.search-status{color:var(--quiet);font-size:13px}
+html{scrollbar-color:var(--rule-strong) var(--paper)}
+@media(prefers-reduced-motion:reduce){:not(.mast>.brand,.mast>.nav,.mast>.bar-tools,.mast>.here,.find-panel),:not(.mast)::before,:not(.mast)::after{animation:none!important;transition:none!important}.stop:hover i{transform:none}}  /* the header's ride is the page's own movement, 1:1: it stays (v2.8 header) */
+.vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+
+/* Model switches */
+/* THE MODEL SWITCHES, one list per provider, so a bunch of models can be switched on and off, with Details and
+   More kept behind each model. The line under each provider says what
+   the switches add up to; open it and every model the provider can run has a plain switch that says On or Off in
+   words, one line on what the model is best for, and Details with More behind. Several on: Crossfeed picks the best
+   one that is on for each task. One on: every run uses it. None on: the provider is left out. Colour says who
+   decided: teal, the machine, everything on; terracotta, the human's hand, something switched off. */
+.pick{margin:-.55rem 0 .15rem}
+.pick-line{display:inline-grid;grid-template-columns:auto minmax(0,auto) auto;align-items:center;column-gap:.6rem;max-width:100%;min-height:44px;padding:.35rem .1rem .35rem 0;cursor:pointer;list-style:none;border-radius:3px}
+.pick-line::-webkit-details-marker{display:none}
+.pick-line .k{font:500 13px/1 var(--face);letter-spacing:.02em;color:var(--quiet);margin-right:.2rem}
+.now{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:.5rem;row-gap:.05rem;min-width:0}
+.now .v{font:600 15px/1.25 var(--face);color:var(--ink)}
+.now .n{font-size:13px;color:var(--quiet);flex-basis:auto}
+.now .mark{align-self:center;display:block;flex:none;position:relative;width:9px;height:9px;border-radius:50%;background:var(--machine);margin-right:.05rem}
+.now.some .mark,.now.one .mark{background:var(--human)}
+.now.only .mark{background:none;border:1.5px solid var(--rule-strong)}
+.now.none .mark{background:var(--paper);border:1.5px solid var(--ink)}
+.now.none .mark::after{content:"";position:absolute;left:50%;top:-2.5px;bottom:-2.5px;width:1.5px;margin-left:-.75px;background:var(--ink);transform:rotate(45deg)}
+.pick-line .chev{align-self:center;width:16px;height:16px;flex:none;fill:none;stroke:var(--quiet);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.pick-line:hover .v{text-decoration:underline;text-underline-offset:.2em;text-decoration-thickness:1px}
+.pick-line:hover .chev{stroke:var(--ink)}
+.pick[open] .chev{transform:rotate(180deg)}
+.picker{max-width:46rem;padding:.15rem 0 .9rem}
+.picker .head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.2rem 1.2rem;margin:0 0 .55rem}
+.scope,.empty{margin:0;font-size:13px;line-height:1.45;color:var(--quiet);max-width:62ch}
+.all-on{flex:none;font:500 13px var(--face);color:var(--machine-text);background:none;border:0;border-bottom:1px solid currentColor;padding:.3rem 0;cursor:pointer;white-space:nowrap}
+.all-on[hidden]{display:none}
+.opts{list-style:none;margin:0;padding:0;border-top:1px solid var(--rule)}
+.opt{position:relative;border-bottom:1px solid var(--rule);scroll-margin-top:calc(var(--mast-stuck) + 1rem)}
+.opt .row{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:1rem;align-items:center;padding:.62rem 0 .05rem}
+.opt .txt{display:grid;row-gap:.12rem;min-width:0}
+.opt .nm{font:600 15px/1.3 var(--face);color:var(--ink);overflow-wrap:anywhere}
+.opt .bf{font-size:13.5px;line-height:1.4;color:var(--quiet)}
+.opt.off .nm,.opt.older .nm{color:var(--quiet);font-weight:500}
+.opt .na{font-size:13px;color:var(--quiet)}
+/* the switch: a track and a thumb, and its state in words beside it, so colour is never the only sign */
+.sw{display:inline-flex;align-items:center;gap:.6rem;min-width:44px;min-height:44px;margin:0;padding:0 0 0 .4rem;background:none;border:0;color:var(--ink);font:500 13px/1 var(--face);cursor:pointer}
+.sw .track{position:relative;display:block;flex:none;width:40px;height:24px;border:1.5px solid var(--rule-strong);border-radius:12px;background:var(--paper)}
+.sw .track i{position:absolute;top:50%;left:3px;width:15px;height:15px;margin-top:-7.5px;border-radius:50%;background:var(--quiet)}
+.sw .st{min-width:1.8em}
+.sw:hover .track{border-color:var(--ink)}
+.sw[aria-checked="true"] .track{background:var(--machine);border-color:var(--machine)}
+.sw[aria-checked="true"] .track i{background:var(--paper);transform:translateX(16px)}
+.sw[aria-checked="true"]:hover .track{border-color:var(--ink)}
+.sw:focus-visible{outline-offset:2px;border-radius:6px}
+@media(prefers-reduced-motion:no-preference){
+  .sw .track{transition:background-color .16s var(--ease),border-color .16s var(--ease)}
+  .sw .track i{transition:transform .16s var(--ease),background-color .16s var(--ease)}
+  .pick-line .chev{transition:transform .16s var(--ease)}
+}
+/* Details and More: a quiet line under the model, three plain facts, the rest behind More */
+.facts>summary{display:inline-flex;align-items:center;gap:.3rem;min-height:32px;padding:.2rem 0;font:500 13px/1 var(--face);color:var(--quiet);cursor:pointer;list-style:none}
+.facts>summary::-webkit-details-marker,.more>summary::-webkit-details-marker,.older>summary::-webkit-details-marker{display:none}
+.facts>summary::after,.more>summary::after,.older>summary::after{content:"";width:6px;height:6px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-2px) rotate(45deg)}
+.facts[open]>summary::after,.more[open]>summary::after,.older[open]>summary::after{transform:translateY(1px) rotate(-135deg)}
+.facts>summary:hover,.facts[open]>summary{color:var(--ink)}
+.facts[open]{padding:0 0 .85rem}
+.bullets{list-style:none;margin:0;padding:0;display:grid;gap:.3rem;font-size:13.5px;line-height:1.45;max-width:60ch}
+.bullets li{position:relative;padding-left:.95rem}
+.bullets li::before{content:"";position:absolute;left:0;top:.6em;width:4px;height:4px;border-radius:50%;background:var(--rule-strong)}
+.bullets b{font-weight:600;margin-right:.25rem}
+.more{margin-top:.5rem}
+.more>summary,.older>summary{display:inline-flex;align-items:center;gap:.4rem;min-height:32px;cursor:pointer;list-style:none;font:500 13px/1 var(--face);color:var(--quiet)}
+.more>summary:hover,.older>summary:hover{color:var(--ink)}
+.more dl{display:grid;grid-template-columns:10rem minmax(0,1fr);gap:.45rem 1rem;font-size:13px;margin:.6rem 0 0}
+.more dt{color:var(--quiet)}
+.more dd{margin:0;max-width:75ch;overflow-wrap:anywhere}
+details.older{margin-top:.35rem}
+.older>summary{min-height:44px;font-weight:600;color:var(--ink)}
+.older .count{font-weight:500;color:var(--quiet)}
+.older>.opts{border-top:0}
+@media(max-width:560px){
+  .now .n{flex-basis:100%;padding-left:calc(9px + .55rem)}
+  .opt .row{column-gap:.6rem}
+  .more dl{grid-template-columns:1fr;gap:.25rem}
+  .more dd{margin-bottom:.6rem}
+}
+
+/* Limits, refresh and copy */
+/* The console is obvious at a glance: every limit shown in a minimal way with its reset, a refresh icon, a copy
+   control on what agents read, a page for every model. Read here as
+   Apple's clarity worn in the Castor world (paper, ink, the three faces), not as Apple's own typeface: each thing says
+   what it is, what state it is in and what a click does. The limits are grey bars with names, so they no longer look
+   like the teal control beside them; terracotta, on a limit, means nearly spent. */
+.limits{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(3.4rem,max-content) minmax(3rem,1fr) max-content;column-gap:.75rem;row-gap:.6rem}
+.lim{grid-column:1/-1;display:grid;grid-template-columns:subgrid;align-items:center;row-gap:.12rem}
+.lim .ln{grid-row:span 2;align-self:start;max-width:6.6rem;font:500 13.5px/1.25 var(--face);color:var(--ink)}
+.lim .ln small{display:block;font-size:12.5px;font-weight:400;color:var(--quiet)}
+.lim .bar{margin:0}
+.lim .pc{justify-self:end;font-size:13px;color:var(--quiet)}
+.lim .pc b.num{font-weight:500;color:var(--ink)}
+.lim .of{font-family:var(--mono);font-size:12px}
+.lim .rs{grid-column:2/-1;font-size:12.5px;line-height:1.3;color:var(--quiet)}
+.lim .use{font-weight:400;color:light-dark(color-mix(in srgb,var(--between) 82%,#14130F),#A3B86B)}
+.bar .fill{fill:light-dark(#8C877C,#8F8A80)}
+.bar.hot .fill{fill:var(--human)}
+.lim.hot .pc b.num{color:var(--human-text)}
+.lim.full .ln{color:var(--human-text)}
+.q.hot{color:var(--human-text);margin:0 0 .5rem}
+.q.renews{margin:.55rem 0 0;font-size:12.5px}
+/* The refresh is an icon beside the time it refreshes: it turns while CodexBar is asked again. */
+.quota-reading{display:flex;align-items:center;gap:.15rem;flex-wrap:wrap;margin:.75rem 0 1.6rem}
+.quota-refresh{margin:0}
+.quota-refresh button{display:grid;place-items:center;width:44px;height:44px;margin:-.4rem 0;padding:0;border:0;border-radius:50%;background:none;color:var(--machine-text);cursor:pointer}
+.quota-refresh button:hover{background:var(--surface)}
+.quota-refresh button[aria-disabled="true"]{cursor:progress}
+.ico{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+@keyframes turn{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:no-preference){.quota-refresh.busy .ico{animation:turn .9s linear infinite}}
+/* The spend slider says what it sets. */
+.lvh{margin:0 0 .5rem;font:500 12.5px/1 var(--face);letter-spacing:.02em;color:var(--quiet);text-align:center}
+/* A model's name opens a page about it. */
+.opt a.nm{display:inline-flex;align-items:center;gap:.28rem;width:fit-content;max-width:100%;color:var(--ink);text-decoration:none}
+.opt a.nm .out{flex:none;width:13px;height:13px;fill:none;stroke:var(--quiet);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.opt a.nm:hover{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:.18em}
+.opt a.nm:hover .out{stroke:var(--ink)}
+.opt.off a.nm,.opt.older a.nm{color:var(--quiet)}
+/* Where an older model is still better than the one that replaced it: both numbers, the source, the date read. */
+.leads{margin:.8rem 0 0;max-width:62ch}
+.lh{margin:0 0 .4rem;font:600 13.5px/1.3 var(--face);color:var(--ink)}
+.leads ul{list-style:none;margin:0;padding:0;border-top:1px solid var(--rule)}
+.leads li{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;column-gap:1rem;row-gap:.1rem;padding:.4rem 0;border-bottom:1px solid var(--rule);font-size:13.5px;line-height:1.35}
+.leads .val{color:var(--quiet);white-space:nowrap}
+.leads .num{font:inherit;font-variant-numeric:tabular-nums}
+.leads .val b.num{color:var(--ink);font-weight:600}
+.src{margin:.5rem 0 0;font-size:12.5px;line-height:1.45;color:var(--quiet)}
+/* Model names written in files Crossfeed does not own: what moved with the switch, and what still leaks. */
+.pins{grid-area:pins;display:grid;gap:.4rem;margin:0 0 .85rem;max-width:75ch}
+.pin{display:flex;gap:.6rem;margin:0;font-size:13px;line-height:1.45;color:var(--quiet)}
+.pin i{flex:none;width:7px;height:7px;margin-top:.5em;border-radius:50%;background:var(--machine)}
+.pin.open{color:var(--ink)}
+.pin.open i{background:var(--human)}
+.pin .num{font-size:12px;overflow-wrap:anywhere;white-space:normal}
+/* What agents read, with a copy control at its top right that says "Copied" when it has. */
+.brief{background:var(--surface);border-radius:8px;padding:.95rem 1.05rem}
+.agents pre{margin:0;font:400 13px/1.7 var(--mono);letter-spacing:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+.copy{float:right;display:none;align-items:center;gap:.35rem;min-height:44px;margin:-.75rem -.6rem .1rem 1rem;padding:0 .65rem;border:0;border-radius:6px;background:none;color:var(--quiet);font:500 13px/1 var(--face);cursor:pointer}
+.js .copy{display:inline-flex}
+.copy:hover{color:var(--ink);background:var(--paper)}
+.copy .ico{width:17px;height:17px}
+.copy .i-done{opacity:0}
+.copy.done{color:var(--machine-text)}
+.copy.done .i-copy{opacity:0}
+.copy.done .i-done{opacity:1}
+@media(prefers-reduced-motion:no-preference){.copy .i-copy,.copy .i-done{transition:opacity .16s var(--ease)}}
+/* Feedback lands at the foot of the screen, wherever the click was, and leaves on its own. */
+.save-status{position:fixed;z-index:30;left:50%;bottom:max(1.1rem,env(safe-area-inset-bottom));width:max-content;max-width:calc(100vw - 2rem);margin:0;padding:.6rem 1rem;border-radius:999px;background:var(--ink);color:var(--paper);font:500 13.5px/1.35 var(--face);box-shadow:0 8px 24px rgb(0 0 0 / .18),0 1px 3px rgb(0 0 0 / .12);opacity:0;translate:-50% .4rem;pointer-events:none}
+.save-status.shown{opacity:1;translate:-50% 0}
+@media(prefers-reduced-motion:no-preference){.save-status{transition:opacity .2s var(--ease),translate .2s var(--ease)}}
+@media(pointer:coarse){.facts>summary,.more>summary{min-height:44px}}
+
+
+/* v2.8 header */
+/* THE HEADER MOVES AS ONE THING, as the studio's website does and as the other products in the family do (the same
+   block, fed with the console's own inputs: its column, its name's width and its mark). A header whose name shrank
+   over one range while a second, smaller name faded in over another read as scattered, and a held name that shrank
+   onto the line read as sitting too high. The website moves one thing, 1:1 with the page, on one linear range. Here
+   the whole header is that thing:
+   - It is fixed to the screen: a sticky header is pulled away with the page when the page bounces past its end, a
+     fixed one stays.
+   - Every part (the mark and the name, the tab, the lens and the toggle, the paper and the line, the search panel) runs
+     the same keyframe on the same scroll range, linear, until the air over the name's capitals is down from 28px to
+     14px. Then it holds, the name at its own size, so it stands as near the line held as at rest.
+   - The front page's mark and name start as large as their row allows, twice at most, and come down to their size on
+     the same range, scaled about the mark's foot on the line, so everything stands on the line throughout.
+   - On a phone the lens and the toggle stand beside the name on its baseline. The one tab, which names the page its
+     title names, is left out there, so nothing stands in a row of its own; the name is as large as the row holds
+     beside the lens and the toggle, 24px at most.
+   The header box itself is never transformed, the rest state is each part's own style and the keyframe has only `to`
+   (WebKit fills no backwards). Without scroll timelines the header scrolls away with the page. */
+:root{--line-w:2px;--line-l:var(--human);--line-r:var(--machine);--logo:1.12;   /* --machine is the website's teal in both themes; the mark 12% larger, as across the family */
+  --nm:30px;--cap:calc(var(--nm) * .7);--air:28px;--air-held:14px;--h0:1;--hE:0px;--gut:max(1.25rem,calc((100% - 59.5rem) / 2));--sb:0px;
+  --mast-h:calc(var(--air) + var(--hE) + var(--cap) + 10px);   /* the header's box: air, the name's capitals, 10px to the line */
+  --travel:calc(var(--air) - var(--air-held) + var(--hE));     /* the scroll over which it rides up, then holds */
+  --mast-stuck:calc(var(--air-held) + var(--cap) + 10px + var(--line-w))}   /* what stays on screen held: 47px */
+@media (max-width:760px){:root{--gut:1rem}}
+/* 100vw counts a scrollbar that is always on (a desktop with a mouse), which the column does not: the room each size
+   is worked out from leaves it out wherever a mouse may be. */
+@media (pointer:fine){:root{--sb:15px}}
+/* A phone's name: what the row holds beside the lens and the toggle (48.8px and 12px of air). The brand's width is
+   21.458px (the mark's 10px part) plus 12.532 times the size (the mark's .73em, the .6em gap, the name's 10.3656em,
+   measured in Chrome with Literata loaded), each rounded up so the name never crowds the lens. */
+@media (max-width:560px){:root{--nm:min(24px,calc((100vw - var(--sb) - 2rem - 61px - 21.46px) / 12.533))}}
+
+/* The header's paper and its line are one layer, drawn behind everything in it, so they ride together. */
+.mast::after{content:"";position:absolute;z-index:-1;inset:0 0 calc(-1 * var(--line-w));pointer-events:none;
+  background:linear-gradient(90deg,var(--line-l) 0 50%,var(--line-r) 50%) 50% 100%/100% var(--line-w) no-repeat,var(--paper)}
+/* The title keeps its air: its capitals 24px under the line (20px on a phone). */
+h1{margin-top:calc(17px + var(--line-w))}
+@media (max-width:760px){h1{margin-top:calc(15px + var(--line-w))}}
+/* The name in two voices, as across the family: "Crossfeed" the name, "Orchestrator" what it is. */
+.compact-brand .bd{font-weight:400;color:var(--quiet)}
+/* A phone: the name and, on its baseline, the lens and the toggle; never a second row. */
+@media (max-width:680px){.mast{flex-wrap:nowrap}.mast .nav{display:none}.mast .bar-tools{margin-left:auto}}
+
+/* How large the front page's name starts: the row's room over the name's width, twice at most. The division is
+   tan(atan2()) of registered lengths, as the website's nameplate does it (WebKit divides unregistered relative lengths
+   wrongly). The room above it grows with its tallest part, the mark, over the line. */
+@property --hroom{syntax:'<length>';inherits:true;initial-value:0px}
+@property --hbw{syntax:'<length>';inherits:true;initial-value:1px}
+@supports (animation-timeline:scroll()){
+  :root.front{--hroom:calc(min(100vw - var(--sb) - 2.5rem,59.5rem) - 154px);   /* beside the bold tab (63.2px), the lens and the toggle (48.8px after 17.6px), 24px clear */
+    --hbw:calc((10px + .73 * var(--nm)) * 1.0119 * var(--logo) * 1.89333 + .6 * var(--nm) + 10.3656 * var(--nm));
+    --h0:min(2,max(1,tan(atan2(var(--hroom),var(--hbw)))));
+    --hE:calc((10px + .73 * var(--nm)) * 1.0119 * var(--logo) * (var(--h0) - 1))}
+  @media (max-width:760px){:root.front{--hroom:calc(100vw - var(--sb) - 2rem - 154px)}}
+  @media (max-width:680px){:root.front{--hroom:calc(100vw - var(--sb) - 2rem - 61px)}}   /* the tab is left out: the lens and the toggle beside the name, 12px clear */
+  @media (prefers-reduced-motion:reduce){:root.front{--h0:1}}   /* no shrink to watch: the name at its size */
+
+  html{scroll-padding-top:calc(var(--mast-stuck) + 1rem)}   /* anchors and search jumps land below the held header */
+  .mast{position:fixed;top:0;left:0;right:0;width:auto;height:var(--mast-h);margin:0;padding-left:var(--gut);padding-right:var(--gut);align-content:flex-end;--line-x0:var(--gut)}   /* where a browser cannot trim the name to its capitals, the row overflows upwards, never under the line */
+  .mast::after{background-size:calc(100% - 2 * var(--gut)) var(--line-w),auto}   /* the paper edge to edge, the line the column's width */
+  main{padding-top:var(--mast-h)}   /* the page starts where the header's line is */
+  .find-panel{right:var(--gut);width:min(25rem,100% - 2 * var(--gut))}
+
+  /* At rest: the front page's name at its large size, standing on the line; on a phone the lens and the toggle on its
+     baseline, which the scale lifts by 10px times the growth. Everywhere else these are no change at all. */
+  .mast .brand{scale:var(--h0)}
+  @media (max-width:680px){.mast .bar-tools{translate:0 calc(10px * (1 - var(--h0)))}}
+
+  /* The ride: one keyframe, one range, for every part. */
+  .mast .brand,.mast .nav,.mast .bar-tools,.mast .here,.mast::after,.find-panel{animation:mast-ride linear forwards;animation-timeline:scroll(root);animation-range:0 var(--travel)}
+}
+@keyframes mast-ride{to{translate:0 calc(-1 * var(--travel));scale:1}}
+
+/* The selected family mark: an olive bead centred on the 2px line, with paper around it. */
+.nav a[aria-current]::after{content:"";position:absolute;background:var(--between);left:calc(50% - 4px);width:8px;height:8px;bottom:calc(-1 * var(--line-w) / 2 - 4px);border-radius:50%;box-shadow:0 0 0 2px var(--paper)}
+/* The person's terracotta reaches the knot; the rest of the line is teal. Without anchors it stays half and half.
+   The overlay rides with the paper and tabs, including when the header is held after scrolling. */
+.mast .here{position:absolute;top:100%;left:var(--line-x0,0px);right:50%;right:anchor(--here center,50%);height:var(--line-w);background:var(--human);pointer-events:none}
+.mast:has(> .here)::after{background-image:linear-gradient(var(--machine),var(--machine))}
+@media (max-width:680px){.mast .here{display:none}.mast:has(> .here)::after{background-image:linear-gradient(90deg,var(--line-l) 0 50%,var(--line-r) 50%)}}
+
+/* A knot travelling between tabs and the person's line share the same 450ms clock and position easing.
+   Only the new picture moves, so neither colour fades while travelling. */
+@media (prefers-reduced-motion:no-preference){
+  @view-transition{navigation:auto}
+  main{view-transition-name:page}
+  .nav a[aria-current]::after{view-transition-name:mast-current}
+  .mast .here{view-transition-name:mast-here}
+  ::view-transition-group(mast-current),::view-transition-group(mast-here){animation-duration:var(--t-move);animation-timing-function:var(--ease)}
+  ::view-transition-image-pair(mast-current){animation:tab-stretch var(--t-move) linear both}
+  html.knot-arrives::view-transition-image-pair(mast-current){animation:none}
+  ::view-transition-old(mast-current),::view-transition-old(mast-here){animation:none;opacity:0}
+  ::view-transition-new(mast-current),::view-transition-new(mast-here){animation:none;height:100%}
+  ::view-transition-group(root),::view-transition-old(root),::view-transition-new(root),::view-transition-group(page),::view-transition-new(page){animation:none;mix-blend-mode:normal}
+  ::view-transition-image-pair(page){isolation:auto}
+  ::view-transition-old(page){z-index:1;mix-blend-mode:normal;animation:vt-page-out 240ms cubic-bezier(.16,1,.3,1) both}
+}
+@keyframes vt-page-out{to{opacity:0}}
+@keyframes tab-stretch{
+  0%{scale:1 1;animation-timing-function:cubic-bezier(.45,0,.6,1)}
+  48%{scale:4 .62;animation-timing-function:cubic-bezier(.3,0,.5,1)}
+  84%{scale:.82 1.16;animation-timing-function:cubic-bezier(.4,0,.6,1)}
+  100%{scale:1 1}
+}
+
+/* Model receipts stay readable when the table is wider than a phone. */
+.recent-runs .run-table{overflow-x:auto}
+.recent-runs table{width:100%;border-collapse:collapse;text-align:left;font-size:.85rem}
+.recent-runs th,.recent-runs td{padding:.6rem .7rem;border-bottom:1px solid var(--rule);vertical-align:top}
+.recent-runs th{font-weight:600;color:var(--quiet)}
+.recent-runs td:last-child{font-family:var(--mono)}
+.sw:disabled{cursor:not-allowed;opacity:.6}
+
+/* Display order uses the existing paper, ink and small control type. */
+.sort-control{display:flex;align-items:center;gap:.65rem;width:fit-content;font:500 13px/1.4 var(--face);color:var(--quiet)}
+.sort-control select{min-height:44px;padding:.4rem 1.8rem .4rem .65rem;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink);font:inherit;cursor:pointer}
+.order-note{margin:.2rem 0 1rem;font-size:13px;color:var(--quiet)}
+.picker>.sort-control{margin:0 0 .5rem}
+.who h2{display:flex;align-items:center}
+.order-handle{display:none;flex:none;align-items:center;justify-content:center;width:44px;height:44px;margin:-.4rem 0;padding:0;border:0;border-radius:4px;background:none;color:var(--quiet);cursor:grab;touch-action:none;user-select:none}
+.js .order-handle{display:inline-flex}
+.js .opt .row{grid-template-columns:44px minmax(0,1fr) auto;column-gap:.6rem}
+.order-handle:hover{background:var(--surface);color:var(--ink)}
+.order-handle:active{cursor:grabbing}
+.order-handle .ico{stroke-width:3;stroke-linecap:round}
+/* Out-of-flow rules show the insertion edge without changing row height. */
+.pool,.opt{position:relative}
+.drop-before::before,.drop-after::after{content:"";position:absolute;z-index:2;left:0;right:0;height:2px;background:var(--machine-text);pointer-events:none}
+.drop-before::before{top:0}.drop-after::after{bottom:0}
+.ordering>.row,.pool.ordering>.who{background:var(--surface)}
+.ordering .order-handle{color:var(--machine-text)}
+.older-active:not([hidden]){display:inline-block;margin-left:.5rem;padding:.08rem .4rem;border:1px solid color-mix(in srgb,var(--machine-text) 45%,var(--rule));border-radius:3px;color:var(--machine-text);font:600 11.5px/1.3 var(--face);vertical-align:baseline}
+.older-active-note:not([hidden]){display:block;margin-top:.15rem;color:var(--quiet);font:400 12.5px/1.35 var(--face)}
+.older>summary:has(.older-active-summary){flex-wrap:wrap}
+.older>summary:has(.older-active-summary)::after{order:1}
+.older-active-summary-note:not([hidden]){order:2;flex-basis:100%;margin-top:0}
+.brief-toggle{display:none;float:right;min-height:44px;margin:-.75rem -.3rem .1rem .4rem;padding:0 .65rem;border:0;border-radius:6px;background:none;color:var(--quiet);font:500 13px/1 var(--face);cursor:pointer}
+.js .brief-toggle{display:block}
+.brief-toggle:hover{color:var(--ink);background:var(--paper)}
+.brief-full[hidden]{display:none}
+.older-label{display:block;color:var(--quiet);font:500 12px/1.4 var(--face)}
+
+/* Provider setup uses the console's paper, labels and existing rule rhythm. */
+/* Provider setup uses the same paper, rules and reading type as the console. */
+.pool-title{display:block;min-width:0;overflow-wrap:anywhere}
+.pool-title small{display:block;margin-top:.2rem;font:400 13.5px/1.4 var(--face);letter-spacing:0;color:var(--quiet)}
+.provider-setup{margin:1.25rem 0 1.5rem;padding:1rem 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.provider-open{display:flex;align-items:center;gap:.6rem;width:fit-content;min-height:44px;padding:.65rem 1rem;border:1px solid var(--rule-strong);border-radius:4px;color:var(--ink);font:500 15px/1.4 var(--face);cursor:pointer;list-style:none}
+.provider-open::-webkit-details-marker{display:none}
+.provider-open:hover{background:var(--surface);border-color:var(--ink)}
+.provider-open .ico{width:18px;height:18px;stroke-width:1.7;flex:none}
+.provider-setup details[open]>.provider-open .ico{transform:rotate(45deg)}
+.provider-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.7fr);gap:3rem;padding:2rem 0 1rem}
+.provider-intro h2{font:600 25px/1.2 var(--read);margin:0 0 .75rem;letter-spacing:-.01em}
+.provider-intro p{font:400 17px/1.5 var(--read);margin:0 0 1rem;max-width:36ch}
+.provider-intro p.quiet{font:400 14px/1.5 var(--face)}
+.provider-form{min-width:0}
+.provider-form label{display:block;font-weight:500;margin:0 0 .4rem}
+.provider-form input,.provider-form select,.provider-form textarea{display:block;width:100%;min-height:44px;margin-top:.4rem;padding:.65rem .75rem;border:1px solid var(--rule-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:400 16px/1.5 var(--face);caret-color:var(--machine-text)}
+.provider-form textarea{resize:vertical}
+.provider-form input::placeholder{color:var(--quiet)}
+.provider-form .quiet{font:400 13px/1.5 var(--face);margin:.4rem 0 1.3rem;max-width:65ch}
+.provider-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1rem}
+.provider-actions{display:flex;flex-wrap:wrap;gap:.75rem;margin:1.5rem 0 .75rem}
+.provider-setup button{min-height:44px;padding:.65rem 1rem;border:1px solid var(--rule-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:500 15px/1.4 var(--face);cursor:pointer}
+.provider-setup button:hover{background:var(--surface);border-color:var(--ink)}
+.provider-setup .provider-save{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.provider-setup .provider-save:hover{background:var(--tab)}
+.provider-setup button:disabled{cursor:wait;opacity:.6}
+.provider-sources{list-style:none;margin:1rem 0;padding:0}
+.provider-sources li{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:.5rem 0;overflow-wrap:anywhere}
+.provider-sources button{color:var(--human-text)}
+.provider-result{overflow-wrap:anywhere;margin:.5rem 0 0;color:var(--machine-text)}
+.provider-result[data-error=true]{color:var(--human-text)}
+.provider-model-list{max-height:16rem;overflow:auto;border:1px solid var(--rule);border-radius:4px;padding:.5rem .75rem;margin:.75rem 0 0;scrollbar-color:var(--rule-strong) var(--paper)}
+.provider-model-list legend{padding:0 .3rem;color:var(--quiet);font-size:13px}
+.provider-model-list label{display:flex;align-items:center;gap:.75rem;min-height:44px;margin:0;font-weight:400;overflow-wrap:anywhere}
+.provider-model-list input{width:18px;min-height:18px;height:18px;margin:0;flex:none;accent-color:var(--machine-text)}
+.provider-model-list label[hidden]{display:none}
+@media(max-width:760px){.provider-layout{grid-template-columns:minmax(0,1fr);gap:1rem;padding-top:1.5rem}.provider-intro p{max-width:65ch}.provider-fields{grid-template-columns:minmax(0,1fr);gap:.5rem}}

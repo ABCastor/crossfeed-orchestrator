@@ -1,0 +1,2080 @@
+{
+  "schema_version": 3,
+  "identity": "test-fixture",
+  "updated_at": "frozen regression configuration",
+  "purpose": "Synthetic regression fleet. No operator observations or deployment evidence.",
+  "policy": {
+    "orchestrator": "<state your policy here>",
+    "selection": "<state your policy here>",
+    "primary_implementation": [
+      "codex/gpt-6.1-sol",
+      "opencode/kimi-k2.7-code"
+    ],
+    "writers_require_isolated_worktrees": true,
+    "paid_overage": "disabled",
+    "catalog_visibility_is_not_entitlement_evidence": true,
+    "evidence_status_is_not_operational_admission": true,
+    "step_down_before_conserve": false,
+    "reduce_parallelism_before_quality": true,
+    "one_frontier_worker_per_pool": true,
+    "one_cli_process_equals_one_worker": true,
+    "unknown_quota_behavior": "<state your policy here>",
+    "effort_defaults": {
+      "codex": "gpt-6.1-sol",
+      "claude": "claude-opus-5-5"
+    },
+    "codex_mcp_denials": {}
+  },
+  "telemetry": {
+    "runtime_state": "~/.local/state/orchestrator/runtime.json",
+    "run_ledger": "~/.local/state/orchestrator/runs.jsonl",
+    "authoritative_go_quota": "authenticated OpenCode Go console snapshot",
+    "local_observed_usage": "OpenCode step_finish events and read-only opencode.db reconciliation",
+    "local_cost_semantics": "estimated equivalent cost from local model pricing; never authoritative Go quota debit",
+    "dashboard": "https://opencode.ai/auth"
+  },
+  "quota_pools": {
+    "opencode-go": {
+      "label": "OpenCode Go",
+      "plan": {
+        "name": "OpenCode Go",
+        "price": 10,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": "$60 of model value a month",
+        "as_of": "2026-09"
+      },
+      "billing": "<describe this pool's billing>",
+      "limits": {
+        "five_hours_usd_value": 12,
+        "weekly_usd_value": 30,
+        "monthly_usd_value": 60
+      },
+      "states": {
+        "ABUNDANT": "fresh direct bottleneck usage below 50%",
+        "HEALTHY": "fresh direct bottleneck usage from 50% through 74%",
+        "CONSERVE": "fresh direct bottleneck usage from 75% through 89%",
+        "CRITICAL": "fresh direct bottleneck usage at least 90%",
+        "EXHAUSTED": "explicit quota error or trusted 100% snapshot",
+        "UNKNOWN": "no direct console snapshot or snapshot older than one hour"
+      },
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "opencodego",
+        "ttl_s": 600
+      },
+      "balance_fallback": "disabled",
+      "source": "https://opencode.ai/docs/go/"
+    },
+    "claude": {
+      "label": "Claude",
+      "plan": {
+        "name": "Claude Pro",
+        "price": 20,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null,
+        "as_of": "2026-09"
+      },
+      "billing": "<describe this pool's billing>",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "claude",
+        "ttl_s": 1800
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "codex": {
+      "label": "Codex (ChatGPT)",
+      "plan": {
+        "name": "ChatGPT Plus",
+        "price": 20,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null,
+        "as_of": "2026-09"
+      },
+      "billing": "<describe this pool's billing>",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "codex",
+        "ttl_s": 1800
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "antigravity-gemini": {
+      "label": "Antigravity \u00b7 Gemini",
+      "plan": {
+        "name": "Google AI subscription",
+        "price": null,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null,
+        "as_of": "2026-09"
+      },
+      "billing": "<describe this pool's billing>",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "antigravity",
+        "ttl_s": 1800,
+        "windows": [
+          "antigravity-quota-summary-gemini-5h",
+          "antigravity-quota-summary-gemini-weekly"
+        ]
+      },
+      "quota_source": "<describe this pool's quota_source>",
+      "exhaustion_behaviour": "HARD FAIL, not degradation: when the cap is hit Antigravity returns RESOURCE_EXHAUSTED (429) with a reset timer, and does not fall back to a lighter model. So EXHAUSTED keeps blocking this pool; treating 100% as 'degraded but usable' would send calls straight into a 429."
+    },
+    "antigravity-3p": {
+      "label": "Antigravity \u00b7 Claude and GPT",
+      "plan": {
+        "name": "The same Google AI subscription",
+        "billing": "subscription",
+        "allowance": null,
+        "as_of": "2026-09"
+      },
+      "billing": "<describe this pool's billing>",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "antigravity",
+        "ttl_s": 1800,
+        "windows": [
+          "antigravity-quota-summary-3p-5h",
+          "antigravity-quota-summary-3p-weekly"
+        ]
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "antigravity": {
+      "quota_refresh": null,
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "github-copilot-student": {
+      "label": "GitHub Copilot",
+      "plan": {
+        "name": "Copilot Student",
+        "price": 0,
+        "currency": "USD",
+        "billing": "free",
+        "allowance": "200 AI credits a month",
+        "as_of": "2026-09"
+      },
+      "monthly_ai_credits": 200,
+      "model_selection": "auto-only",
+      "additional_paid_usage": "disabled",
+      "source": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "copilot",
+        "ttl_s": 1800
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "gemini-metered": {
+      "label": "Gemini API",
+      "plan": {
+        "name": "Gemini API key",
+        "billing": "per-token",
+        "allowance": null,
+        "as_of": "2026-09"
+      },
+      "billing": "<describe this pool's billing>",
+      "role": "<describe this pool's role>",
+      "daily_usd_cap": 1.0,
+      "daily_window": "calendar-day-local",
+      "cost_semantics": "<describe this pool's cost_semantics>",
+      "authoritative_spend_source": "Google AI Studio / Cloud console",
+      "enforcement": "wrapper admission (fleetctl acquire) refuses the next call once the calendar day's recorded estimated spend reaches the cap; a single in-flight run can overshoot by at most its own cost because max_parallel is 1",
+      "recommended_backstop": "set a hard requests-per-day quota or a low budget on the Google API key as a true stop",
+      "source": "https://ai.google.dev/gemini-api/docs/models",
+      "quota_refresh": null,
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "openrouter-free": {
+      "label": "OpenRouter",
+      "plan": {
+        "name": "Free models",
+        "price": 0,
+        "currency": "USD",
+        "billing": "free",
+        "allowance": "about 200 requests a day",
+        "as_of": "2026-09"
+      },
+      "billing": "OpenRouter's free tier: zero marginal cost per call, checked live against OpenRouter's own pricing before every request.",
+      "quota_refresh": null,
+      "quota_source": "none: OpenRouter publishes no percentage for the free tier; the per-call pricing check is the rail."
+    }
+  },
+  "model_evidence": {
+    "example-model-key": {
+      "status": "provisional",
+      "runs": 0,
+      "note": "Free-text evidence about how this model actually performed for you. Priors, never verdicts: replace with your own observations."
+    }
+  },
+  "model_cards": {
+    "_about": "Optional plain-language cards for the console's model switches. name, best_for (one line), speed (only when measured), run_as (the id a direct wrapper passes; default the key), aliases, pool (for models with no routing lane), status current|older, order, allowance, hidden. A card never admits a routing lane.",
+    "gpt-6-astra": {
+      "pool": "codex",
+      "name": "GPT-6 Astra",
+      "status": "current",
+      "order": 1,
+      "best_for": "Reviews, audits and builds that failed on Sol 6.1 xhigh"
+    },
+    "gpt-6-sol": {
+      "pool": "codex",
+      "name": "GPT-6 Sol",
+      "status": "older",
+      "order": 3,
+      "best_for": "Retired from routing on 2 October: GPT-6.1 Sol does more for the same rate",
+      "page_url": "https://artificialanalysis.ai/models/gpt-6-sol",
+      "superseded_by": "gpt-6.1-sol",
+      "superseded_on": "2026-09-29"
+    },
+    "gpt-6.1-sol": {
+      "pool": "codex",
+      "name": "GPT-6.1 Sol",
+      "status": "current",
+      "order": 2,
+      "best_for": "Owned builds and everyday coding: near-Astra quality at about a fifth of Astra's rate",
+      "page_url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+      "speed": "Quick at medium (first words in about 5 s); about 1 min at high, 2 min at xhigh"
+    },
+    "gpt-6-luna": {
+      "pool": "codex",
+      "name": "GPT-6 Luna",
+      "status": "current",
+      "order": 3,
+      "best_for": "Quick lookups and repo maps, the cheapest"
+    },
+    "claude-opus-5-5": {
+      "pool": "claude",
+      "name": "Opus 5.5",
+      "status": "current",
+      "order": 1,
+      "aliases": [
+        "opus"
+      ],
+      "best_for": "Judgment work: building and verifying"
+    },
+    "claude-sonnet-5-5": {
+      "pool": "claude",
+      "name": "Sonnet 5.5",
+      "status": "current",
+      "order": 2,
+      "aliases": [
+        "sonnet"
+      ],
+      "best_for": "Everyday orchestration and reading untrusted pages, for less than Opus"
+    },
+    "claude-sonnet-5": {
+      "pool": "claude",
+      "name": "Sonnet 5",
+      "status": "older",
+      "order": 3,
+      "best_for": "Still served; Sonnet 5.5 replaced it"
+    }
+  },
+  "routing": {
+    "principle": "hard gates first, then highest task-specific quality; step down only at CONSERVE; at UNKNOWN run one best lane without duplicate frontier retries",
+    "roles": {
+      "default": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-glm-5.2",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-kimi-k2.7-code",
+          "opencode-go-minimax-m3",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "conserve": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-glm-5.2",
+          "opencode-go-minimax-m3",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "critical": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "hard-reasoning": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-glm-5.2",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-qwen3.7-max",
+          "opencode-go-grok-4.5"
+        ],
+        "conserve": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "critical": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "implementation": {
+        "quality_first": [
+          "opencode-go-kimi-k2.7-code",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-minimax-m3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "conserve": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-minimax-m3",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "critical": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "review": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-glm-5.2",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-qwen3.7-max",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-grok-4.5",
+          "antigravity-3p-opus"
+        ],
+        "conserve": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-3p-opus"
+        ],
+        "critical": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-3p-opus"
+        ]
+      },
+      "debug": {
+        "quality_first": [
+          "opencode-go-glm-5.2",
+          "opencode-go-kimi-k3",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-grok-4.5"
+        ],
+        "conserve": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "critical": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "repo-map": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-deepseek-v4-flash",
+          "opencode-go-mimo-v2.5"
+        ],
+        "conserve": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-deepseek-v4-flash",
+          "opencode-go-mimo-v2.5"
+        ],
+        "critical": [
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-gemini-flash",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "long-context": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-max",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-glm-5.2"
+        ],
+        "conserve": [
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "critical": [
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "frontend-visual": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5",
+          "opencode-go-grok-4.5"
+        ],
+        "conserve": [
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "critical": [
+          "opencode-go-mimo-v2.5"
+        ]
+      },
+      "audio-video": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-mimo-v2.5",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-kimi-k2.7-code"
+        ],
+        "conserve": [
+          "opencode-go-mimo-v2.5",
+          "opencode-go-qwen3.7-plus"
+        ],
+        "critical": [
+          "opencode-go-mimo-v2.5"
+        ]
+      },
+      "research-scout": {
+        "quality_first": [
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "conserve": [
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "critical": [
+          "opencode-go-deepseek-v4-flash"
+        ]
+      }
+    },
+    "quota_policy": "clock_aware"
+  },
+  "lanes": [
+    {
+      "lane_id": "opencode-go-deepseek-v4-flash",
+      "model_key": "deepseek-v4-flash",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/deepseek-v4-flash",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [
+        "repo-map",
+        "implementation",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 4,
+      "max_tasks_per_run": 8,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-deepseek-v4-pro",
+      "model_key": "deepseek-v4-pro",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/deepseek-v4-pro",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "debug",
+        "implementation",
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 2,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-minimax-m3",
+      "model_key": "minimax-m3",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/minimax-m3",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "implementation"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 3,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-glm-5.2",
+      "model_key": "glm-5.2",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/glm-5.2",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "debug",
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 2,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-qwen3.7-plus",
+      "model_key": "qwen3.7-plus",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/qwen3.7-plus",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "repo-map",
+        "long-context",
+        "frontend-visual",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 3,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-qwen3.7-max",
+      "model_key": "qwen3.7-max",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/qwen3.7-max",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "review",
+        "long-context"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-grok-4.5",
+      "model_key": "grok-4.5",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/grok-4.5",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "debug",
+        "review",
+        "frontend-visual"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-kimi-k2.7-code",
+      "model_key": "kimi-k2.7-code",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/kimi-k2.7-code",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "implementation"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 2,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-kimi-k3",
+      "model_key": "kimi-k3",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/kimi-k3",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "hard-reasoning",
+        "frontend-visual",
+        "long-context",
+        "review",
+        "repo-map",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1800,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-mimo-v2.5",
+      "model_key": "mimo-v2.5",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/mimo-v2.5",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [
+        "repo-map",
+        "frontend-visual",
+        "audio-video",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 3,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "opencode-go-mimo-v2.5-pro",
+      "model_key": "mimo-v2.5-pro",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/mimo-v2.5-pro",
+      "access_status": "verified",
+      "admission_status": "rejected",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [],
+      "quota_pool": "opencode-go",
+      "max_parallel": 0,
+      "max_tasks_per_run": 0,
+      "timeout_s": 0,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "github-copilot-student-auto",
+      "model_key": "github-copilot-auto",
+      "harness": "copilot",
+      "provider": "github-copilot",
+      "selector": "auto",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "observer",
+      "roles": [
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "github-copilot-student",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "soft_session_credit_cap": 30,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "gemini-metered-flash-lite",
+      "model_key": "gemini-flash-lite-latest",
+      "harness": "opencode",
+      "provider": "google",
+      "selector": "google/gemini-flash-lite-latest",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "gemini-metered-flash",
+      "model_key": "gemini-flash-latest",
+      "harness": "opencode",
+      "provider": "google",
+      "selector": "google/gemini-flash-latest",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "gemini-metered-pro",
+      "model_key": "gemini-3.1-pro-preview",
+      "harness": "opencode",
+      "provider": "google",
+      "selector": "google/gemini-3.1-pro-preview",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash",
+      "model_key": "gemini-3.6-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.6-flash-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [
+        "default",
+        "hard-reasoning",
+        "implementation",
+        "review",
+        "debug",
+        "repo-map"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "antigravity-gemini-pro",
+      "model_key": "gemini-3.1-pro",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.1-pro-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "antigravity-3p-opus",
+      "model_key": "claude-opus-4-6-thinking",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-opus-4-6-thinking",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "antigravity-3p-sonnet",
+      "model_key": "claude-sonnet-4-6",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-sonnet-4-6",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "openrouter-free-router",
+      "model_key": "openrouter-free-router",
+      "harness": "openrouter",
+      "provider": "openrouter",
+      "selector": "openrouter/free",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "openrouter-free",
+      "max_parallel": 1,
+      "max_tasks_per_run": 4,
+      "timeout_s": 180,
+      "retries": 0,
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash-38-high",
+      "model_key": "gemini-3.8-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.8-flash-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "quality_tier": "standard",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "roles": [
+        "default",
+        "hard-reasoning",
+        "implementation",
+        "review",
+        "debug",
+        "repo-map"
+      ],
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic",
+      "verified_at": null
+    },
+    {
+      "lane_id": "antigravity-gemini-flash-38-medium",
+      "model_key": "gemini-3.8-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.8-flash-medium",
+      "access_status": "verified",
+      "admission_status": "active",
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "quality_tier": "standard",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "roles": [
+        "repo-map",
+        "research-scout",
+        "review"
+      ],
+      "notes": "Synthetic test lane.",
+      "evidence_confidence": "synthetic",
+      "verified_at": null
+    }
+  ],
+  "catalogue_only": [
+    {
+      "model_key": "glm-5.1",
+      "selector": "opencode-go/glm-5.1",
+      "reason": "superseded by GLM 5.2 at the same Go economics"
+    },
+    {
+      "model_key": "kimi-k2.6",
+      "selector": "opencode-go/kimi-k2.6",
+      "reason": "superseded by Kimi K2.7 Code and K3"
+    },
+    {
+      "model_key": "minimax-m2.7",
+      "selector": "opencode-go/minimax-m2.7",
+      "reason": "superseded by MiniMax M3"
+    },
+    {
+      "model_key": "qwen3.6-plus",
+      "selector": "opencode-go/qwen3.6-plus",
+      "reason": "regression fallback only; Qwen3.7 is current"
+    }
+  ],
+  "swarm_profiles": {
+    "explore": {
+      "description": "A pressure-aware council: full diverse breadth while healthy, one Kimi K3 frontier map when quota is unknown or conserving, and Flash only when critical.",
+      "bands": {
+        "quality_first": {
+          "parallel": 4,
+          "workers": [
+            {
+              "id": "kimi-architecture",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Build the strongest architecture and ownership map. Cite exact evidence."
+            },
+            {
+              "id": "glm-failure-paths",
+              "lane_id": "opencode-go-glm-5.2",
+              "angle": "Map failure paths, hidden assumptions, and decisive tests. Cite exact evidence."
+            },
+            {
+              "id": "qwen-long-context",
+              "lane_id": "opencode-go-qwen3.7-plus",
+              "angle": "Trace long-range coupling and contradictions across the supplied corpus. Cite exact evidence."
+            },
+            {
+              "id": "flash-surface",
+              "lane_id": "opencode-go-deepseek-v4-flash",
+              "angle": "Sweep the remaining surface for omissions and ownership boundaries. Cite exact evidence."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-architecture",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Build the strongest architecture and ownership map. Cite exact evidence."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-architecture",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Preserve frontier quality while reducing the council to one decisive map. Cite exact evidence."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "flash-surface",
+              "lane_id": "opencode-go-deepseek-v4-flash",
+              "angle": "Run one bounded surface sweep while the pool is under critical pressure. Cite exact evidence."
+            }
+          ]
+        }
+      }
+    },
+    "review": {
+      "description": "A pressure-aware review council led by Kimi K3, with diverse critics only while direct quota evidence permits it.",
+      "bands": {
+        "quality_first": {
+          "parallel": 4,
+          "workers": [
+            {
+              "id": "kimi-judge",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Find the highest-impact defect and rule on competing explanations with exact evidence."
+            },
+            {
+              "id": "glm-critic",
+              "lane_id": "opencode-go-glm-5.2",
+              "angle": "Reconstruct the causal chain and name the strongest falsifying test."
+            },
+            {
+              "id": "deepseek-pro-critic",
+              "lane_id": "opencode-go-deepseek-v4-pro",
+              "angle": "Challenge the implementation and test coverage from first principles."
+            },
+            {
+              "id": "qwen-context-critic",
+              "lane_id": "opencode-go-qwen3.7-max",
+              "angle": "Review for omitted constraints, cross-file regressions, and false positives."
+            },
+            {
+              "id": "grok-adversary",
+              "lane_id": "opencode-go-grok-4.5",
+              "angle": "Adversarially attack the leading conclusion, seeking high-impact failure modes with exact evidence."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-judge",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Find the highest-impact defect and rule on competing explanations with exact evidence."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-judge",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Preserve frontier review quality while reducing the council to one judge. Cite exact evidence."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "flash-critic",
+              "lane_id": "opencode-go-deepseek-v4-flash",
+              "angle": "Run one bounded critical-quota review and name the strongest falsifying test."
+            }
+          ]
+        }
+      }
+    },
+    "media-review": {
+      "description": "A capability-filtered media council. Kimi K3 leads image/video work; MiMo is the audio-capable route and independent multimodal critic.",
+      "bands": {
+        "quality_first": {
+          "parallel": 2,
+          "workers": [
+            {
+              "id": "kimi-media",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Inspect the attached media for the requested technical evidence; distinguish observation from inference."
+            },
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Independently inspect the attached media; report disagreements and uncertainty."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-media",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Inspect the attached media for the requested technical evidence; distinguish observation from inference."
+            },
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Inspect audio, or cover another modality when the Kimi route is ineligible."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-media",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Preserve frontier visual/video quality with one bounded inspection."
+            },
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Inspect audio, or cover another modality when the Kimi route is ineligible."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Run one capability-safe media inspection under critical quota pressure."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "effort": {
+    "gpt-6.1-sol": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "default": "medium",
+      "knee": "high",
+      "by_role": {
+        "owned-dispatch": "xhigh",
+        "implementation": "xhigh",
+        "builder": "high",
+        "hard-builder": "xhigh",
+        "hard-reasoning": "xhigh",
+        "review": "xhigh",
+        "reviewer": "xhigh",
+        "audit": "xhigh",
+        "lookup": "low",
+        "probe": "low",
+        "filter": "low",
+        "judgment": "medium",
+        "failed-unit": "xhigh",
+        "failed-builder": "xhigh"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "by_band": {
+        "conserve": {
+          "builder": "medium"
+        },
+        "critical": {
+          "owned-dispatch": "high",
+          "implementation": "high"
+        }
+      },
+      "refuse_roles": {
+        "audit-retry": "Astra-only inconclusive audit retry; Sol never uses max by roster policy. Wait for Astra or select a supported explicit caller level.",
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "stand_in_ceiling": "xhigh",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gpt-6-astra": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "default": "xhigh",
+      "knee": "xhigh",
+      "by_role": {
+        "review": "xhigh",
+        "reviewer": "xhigh",
+        "audit": "xhigh",
+        "failed-unit": "xhigh",
+        "audit-retry": "max"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gpt-6-luna": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {
+        "probe": "low",
+        "filter": "low",
+        "lookup": "low",
+        "scout": "low",
+        "repo-map": "medium",
+        "explorer": "medium",
+        "classification": "medium",
+        "mechanical-edit": "medium",
+        "second-opinion": "medium"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-opus-5-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {
+        "probe": "low",
+        "filter": "low",
+        "audit": "xhigh",
+        "reviewer": "high",
+        "review": "high"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-sonnet-5-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "xhigh",
+      "knee": "xhigh",
+      "by_role": {
+        "probe": "low",
+        "filter": "low",
+        "research-scout": "low",
+        "audit": "xhigh",
+        "review": "xhigh"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-3.6-flash": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-3.1-pro": {
+      "levels": {
+        "agy": [
+          "low",
+          "high"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "deepseek-v4-flash": {
+      "levels": {
+        "opencode": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "deepseek-v4-pro": {
+      "levels": {
+        "opencode": [
+          "high",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "glm-5.2": {
+      "levels": {
+        "opencode": [
+          "high",
+          "max"
+        ]
+      },
+      "default": "max",
+      "knee": "max",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "kimi-k3": {
+      "levels": {
+        "opencode": [
+          "max"
+        ]
+      },
+      "default": "max",
+      "knee": "max",
+      "by_role": {
+        "hard-reasoning": "max",
+        "long-context": "max"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "minimax-m3": {
+      "levels": {
+        "opencode": [
+          "none",
+          "thinking"
+        ]
+      },
+      "default": "thinking",
+      "knee": "thinking",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "kimi-k2.7-code": {
+      "levels": {
+        "opencode": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "qwen3.7-plus": {
+      "levels": {
+        "opencode": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "mimo-v2.5": {
+      "levels": {
+        "opencode": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-flash-latest": {
+      "levels": {
+        "opencode": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-flash-lite-latest": {
+      "levels": {
+        "opencode": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-3.1-pro-preview": {
+      "levels": {
+        "opencode": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-opus-4-6-thinking": {
+      "levels": {
+        "agy": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "control": "unverified",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-sonnet-4-6": {
+      "levels": {
+        "agy": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "control": "unverified",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "github-copilot-auto": {
+      "levels": {
+        "copilot": []
+      },
+      "default": "service-chosen",
+      "knee": "service-chosen",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-sonnet-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gpt-6-sol": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Frozen test effort fixture; live evidence is tested separately",
+        "read_on": "2026-10-02"
+      },
+      "recheck": "Fixture model or dispatch contract changes",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      }
+    },
+    "claude-fable-5-1": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {
+        "probe": "low",
+        "audit": "xhigh",
+        "reviewer": "xhigh"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-haiku": {
+      "levels": {
+        "claude": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-3.8-flash": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gemini-3.7-flash": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "openrouter-free-router": {
+      "levels": {
+        "openrouter": []
+      },
+      "default": "service-chosen",
+      "knee": "service-chosen",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "gpt-5.6-luna": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "claude-fable-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    }
+  }
+}

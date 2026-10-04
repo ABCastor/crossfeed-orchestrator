@@ -1,0 +1,4 @@
+# The same daily refresh with cron, for machines without systemd.
+# Install with `crontab -e` and paste the line below, pointing at your clone.
+# m  h  dom mon dow  command
+40 4  *   *   *     mkdir -p "$HOME/.local/state/orchestrator" && /usr/bin/env python3 "$HOME/crossfeed-orchestrator/scripts/market-refresh.py" >>"$HOME/.local/state/orchestrator/market-refresh.log" 2>&1

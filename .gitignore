@@ -1,0 +1,37 @@
+# Local agent session dirs, hand-off journals and the publish audit's private term list stay out of the repo.
+.claude/
+CHANGES.log
+HANDOFF.md
+.publish-denylist
+
+# Runtime state, never source.
+scripts/runs/
+state/
+# sabotage-check.sh's working copies: they exist only while it runs, and an automatic
+# commit that lands mid-run must not pick them up.
+scripts/.sabotage-mirror/
+scripts/.sabotage-work/
+*.pyc
+__pycache__/
+.DS_Store
+
+# Your real overlay is yours: it names your accounts and entitlements.
+access-overlay.json
+!examples/access-overlay.example.json
+
+# Local implementation reports and verification logs.
+.scratch/
+
+# Operator instructions are preserved from the live skill, never shipped.
+skill/LIVE-RULES.md
+skill/references/operator.md
+skill/references/afk-mode.md
+skill/references/delegated-decisions.md
+
+# Secrets and generated benchmark data stay local.
+.env
+.env.*
+!.env.example
+verification/
+campaign/
+bench/results/

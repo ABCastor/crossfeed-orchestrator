@@ -1,0 +1,2588 @@
+{
+  "schema_version": 3,
+  "identity": "example",
+  "updated_at": "the date you last edited this file",
+  "purpose": "Example access overlay. Declares which model lanes exist, what each is allowed to do, which quota pool funds it, and how roles step down. Copy to ~/.config/orchestrator/access-overlay.json and edit for your accounts. NOTE: existing harness lanes are marked verified for illustration. The Pi lane is deliberately an unverified candidate until you verify native access and explicitly admit it. Set access_status honestly for your own accounts; an unverified lane is refused on purpose. Plans (`quota_pools.<pool>.plan`) leave prices and allowances unset: configure your own; an allowance is always an estimate and null when the provider does not publish one. Effort blocks are illustrative policy, not measured evidence: verify your CLI controls, choose levels, and replace evidence.source/read_on before dispatch. Model pins are watch-only until you opt into management.",
+  "policy": {
+    "orchestrator": "<state your policy here>",
+    "selection": "<state your policy here>",
+    "primary_implementation": [
+      "codex/gpt-6.1-sol",
+      "opencode/kimi-k2.7-code"
+    ],
+    "writers_require_isolated_worktrees": true,
+    "paid_overage": "disabled",
+    "catalog_visibility_is_not_entitlement_evidence": true,
+    "evidence_status_is_not_operational_admission": true,
+    "step_down_before_conserve": false,
+    "reduce_parallelism_before_quality": true,
+    "one_frontier_worker_per_pool": true,
+    "one_cli_process_equals_one_worker": true,
+    "unknown_quota_behavior": "<state your policy here>",
+    "effort_defaults": {
+      "codex": "gpt-6.1-sol",
+      "claude": "claude-opus-5-5"
+    },
+    "cheap_probe_lane": "codex/gpt-6-luna",
+    "codex_mcp_denials": {},
+    "selector": {
+      "allowed_pools_by_role": {
+        "default": [
+          "opencode-go",
+          "claude",
+          "codex",
+          "antigravity-gemini",
+          "antigravity-3p",
+          "antigravity",
+          "github-copilot-student",
+          "gemini-metered",
+          "openrouter-free",
+          "chatgpt-work"
+        ],
+        "implementation": [
+          "codex",
+          "opencode-go"
+        ],
+        "builder": [
+          "codex",
+          "opencode-go"
+        ]
+      },
+      "stakes_weights": {
+        "low": 1,
+        "normal": 2,
+        "high": 4
+      },
+      "mu": 0.001,
+      "target": 90,
+      "lambda0": 1,
+      "lambda_unknown": 0.5,
+      "explore": 0.1
+    },
+    "evidence": {
+      "sources": {
+        "aa_terminal": {
+          "anchor": true,
+          "families": [
+            "coding-agent",
+            "repo-qa",
+            "review"
+          ],
+          "assumption": "Rank current admitted Terminal-Bench 4 results as a weak task prior."
+        },
+        "aa_intelligence": {
+          "anchor": true,
+          "families": [
+            "reasoning",
+            "research"
+          ],
+          "assumption": "Rank current admitted intelligence results as a weak reasoning prior."
+        },
+        "aa_ifbench": {
+          "anchor": true,
+          "families": [
+            "extraction"
+          ],
+          "assumption": "Rank current admitted instruction-following results as a weak extraction prior."
+        }
+      }
+    }
+  },
+  "telemetry": {
+    "runtime_state": "~/.local/state/orchestrator/runtime.json",
+    "run_ledger": "~/.local/state/orchestrator/runs.jsonl",
+    "authoritative_go_quota": "authenticated OpenCode Go console snapshot",
+    "local_observed_usage": "OpenCode step_finish events and read-only opencode.db reconciliation",
+    "local_cost_semantics": "estimated equivalent cost from local model pricing; never authoritative Go quota debit",
+    "dashboard": "https://opencode.ai/auth"
+  },
+  "quota_pools": {
+    "opencode-go": {
+      "label": "OpenCode Go",
+      "plan": {
+        "name": "Example OpenCode Go",
+        "price": null,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "limits": {
+        "five_hours_usd_value": null,
+        "weekly_usd_value": null,
+        "monthly_usd_value": null
+      },
+      "states": {
+        "ABUNDANT": "fresh direct bottleneck usage below 50%",
+        "HEALTHY": "fresh direct bottleneck usage from 50% through 74%",
+        "CONSERVE": "fresh direct bottleneck usage from 75% through 89%",
+        "CRITICAL": "fresh direct bottleneck usage at least 90%",
+        "EXHAUSTED": "explicit quota error or trusted 100% snapshot",
+        "UNKNOWN": "no direct console snapshot or snapshot older than one hour"
+      },
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "opencodego",
+        "ttl_s": 600
+      },
+      "balance_fallback": "disabled",
+      "source": "https://opencode.ai/docs/go/",
+      "model_pins": [
+        {
+          "path": "~/.config/opencode/opencode.jsonc",
+          "key": "model",
+          "format": "json",
+          "manage": false,
+          "what": "OpenCode default model"
+        },
+        {
+          "path": "~/.config/opencode/opencode.jsonc",
+          "key": "small_model",
+          "format": "json",
+          "manage": false,
+          "what": "OpenCode small model (titles and summaries)"
+        },
+        {
+          "path": "~/.config/opencode/fleet-worker/opencode.jsonc",
+          "key": "model",
+          "format": "json",
+          "manage": false,
+          "what": "OpenCode fleet-worker default model"
+        },
+        {
+          "path": "~/.config/opencode/fleet-worker/opencode.jsonc",
+          "key": "small_model",
+          "format": "json",
+          "manage": false,
+          "what": "OpenCode fleet-worker small model"
+        }
+      ]
+    },
+    "claude": {
+      "label": "Claude",
+      "plan": {
+        "name": "Example Claude",
+        "price": null,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "claude",
+        "ttl_s": 1800
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "codex": {
+      "label": "Codex (ChatGPT)",
+      "plan": {
+        "name": "Example Codex (ChatGPT)",
+        "price": null,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "codex",
+        "ttl_s": 1800
+      },
+      "quota_source": "<describe this pool's quota_source>",
+      "model_pins": [
+        {
+          "path": "~/.codex/agents/*.toml",
+          "key": "model",
+          "format": "toml",
+          "manage": false,
+          "what": "Codex subagent seats (explorer, scout, builder, reviewer)"
+        },
+        {
+          "path": "~/.codex/config.toml",
+          "key": "model",
+          "format": "toml",
+          "manage": false,
+          "what": "Codex default model: the Codex app rewrites it from its model picker"
+        }
+      ]
+    },
+    "antigravity-gemini": {
+      "label": "Antigravity \u00b7 Gemini",
+      "plan": {
+        "name": "Example Antigravity \u00b7 Gemini",
+        "price": null,
+        "currency": "USD",
+        "billing": "subscription",
+        "allowance": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "antigravity",
+        "ttl_s": 1800,
+        "windows": [
+          "antigravity-quota-summary-gemini-5h",
+          "antigravity-quota-summary-gemini-weekly"
+        ]
+      },
+      "quota_source": "<describe this pool's quota_source>",
+      "exhaustion_behaviour": "HARD FAIL, not degradation: when the cap is hit Antigravity returns RESOURCE_EXHAUSTED (429) with a reset timer, and does not fall back to a lighter model. So EXHAUSTED keeps blocking this pool; treating 100% as 'degraded but usable' would send calls straight into a 429."
+    },
+    "antigravity-3p": {
+      "label": "Antigravity \u00b7 Claude and GPT",
+      "plan": {
+        "name": "Example Antigravity \u00b7 Claude and GPT",
+        "billing": "subscription",
+        "allowance": null,
+        "price": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "role": "<describe this pool's role>",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "antigravity",
+        "ttl_s": 1800,
+        "windows": [
+          "antigravity-quota-summary-3p-5h",
+          "antigravity-quota-summary-3p-weekly"
+        ]
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "antigravity": {
+      "quota_refresh": null,
+      "quota_source": "<describe this pool's quota_source>",
+      "plan": {
+        "name": "Example antigravity",
+        "price": null,
+        "allowance": null
+      }
+    },
+    "github-copilot-student": {
+      "label": "GitHub Copilot",
+      "plan": {
+        "name": "Example GitHub Copilot",
+        "price": null,
+        "currency": "USD",
+        "billing": "free",
+        "allowance": null
+      },
+      "monthly_ai_credits": 100,
+      "model_selection": "auto-only",
+      "additional_paid_usage": "disabled",
+      "source": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals",
+      "quota_refresh": {
+        "oracle": "codexbar",
+        "provider": "copilot",
+        "ttl_s": 1800
+      },
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "gemini-metered": {
+      "label": "Gemini API",
+      "plan": {
+        "name": "Example Gemini API",
+        "billing": "per-token",
+        "allowance": null,
+        "price": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "role": "<describe this pool's role>",
+      "daily_usd_cap": 0.5,
+      "daily_window": "calendar-day-local",
+      "cost_semantics": "<describe this pool's cost_semantics>",
+      "authoritative_spend_source": "Google AI Studio / Cloud console",
+      "enforcement": "wrapper admission (fleetctl acquire) refuses the next call once the calendar day's recorded estimated spend reaches the cap; a single in-flight run can overshoot by at most its own cost because max_parallel is 1",
+      "recommended_backstop": "set a hard requests-per-day quota or a low budget on the Google API key as a true stop",
+      "source": "https://ai.google.dev/gemini-api/docs/models",
+      "quota_refresh": null,
+      "quota_source": "<describe this pool's quota_source>"
+    },
+    "openrouter-free": {
+      "label": "OpenRouter",
+      "plan": {
+        "name": "Example OpenRouter",
+        "price": null,
+        "currency": "USD",
+        "billing": "free",
+        "allowance": null
+      },
+      "billing": "Configure for your own plan and admitted transport.",
+      "quota_refresh": null,
+      "quota_source": "none: OpenRouter publishes no percentage for the free tier; the per-call pricing check is the rail.",
+      "role": "Free-model lane, explicit selection only; upstream rate limits remain provider-enforced.",
+      "source": "https://openrouter.ai/docs",
+      "data_policy": "Unknown: verify training and retention policies before sending any prompt. The wrapper refuses non-free models."
+    },
+    "chatgpt-work": {
+      "label": "ChatGPT Chat via Crossfeed Chat",
+      "pro_weekly_allowance": 200,
+      "quota_refresh": null,
+      "quota_source": "No authoritative Chat quota reading; Pro allowance is an owner-set estimate. Do not borrow Codex/Work snapshots.",
+      "plan": {
+        "name": "Example ChatGPT chats via Crossfeed Chat",
+        "allowance": null,
+        "limit": "none-known",
+        "price": null
+      },
+      "billing": "Configure for your own plan and admitted transport."
+    }
+  },
+  "model_evidence": {
+    "example-model-key": {
+      "status": "provisional",
+      "runs": 0,
+      "note": "Free-text evidence about how this model actually performed for you. Priors, never verdicts: replace with your own observations."
+    }
+  },
+  "model_cards": {
+    "_about": "Optional plain-language cards for the console's model switches. name, best_for (one line), speed (only when measured), run_as (the id a direct wrapper passes; default the key), aliases, pool (for models with no routing lane), status current|older, order, allowance, hidden. Older models default off without a comparative reason: older_model_reasons maps a pool to {job, advantage: cheaper|faster|better, compared_to: current model key, reason, evidence}. Sourced better_than_successor_at measurements also qualify against a current successor. A card never admits a routing lane.",
+    "gpt-6-astra": {
+      "pool": "codex",
+      "name": "GPT-6 Astra",
+      "status": "current",
+      "order": 1,
+      "page_url": "https://artificialanalysis.ai/models/gpt-6-astra"
+    },
+    "gpt-6-sol": {
+      "pool": "codex",
+      "name": "GPT-6 Sol",
+      "status": "older",
+      "order": 3,
+      "page_url": "https://artificialanalysis.ai/models/gpt-6-sol",
+      "superseded_by": "gpt-6.1-sol"
+    },
+    "gpt-6.1-sol": {
+      "page_url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+      "pool": "codex",
+      "name": "GPT-6.1 Sol",
+      "status": "current",
+      "order": 2
+    },
+    "gpt-6-luna": {
+      "pool": "codex",
+      "name": "GPT-6 Luna",
+      "status": "current",
+      "order": 4,
+      "page_url": "https://artificialanalysis.ai/models/gpt-6-luna"
+    },
+    "claude-opus-5-5": {
+      "pool": "claude",
+      "name": "Opus 5.5",
+      "status": "current",
+      "order": 2,
+      "aliases": [
+        "opus"
+      ],
+      "page_url": "https://artificialanalysis.ai/models/claude-opus-5-5",
+      "min_cli": {
+        "claude": "2.1.280"
+      }
+    },
+    "claude-sonnet-5-5": {
+      "pool": "claude",
+      "name": "Sonnet 5.5",
+      "status": "current",
+      "order": 3,
+      "aliases": [
+        "sonnet"
+      ],
+      "page_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5"
+    },
+    "claude-sonnet-5": {
+      "pool": "claude",
+      "name": "Sonnet 5",
+      "status": "older",
+      "order": 6,
+      "page_url": "https://artificialanalysis.ai/models/claude-sonnet-5",
+      "superseded_by": "claude-sonnet-5-5"
+    },
+    "gpt-5.6-luna": {
+      "pool": "codex",
+      "name": "GPT-5.6 Luna",
+      "status": "older",
+      "order": 4,
+      "page_url": "https://artificialanalysis.ai/models/gpt-5-6-luna",
+      "superseded_by": "gpt-6-luna"
+    },
+    "gpt-5.6-sol": {
+      "pool": "codex",
+      "name": "GPT-5.6 Sol",
+      "status": "older",
+      "order": 5,
+      "page_url": "https://artificialanalysis.ai/models/gpt-5-6-sol",
+      "superseded_by": "gpt-6-sol"
+    },
+    "gpt-5.6-terra": {
+      "pool": "codex",
+      "name": "GPT-5.6 Terra",
+      "status": "older",
+      "order": 6,
+      "page_url": "https://artificialanalysis.ai/models/gpt-5-6-terra"
+    },
+    "gpt-5.6-sol-and-terra": {
+      "pool": "codex",
+      "hidden": true
+    },
+    "gpt-5.3-codex-spark": {
+      "pool": "codex",
+      "name": "GPT-5.3 Codex Spark",
+      "status": "older",
+      "order": 7,
+      "page_url": "https://openai.com/index/introducing-gpt-5-3-codex-spark/"
+    },
+    "claude-fable-5-1": {
+      "pool": "claude",
+      "name": "Fable 5.1",
+      "status": "current",
+      "order": 1,
+      "aliases": [
+        "fable"
+      ],
+      "page_url": "https://artificialanalysis.ai/models/claude-fable-5-1"
+    },
+    "claude-haiku": {
+      "pool": "claude",
+      "name": "Haiku",
+      "run_as": "haiku",
+      "status": "current",
+      "order": 4,
+      "aliases": [
+        "haiku"
+      ],
+      "page_url": "https://artificialanalysis.ai/models/claude-4-5-haiku"
+    },
+    "claude-fable-5": {
+      "pool": "claude",
+      "name": "Fable 5",
+      "status": "older",
+      "order": 5,
+      "page_url": "https://artificialanalysis.ai/models/claude-fable-5",
+      "superseded_by": "claude-fable-5-1"
+    },
+    "gemini-3.8-flash": {
+      "name": "Gemini 3.8 Flash",
+      "page_url": "https://artificialanalysis.ai/models/gemini-3-8-flash"
+    },
+    "gemini-3.7-flash": {
+      "page_url": "https://artificialanalysis.ai/models/gemini-3-7-flash",
+      "superseded_by": "gemini-3.8-flash",
+      "name": "Gemini 3.7 Flash"
+    },
+    "gemini-3.6-flash": {
+      "page_url": "https://artificialanalysis.ai/models/gemini-3-6-flash",
+      "superseded_by": "gemini-3.7-flash",
+      "name": "Gemini 3.6 Flash"
+    }
+  },
+  "routing": {
+    "principle": "hard gates first, then highest task-specific quality; step down only at CONSERVE; at UNKNOWN run one best lane without duplicate frontier retries",
+    "roles": {
+      "default": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "opencode-go-kimi-k3",
+          "opencode-go-glm-5.2",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-kimi-k2.7-code",
+          "opencode-go-minimax-m3"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-glm-5.2",
+          "opencode-go-minimax-m3"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "hard-reasoning": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-kimi-k3",
+          "opencode-go-glm-5.2",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-pro"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-pro"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "implementation": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-kimi-k2.7-code",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-pro",
+          "opencode-go-minimax-m3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-deepseek-v4-flash"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-minimax-m3"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "review": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "opencode-go-kimi-k3",
+          "opencode-go-glm-5.2",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-pro",
+          "antigravity-3p-opus"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-pro",
+          "antigravity-3p-opus"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "antigravity-3p-opus",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "debug": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-glm-5.2",
+          "opencode-go-kimi-k3",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-pro"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-glm-5.2",
+          "opencode-go-deepseek-v4-pro"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "repo-map": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "long-context": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-glm-5.2"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-glm-5.2"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "frontend-visual": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-mimo-v2.5"
+        ]
+      },
+      "audio-video": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-kimi-k3",
+          "opencode-go-mimo-v2.5",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-kimi-k2.7-code"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-mimo-v2.5",
+          "opencode-go-qwen3.7-plus"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-mimo-v2.5"
+        ]
+      },
+      "research-scout": {
+        "quality_first": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-kimi-k3",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "conserve": [
+          "chatgpt",
+          "opencode-go-deepseek-v4-flash",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-qwen3.7-plus",
+          "opencode-go-mimo-v2.5"
+        ],
+        "critical": [
+          "chatgpt",
+          "antigravity-gemini-flash-38-medium",
+          "opencode-go-deepseek-v4-flash"
+        ]
+      }
+    },
+    "quota_policy": "clock_aware"
+  },
+  "lanes": [
+    {
+      "lane_id": "opencode-go-deepseek-v4-flash",
+      "model_key": "deepseek-v4-flash",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/deepseek-v4-flash",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [
+        "repo-map",
+        "implementation",
+        "research-scout",
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 6,
+      "max_tasks_per_run": 16,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-deepseek-v4-pro",
+      "model_key": "deepseek-v4-pro",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/deepseek-v4-pro",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "debug",
+        "implementation",
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 2,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-minimax-m3",
+      "model_key": "minimax-m3",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/minimax-m3",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "implementation"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 3,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-glm-5.2",
+      "model_key": "glm-5.2",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/glm-5.2",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "debug",
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 2,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-qwen3.7-plus",
+      "model_key": "qwen3.7-plus",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/qwen3.7-plus",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "repo-map",
+        "long-context",
+        "frontend-visual",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 3,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-qwen3.7-max",
+      "model_key": "qwen3.7-max",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/qwen3.7-max",
+      "access_status": "verified",
+      "admission_status": "retired",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-grok-4.5",
+      "model_key": "grok-4.5",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/grok-4.5",
+      "access_status": "verified",
+      "admission_status": "retired",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-kimi-k2.7-code",
+      "model_key": "kimi-k2.7-code",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/kimi-k2.7-code",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "implementation"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 1,
+      "max_tasks_per_run": 2,
+      "timeout_s": 1200,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-kimi-k3",
+      "model_key": "kimi-k3",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/kimi-k3",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "hard-reasoning",
+        "frontend-visual",
+        "long-context",
+        "review",
+        "repo-map",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1800,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-mimo-v2.5",
+      "model_key": "mimo-v2.5",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/mimo-v2.5",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [
+        "repo-map",
+        "frontend-visual",
+        "audio-video",
+        "research-scout"
+      ],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "opencode-go",
+      "max_parallel": 2,
+      "max_tasks_per_run": 3,
+      "timeout_s": 900,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "opencode-go-mimo-v2.5-pro",
+      "model_key": "mimo-v2.5-pro",
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "selector": "opencode-go/mimo-v2.5-pro",
+      "access_status": "verified",
+      "admission_status": "rejected",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [],
+      "quota_pool": "opencode-go",
+      "max_parallel": 0,
+      "max_tasks_per_run": 0,
+      "timeout_s": 0,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "github-copilot-student-auto",
+      "model_key": "github-copilot-auto",
+      "harness": "copilot",
+      "provider": "github-copilot",
+      "selector": "auto",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "observer",
+      "roles": [
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "github-copilot-student",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "soft_session_credit_cap": 30,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "gemini-metered-flash-lite",
+      "model_key": "gemini-flash-lite-latest",
+      "harness": "opencode",
+      "provider": "google",
+      "selector": "google/gemini-flash-lite-latest",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "gemini-metered-flash",
+      "model_key": "gemini-flash-latest",
+      "harness": "opencode",
+      "provider": "google",
+      "selector": "google/gemini-flash-latest",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "gemini-metered-pro",
+      "model_key": "gemini-3.1-pro-preview",
+      "harness": "opencode",
+      "provider": "google",
+      "selector": "google/gemini-3.1-pro-preview",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash",
+      "model_key": "gemini-3.6-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.6-flash-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-pro",
+      "model_key": "gemini-3.1-pro",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.1-pro-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-3p-opus",
+      "model_key": "claude-opus-4-6-thinking",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-opus-4-6-thinking",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "review"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-3p-sonnet",
+      "model_key": "claude-sonnet-4-6",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-sonnet-4-6",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "openrouter-free-router",
+      "model_key": "openrouter-free-router",
+      "harness": "openrouter",
+      "provider": "openrouter",
+      "selector": "openrouter/free",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false,
+        "data_policy": "unknown-no-published-policy"
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "openrouter-free",
+      "max_parallel": 1,
+      "max_tasks_per_run": 4,
+      "timeout_s": 180,
+      "retries": 0,
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash-37-high",
+      "model_key": "gemini-3.7-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.7-flash-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "quality_tier": "standard",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "roles": [],
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "verified_at": null,
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash-37-medium",
+      "model_key": "gemini-3.7-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.7-flash-medium",
+      "access_status": "verified",
+      "admission_status": "active",
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "quality_tier": "standard",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "roles": [],
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "verified_at": null,
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash-38-high",
+      "model_key": "gemini-3.8-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.8-flash-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "quality_tier": "standard",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "roles": [
+        "default",
+        "hard-reasoning",
+        "implementation",
+        "review",
+        "debug",
+        "repo-map"
+      ],
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "verified_at": null,
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-flash-38-medium",
+      "model_key": "gemini-3.8-flash",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-3.8-flash-medium",
+      "access_status": "verified",
+      "admission_status": "active",
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "quality_tier": "standard",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "roles": [
+        "repo-map",
+        "research-scout",
+        "review"
+      ],
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "verified_at": null,
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "openrouter-ox-alpha",
+      "model_key": "ox-alpha",
+      "harness": "openrouter",
+      "provider": "openrouter",
+      "selector": "stealth/ox-alpha",
+      "access_status": "verified",
+      "admission_status": "retired",
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "openrouter-free",
+      "quality_tier": "frontier",
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false,
+        "data_policy": "unknown-no-published-policy"
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 3,
+      "timeout_s": 180,
+      "retries": 0,
+      "roles": [],
+      "notes": "Example lane: verify access, capabilities and limits for your account.",
+      "verified_at": null,
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "pi-gemini-metered-flash-lite",
+      "model_key": "gemini-flash-lite-latest",
+      "harness": "pi",
+      "provider": "google",
+      "selector": "google/gemini-flash-lite-latest",
+      "access_status": "unverified",
+      "admission_status": "candidate",
+      "verified_at": null,
+      "quality_tier": "metered",
+      "roles": [],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "gemini-metered",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "notes": "Illustrative Pi API-key lane. Verify Pi model availability before admitting; OAuth and subscription logins are refused. Daily recorded spend cap uses gemini-metered.",
+      "evidence_confidence": "example, not deployment evidence",
+      "auth": {
+        "kind": "api-key",
+        "terms_class": "api-only",
+        "key_env": "GEMINI_API_KEY",
+        "key_file_env": "GEMINI_API_KEY_FILE"
+      },
+      "effort": {
+        "shape": "enum",
+        "flag": "--thinking",
+        "map": {
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": "xhigh"
+        }
+      }
+    }
+  ],
+  "catalogue_only": [
+    {
+      "model_key": "glm-5.1",
+      "selector": "opencode-go/glm-5.1",
+      "reason": "superseded by GLM 5.2 at the same Go economics"
+    },
+    {
+      "model_key": "kimi-k2.6",
+      "selector": "opencode-go/kimi-k2.6",
+      "reason": "superseded by Kimi K2.7 Code and K3"
+    },
+    {
+      "model_key": "minimax-m2.7",
+      "selector": "opencode-go/minimax-m2.7",
+      "reason": "superseded by MiniMax M3"
+    },
+    {
+      "model_key": "qwen3.6-plus",
+      "selector": "opencode-go/qwen3.6-plus",
+      "reason": "regression fallback only; Qwen3.7 is current"
+    },
+    {
+      "model_key": "gpt-oss-120b",
+      "selector": "agy/gpt-oss-120b-medium"
+    },
+    {
+      "model_key": "gemini-3.5-flash",
+      "selector": "agy/gemini-3.5-flash-high"
+    }
+  ],
+  "swarm_profiles": {
+    "explore": {
+      "description": "A pressure-aware council: full diverse breadth while healthy, one Kimi K3 frontier map when quota is unknown or conserving, and Flash only when critical.",
+      "bands": {
+        "quality_first": {
+          "parallel": 4,
+          "workers": [
+            {
+              "id": "kimi-architecture",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Build the strongest architecture and ownership map. Cite exact evidence."
+            },
+            {
+              "id": "glm-failure-paths",
+              "lane_id": "opencode-go-glm-5.2",
+              "angle": "Map failure paths, hidden assumptions, and decisive tests. Cite exact evidence."
+            },
+            {
+              "id": "qwen-long-context",
+              "lane_id": "opencode-go-qwen3.7-plus",
+              "angle": "Trace long-range coupling and contradictions across the supplied corpus. Cite exact evidence."
+            },
+            {
+              "id": "flash-surface",
+              "lane_id": "opencode-go-deepseek-v4-flash",
+              "angle": "Sweep the remaining surface for omissions and ownership boundaries. Cite exact evidence."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-architecture",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Build the strongest architecture and ownership map. Cite exact evidence."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 2,
+          "workers": [
+            {
+              "id": "gemini-mapper",
+              "lane_id": "antigravity-gemini-flash-38-medium",
+              "angle": "Map the territory and cite exact files; flag what you could not determine."
+            },
+            {
+              "id": "kimi-architecture",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Preserve frontier quality while reducing the council to one decisive map. Cite exact evidence."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 2,
+          "workers": [
+            {
+              "id": "gemini-mapper",
+              "lane_id": "antigravity-gemini-flash-38-medium",
+              "angle": "Map the territory and cite exact files; flag what you could not determine."
+            },
+            {
+              "id": "flash-surface",
+              "lane_id": "opencode-go-deepseek-v4-flash",
+              "angle": "Run one bounded surface sweep while the pool is under critical pressure. Cite exact evidence."
+            }
+          ]
+        }
+      }
+    },
+    "review": {
+      "description": "A pressure-aware review council led by Kimi K3, with diverse critics only while direct quota evidence permits it.",
+      "bands": {
+        "quality_first": {
+          "parallel": 4,
+          "workers": [
+            {
+              "id": "kimi-judge",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Find the highest-impact defect and rule on competing explanations with exact evidence."
+            },
+            {
+              "id": "glm-critic",
+              "lane_id": "opencode-go-glm-5.2",
+              "angle": "Reconstruct the causal chain and name the strongest falsifying test."
+            },
+            {
+              "id": "deepseek-pro-critic",
+              "lane_id": "opencode-go-deepseek-v4-pro",
+              "angle": "Challenge the implementation and test coverage from first principles."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-judge",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Find the highest-impact defect and rule on competing explanations with exact evidence."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 2,
+          "workers": [
+            {
+              "id": "gemini-critic",
+              "lane_id": "antigravity-gemini-flash-38-medium",
+              "angle": "Attack the strongest claim with exact evidence, and name the one check that would falsify it."
+            },
+            {
+              "id": "kimi-judge",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Preserve frontier review quality while reducing the council to one judge. Cite exact evidence."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 2,
+          "workers": [
+            {
+              "id": "opus-critic",
+              "lane_id": "antigravity-3p-opus",
+              "angle": "Give the single strongest objection a different model family would raise."
+            },
+            {
+              "id": "gemini-critic",
+              "lane_id": "antigravity-gemini-flash-38-medium",
+              "angle": "Attack the strongest claim with exact evidence, and name the one check that would falsify it."
+            },
+            {
+              "id": "flash-critic",
+              "lane_id": "opencode-go-deepseek-v4-flash",
+              "angle": "Run one bounded critical-quota review and name the strongest falsifying test."
+            }
+          ]
+        }
+      }
+    },
+    "media-review": {
+      "description": "A capability-filtered media council. Kimi K3 leads image/video work; MiMo is the audio-capable route and independent multimodal critic.",
+      "bands": {
+        "quality_first": {
+          "parallel": 2,
+          "workers": [
+            {
+              "id": "kimi-media",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Inspect the attached media for the requested technical evidence; distinguish observation from inference."
+            },
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Independently inspect the attached media; report disagreements and uncertainty."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-media",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Inspect the attached media for the requested technical evidence; distinguish observation from inference."
+            },
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Inspect audio, or cover another modality when the Kimi route is ineligible."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "kimi-media",
+              "lane_id": "opencode-go-kimi-k3",
+              "angle": "Preserve frontier visual/video quality with one bounded inspection."
+            },
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Inspect audio, or cover another modality when the Kimi route is ineligible."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 1,
+          "workers": [
+            {
+              "id": "mimo-media",
+              "lane_id": "opencode-go-mimo-v2.5",
+              "angle": "Run one capability-safe media inspection under critical quota pressure."
+            }
+          ]
+        }
+      }
+    },
+    "research": {
+      "description": "Text-only research and deep-reasoning council. Latest Pro through Crossfeed Chat is a standing seat, with no known limit and minutes of latency; no default wall or idle timeout. Exclude the lead lineage when independent review is required.",
+      "bands": {
+        "quality_first": {
+          "parallel": 3,
+          "workers": [
+            {
+              "id": "pro-reasoning",
+              "selector": "chatgpt:latest-pro",
+              "role": "hard-reasoning",
+              "timeout": 0,
+              "angle": "Deep reasoning: stress-test the research conclusion and strongest alternative using the supplied evidence. Separate verified facts from inference. Take the time needed; do not edit files."
+            },
+            {
+              "id": "kimi-outside-view",
+              "lane_id": "opencode-go-kimi-k3",
+              "role": "review",
+              "angle": "Outside view: compare the conclusion with comparable cases and find unsupported assumptions."
+            },
+            {
+              "id": "glm-red-team",
+              "lane_id": "opencode-go-glm-5.2",
+              "role": "review",
+              "angle": "Red-team: find the strongest evidence against the leading conclusion and name the test that would change it."
+            }
+          ]
+        },
+        "unknown": {
+          "parallel": 3,
+          "workers": [
+            {
+              "id": "pro-reasoning",
+              "selector": "chatgpt:latest-pro",
+              "role": "hard-reasoning",
+              "timeout": 0,
+              "angle": "Deep reasoning: stress-test the research conclusion and strongest alternative using the supplied evidence. Separate verified facts from inference. Take the time needed; do not edit files."
+            },
+            {
+              "id": "kimi-outside-view",
+              "lane_id": "opencode-go-kimi-k3",
+              "role": "review",
+              "angle": "Outside view: compare the conclusion with comparable cases and find unsupported assumptions."
+            },
+            {
+              "id": "glm-red-team",
+              "lane_id": "opencode-go-glm-5.2",
+              "role": "review",
+              "angle": "Red-team: find the strongest evidence against the leading conclusion and name the test that would change it."
+            }
+          ]
+        },
+        "conserve": {
+          "parallel": 3,
+          "workers": [
+            {
+              "id": "pro-reasoning",
+              "selector": "chatgpt:latest-pro",
+              "role": "hard-reasoning",
+              "timeout": 0,
+              "angle": "Deep reasoning: stress-test the research conclusion and strongest alternative using the supplied evidence. Separate verified facts from inference. Take the time needed; do not edit files."
+            },
+            {
+              "id": "kimi-outside-view",
+              "lane_id": "opencode-go-kimi-k3",
+              "role": "review",
+              "angle": "Outside view: compare the conclusion with comparable cases and find unsupported assumptions."
+            },
+            {
+              "id": "glm-red-team",
+              "lane_id": "opencode-go-glm-5.2",
+              "role": "review",
+              "angle": "Red-team: find the strongest evidence against the leading conclusion and name the test that would change it."
+            }
+          ]
+        },
+        "critical": {
+          "parallel": 3,
+          "workers": [
+            {
+              "id": "pro-reasoning",
+              "selector": "chatgpt:latest-pro",
+              "role": "hard-reasoning",
+              "timeout": 0,
+              "angle": "Deep reasoning: stress-test the research conclusion and strongest alternative using the supplied evidence. Separate verified facts from inference. Take the time needed; do not edit files."
+            },
+            {
+              "id": "kimi-outside-view",
+              "lane_id": "opencode-go-kimi-k3",
+              "role": "review",
+              "angle": "Outside view: compare the conclusion with comparable cases and find unsupported assumptions."
+            },
+            {
+              "id": "glm-red-team",
+              "lane_id": "opencode-go-glm-5.2",
+              "role": "review",
+              "angle": "Red-team: find the strongest evidence against the leading conclusion and name the test that would change it."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "effort": {
+    "gpt-6.1-sol": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "default": "medium",
+      "knee": "high",
+      "by_role": {
+        "owned-dispatch": "xhigh",
+        "implementation": "xhigh",
+        "builder": "high",
+        "hard-builder": "xhigh",
+        "hard-reasoning": "xhigh",
+        "review": "xhigh",
+        "reviewer": "xhigh",
+        "audit": "xhigh",
+        "lookup": "low",
+        "probe": "low",
+        "filter": "low",
+        "judgment": "medium",
+        "failed-unit": "xhigh",
+        "failed-builder": "xhigh"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "by_band": {
+        "conserve": {
+          "builder": "medium"
+        },
+        "critical": {
+          "owned-dispatch": "high",
+          "implementation": "high"
+        }
+      },
+      "refuse_roles": {
+        "audit-retry": "Astra-only inconclusive audit retry; Sol never uses max by roster policy. Wait for Astra or select a supported explicit caller level.",
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "stand_in_ceiling": "xhigh",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gpt-6-astra": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "default": "xhigh",
+      "knee": "xhigh",
+      "by_role": {
+        "review": "xhigh",
+        "reviewer": "xhigh",
+        "audit": "xhigh",
+        "failed-unit": "xhigh",
+        "audit-retry": "max"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gpt-6-luna": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {
+        "probe": "low",
+        "filter": "low",
+        "lookup": "low",
+        "scout": "low",
+        "repo-map": "medium",
+        "explorer": "medium",
+        "classification": "medium",
+        "mechanical-edit": "medium",
+        "second-opinion": "medium"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-opus-5-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {
+        "probe": "low",
+        "filter": "low",
+        "audit": "xhigh",
+        "reviewer": "high",
+        "review": "high"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-sonnet-5-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "xhigh",
+      "knee": "xhigh",
+      "by_role": {
+        "probe": "low",
+        "filter": "low",
+        "research-scout": "low",
+        "audit": "xhigh",
+        "review": "xhigh"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-fable-5-1": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {
+        "probe": "low",
+        "audit": "xhigh",
+        "reviewer": "xhigh"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-haiku": {
+      "levels": {
+        "claude": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-3.8-flash": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-3.7-flash": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-3.6-flash": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-3.1-pro": {
+      "levels": {
+        "agy": [
+          "low",
+          "high"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "deepseek-v4-flash": {
+      "levels": {
+        "opencode": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "deepseek-v4-pro": {
+      "levels": {
+        "opencode": [
+          "high",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "glm-5.2": {
+      "levels": {
+        "opencode": [
+          "high",
+          "max"
+        ]
+      },
+      "default": "max",
+      "knee": "max",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "kimi-k3": {
+      "levels": {
+        "opencode": [
+          "max"
+        ]
+      },
+      "default": "max",
+      "knee": "max",
+      "by_role": {
+        "hard-reasoning": "max",
+        "long-context": "max"
+      },
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "minimax-m3": {
+      "levels": {
+        "opencode": [
+          "none",
+          "thinking"
+        ]
+      },
+      "default": "thinking",
+      "knee": "thinking",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "kimi-k2.7-code": {
+      "levels": {
+        "opencode": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "qwen3.7-plus": {
+      "levels": {
+        "opencode": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "mimo-v2.5": {
+      "levels": {
+        "opencode": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-flash-latest": {
+      "levels": {
+        "opencode": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-flash-lite-latest": {
+      "levels": {
+        "opencode": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-3.1-pro-preview": {
+      "levels": {
+        "opencode": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-opus-4-6-thinking": {
+      "levels": {
+        "agy": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "control": "unverified",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-sonnet-4-6": {
+      "levels": {
+        "agy": []
+      },
+      "default": "provider-default",
+      "knee": "provider-default",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "control": "unverified",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "github-copilot-auto": {
+      "levels": {
+        "copilot": []
+      },
+      "default": "service-chosen",
+      "knee": "service-chosen",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "openrouter-free-router": {
+      "levels": {
+        "openrouter": []
+      },
+      "default": "service-chosen",
+      "knee": "service-chosen",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gpt-5.6-luna": {
+      "levels": {
+        "codex": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "refuse_roles": {
+        "critical/builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/hard-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy.",
+        "critical/failed-builder": "Parallel builder stopped at CRITICAL quota; continue as the owned dispatch or wait. An explicit caller level overrides this effort policy."
+      },
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-sonnet-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "claude-fable-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    }
+  },
+  "chatgpt_gateway": {
+    "service_id": "chatgpt",
+    "lane_template": {
+      "harness": "chatgpt-chat",
+      "provider": "openai",
+      "kind": "http",
+      "access_status": "unverified",
+      "admission_status": "candidate",
+      "quality_tier": "frontier",
+      "roles": [
+        "default",
+        "lookup",
+        "hard-reasoning",
+        "review",
+        "long-context"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false,
+        "mcp": false,
+        "skills": false,
+        "subagents": false,
+        "resume": false,
+        "json_schema": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "chatgpt-work",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 600,
+      "retries": 0,
+      "transport": {
+        "api_base": "http://127.0.0.1:4319/v1"
+      },
+      "auth": {
+        "kind": "subscription-relay",
+        "terms_class": "owner-accepted",
+        "key_file": "~/.config/crossfeed-chat-service/api-key",
+        "owner_acceptance": {
+          "owner": "relay owner",
+          "date": "YYYY-MM-DD",
+          "quote": "Example only: replace with the owner's actual acceptance of subscription-relay account risk.",
+          "scope": "Relay owner ChatGPT subscription to local agents through Crossfeed Chat; accepts account risk, not vendor permission."
+        }
+      },
+      "effort": {
+        "shape": "none",
+        "enforcement": "Saved worker model row and numeric level come from /v1/models."
+      },
+      "liveness": {
+        "idle_default_s": 0,
+        "progress": "Received HTTP bytes only; complete answers are buffered",
+        "health": "GET /v1/gateway/status: workers[] processing_claim true OR contact recent and polling true; lease governs admission"
+      },
+      "notes": "Gateway lane template only. Saved labels and worker settings come from /v1/models; underlying model identity is unconfirmed."
+    }
+  }
+}

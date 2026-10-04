@@ -1,0 +1,12 @@
+# Once a day, at a quiet hour, plus a random delay so many machines do not hit the sources at once.
+# Persistent=true runs a missed refresh at the next boot.
+[Unit]
+Description=Crossfeed Orchestrator: daily market refresh
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

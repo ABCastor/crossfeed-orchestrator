@@ -1,0 +1,29 @@
+{
+  "note": "Replace model/level choices and null USD-per-million prices before a real campaign. CROSSFEED points to the orchestrator root. No command is executed by dry-run.",
+  "options": [
+    {
+      "id": "codex-high", "model": "gpt-6.1-sol", "level": "high", "pool": "codex",
+      "price_1m": {"in": null, "out": null}, "quality_rank": 4,
+      "command": ["$CROSSFEED/scripts/codex-agent.sh", "--model", "{model}", "--reasoning", "{level}", "--sandbox", "workspace-write", "--dir", "{workdir}", "--prompt-file", "{prompt_file}", "--events", "{events_file}", "--kill-after", "1"],
+      "timeout_s": 600
+    },
+    {
+      "id": "claude-high", "model": "opus", "level": "high", "pool": "claude",
+      "price_1m": {"in": null, "out": null}, "quality_rank": 3,
+      "command": ["$CROSSFEED/scripts/claude-agent.sh", "--model", "{model}", "--effort", "{level}", "--permission-mode", "acceptEdits", "--dir", "{workdir}", "--prompt-file", "{prompt_file}", "--kill-after", "1"],
+      "timeout_s": 600
+    },
+    {
+      "id": "agy-high", "model": "REPLACE_WITH_ADMITTED_GEMINI_MODEL", "level": "high", "pool": "antigravity",
+      "price_1m": {"in": null, "out": null}, "quality_rank": 2,
+      "command": ["python3", "{bench_dir}/wrapper.py", "agy", "--scripts", "$CROSSFEED/scripts", "--model", "{model}", "--level", "{level}", "--dir", "{workdir}", "--prompt-file", "{prompt_file}"],
+      "timeout_s": 600
+    },
+    {
+      "id": "opencode-high", "model": "REPLACE_WITH_ADMITTED_GO_SELECTOR", "level": "high", "pool": "opencode-go",
+      "price_1m": {"in": null, "out": null}, "quality_rank": 1,
+      "command": ["python3", "{bench_dir}/wrapper.py", "opencode", "--scripts", "$CROSSFEED/scripts", "--model", "{model}", "--level", "{level}", "--dir", "{workdir}", "--prompt-file", "{prompt_file}", "--events", "{events_file}"],
+      "workspace_git": true, "timeout_s": 600
+    }
+  ]
+}

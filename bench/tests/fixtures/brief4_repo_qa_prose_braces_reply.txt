@@ -1,0 +1,5 @@
+For `event_30644`, the first attempt (`prepare`, scope `preview`) resolves through bindings to `handlers.birch_66848.process_72785` and returns `accepted: False` (prepare phase). The second attempt (`commit`, scope `request`) overrides scope; binding resolution follows `request.storage: null` → parent `tenant` → parent `root` → `storage: {alias: shared}`, resolving the alias to provider `elm`, i.e. `handlers/elm_66848.py:process_72785`, which returns `accepted: True` on the commit phase. Tracing confirms this is the accepted result for the target event.
+
+{"answer": "handlers/elm_66848.py:process_72785"}
+
+Crossfeed model receipt: requested opencode-go/deepseek-v4.1-flash; ran on opencode-go/deepseek-v4.1-flash (provider reported); selector opencode-go/deepseek-v4.1-flash; exit 0; run f8c958a9-e6a2-4261-8264-05cc9df53c0c.

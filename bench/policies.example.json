@@ -1,0 +1,13 @@
+{
+  "note": "Illustrative seats only. Preregister actual baseline options, prices, task IDs and selector mappings before measuring. Add selector and quota scenarios as described in README.md.",
+  "options_file": "options.example.json",
+  "fit_seeds": [1],
+  "heldout_seeds": [2],
+  "always_max": "codex-high",
+  "always_cheapest": "opencode-high",
+  "fixed_seats": {
+    "fix": "codex-high", "implement": "codex-high", "review": "claude-high",
+    "repo-qa": "opencode-high", "reasoning": "codex-high", "extraction": "agy-high"
+  },
+  "policy_seed": 0
+}

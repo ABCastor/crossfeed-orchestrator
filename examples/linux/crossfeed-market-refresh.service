@@ -1,0 +1,19 @@
+# Refreshes the public model catalogue that routing uses as a prior (scripts/market-refresh.py).
+# Install as a user unit:
+#   mkdir -p ~/.config/systemd/user
+#   cp crossfeed-market-refresh.service crossfeed-market-refresh.timer ~/.config/systemd/user/
+#   edit ExecStart below to point at your clone
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now crossfeed-market-refresh.timer
+# Check it with: systemctl --user list-timers crossfeed-market-refresh.timer
+#                journalctl --user -u crossfeed-market-refresh.service
+[Unit]
+Description=Crossfeed Orchestrator: refresh the model market catalogue
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 %h/crossfeed-orchestrator/scripts/market-refresh.py
+# Uncomment if you keep your overlay somewhere other than ~/.config/orchestrator/access-overlay.json
+#Environment=ACCESS_OVERLAY=%h/.config/orchestrator/access-overlay.json
