@@ -21,15 +21,17 @@ def demo_overlay():
     roster = json.loads((ROOT / "examples/access-overlay.example.json").read_text())
     pools = ("claude", "codex", "opencode-go", "chatgpt-work")
     roster["quota_pools"] = {p: roster["quota_pools"][p] for p in pools}
-    for pool, price in zip(pools, (35, 45, 15, 45)):
+    for pool, price in zip(pools, (35, 25, 15, 45)):
         data = roster["quota_pools"][pool]
-        data["plan"].update(name="Demo subscription", price=price, currency="USD",
+        data["plan"].update(name="Separate demo subscription", price=price, currency="USD",
                             billing="subscription", allowance=None)
         data["quota_refresh"] = None
         data.pop("model_pins", None)
         data.pop("shares_limits_with", None)
         data["quota_source"] = "Fictional screenshot fixture"
     roster["quota_pools"]["chatgpt-work"]["label"] = "ChatGPT Chat"
+    roster["quota_pools"]["chatgpt-work"]["plan"]["name"] = "Demo ChatGPT account A"
+    roster["quota_pools"]["codex"]["plan"]["name"] = "Demo ChatGPT account B"
     models = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku",
               "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "kimi-k3", "glm-5.2", "minimax-m3"}
     roster["lanes"] = [lane for lane in roster["lanes"]
@@ -41,6 +43,7 @@ def demo_overlay():
         selector = "chatgpt:" + key
         chat.update(lane_id=selector, model=selector, model_key=selector,
                     worker_label=key, worker_row="Latest", worker_level=level,
+                    max_parallel=1 if level == "pro" else 2,
                     access_status="verified", admission_status="active",
                     catalog_state="ready", selector=selector)
         roster["lanes"].append(chat)

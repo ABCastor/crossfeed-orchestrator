@@ -72,6 +72,36 @@ class CatalogTests(unittest.TestCase):
                          ('verified', 'active', 'sleeping'))
         self.assertIsNotNone(lane['verified_at'])
 
+    def test_replica_capacity_refreshes_from_live_catalog_over_cached_counts(self):
+        for count in (3, 2, 1):
+            self.models['data'][0]['replicas'] = count
+            lanes = self.generated(self.expand())
+            self.assertEqual(lanes['chatgpt:saved-medium']['max_parallel'], count)
+            self.assertEqual(lanes['chatgpt:previous-pro']['max_parallel'], 1)
+        del self.models['data'][0]['replicas']
+        self.assertEqual(self.generated(self.expand())['chatgpt:saved-medium']['max_parallel'], 1)
+
+    def test_invalid_replica_counts_close_cached_admission(self):
+        self.models['data'][0]['replicas'] = 2
+        self.expand()
+        for count in (0, -1, True, False, 1.5, 2.0, '2', None, [], {}):
+            with self.subTest(replicas=count):
+                self.models['data'][0]['replicas'] = count
+                result = self.expand(persist=False)
+                self.assertEqual(result['chatgpt_catalog']['error_code'], 6)
+                self.assertTrue(all(lane['admission_status'] == 'rejected'
+                                    for lane in self.generated(result).values()))
+
+    def test_runner_rejects_invalid_declared_capacity(self):
+        lane = self.generated(self.expand())['chatgpt:saved-medium']
+        args = SimpleNamespace(lane=lane['lane_id'], mode='ro', modality='text', effort=None)
+        for count in (0, -1, True, 2.0, '2', None):
+            with self.subTest(capacity=count), patch.object(runner.run_identity, 'roster',
+                    return_value={'lanes': [dict(lane, max_parallel=count)]}), \
+                    patch.object(runner.run_identity, 'state_dir', return_value=self.root / 'state'):
+                with self.assertRaisesRegex(transport.Rejected, 'positive worker capacity'):
+                    runner.lane_for(args)
+
     def test_status_changes_display_without_changing_admission(self):
         for contact, expected in [('recent', 'probed-ok'), ('stale', 'sleeping'), ('never', 'sleeping')]:
             self.status['workers'][0]['contact'] = contact

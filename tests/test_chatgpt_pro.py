@@ -83,8 +83,12 @@ class MeterTests(unittest.TestCase):
         self.roster["quota_pools"]["chatgpt-work"]["pro_weekly_allowance"] = 3
         self.ledger([self.answer(2), self.answer(1)])
         overview = fleetctl.fleet_overview(self.roster, self.runtime, self.root, self.now)
-        for rendered in (console.render_page(overview, "fixture"), fleetctl.render_brief(overview),
-                         fleetctl.render_brief(overview, verbose=True)):
+        page = console.render_page(overview, "fixture")
+        self.assertIn("Pro-thinking uses: ~2 of 3 in last 7 days (local estimate)", page)
+        self.assertIn("2 answered requests", page)
+        self.assertIn("your own chats are not counted", page)
+        self.assertIn("allowance is configured locally", page)
+        for rendered in (fleetctl.render_brief(overview), fleetctl.render_brief(overview, verbose=True)):
             self.assertIn("Pro estimate: 2/3 in rolling 7 days", rendered)
             self.assertIn("2 answered requests", rendered)
 

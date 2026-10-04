@@ -1,4 +1,4 @@
-"""Process-safe FIFO admission for one saved ChatGPT lane."""
+"""Process-safe FIFO lease acquisition for one saved ChatGPT lane."""
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -14,6 +14,14 @@ def lane_turn(lane, check):
     path = state / "chatgpt-queue" / hashlib.sha256(lane.encode()).hexdigest()
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     ticket = None
+    def release_turn():
+        nonlocal ticket
+        if ticket is not None:
+            # Never wait for a gate holder to clean up a cancelled turn.
+            Path(ticket.name).unlink(missing_ok=True)
+            ticket.close()
+            ticket = None
+
     with (path / "lock").open("a") as gate:
         @contextmanager
         def locked():
@@ -57,11 +65,10 @@ def lane_turn(lane, check):
                     first = str(candidate) == ticket.name
                 if first:
                     check()
-                    yield
+                    # The caller releases its turn after acquiring a lease;
+                    # the lease then limits concurrency for the HTTP request.
+                    yield release_turn
                     return
                 time.sleep(.05)
         finally:
-            if ticket is not None:
-                # Never wait for a gate holder to clean up a cancelled turn.
-                Path(ticket.name).unlink(missing_ok=True)
-                ticket.close()
+            release_turn()

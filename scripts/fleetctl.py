@@ -4197,7 +4197,7 @@ def model_overview(roster: dict[str, Any], runtime: dict[str, Any],
             "admission_status", "access_status", "quality_tier", "evidence_confidence",
             "context_window", "context_length", "cost_class", "cost_rank", "roles",
             "capabilities", "allowed_modes", "notes", "reason", "verified_at",
-            "catalog_state",
+            "catalog_state", "worker_row", "worker_level", "harness", "max_parallel",
         ) if name in lane}
         if not routing_lane or not lane.get("lane_id"):
             fields["admission_status"] = "catalogue only; no routing lane"

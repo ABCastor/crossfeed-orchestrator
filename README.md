@@ -45,9 +45,9 @@ python3 scripts/fleetctl.py dispatch --role review --mode read-only \
 
 A *lane* is a model on a particular tool, funded by a quota pool. Crossfeed selects a lane and thinking level for the task, then runs its wrapper under a lease and watchdog. Each run records the selected model; provider identity is confirmed only when the provider supplies it.
 
-The console has five spend levels: **off**, **low**, **normal**, **high** and **forced**. Model switches restrict which choices are available. Known exhaustion, provider refusals and configured paid caps remain hard gates, even at forced. Missing quota measurements stay unknown. See [quota sources](docs/QUOTA-REFRESH.md).
+The console has five spend levels: **off**, **low**, **normal**, **high** and **ignore estimates** (`forced` in the CLI). Model switches restrict which choices are available. Known exhaustion, provider refusals and configured paid caps remain hard gates, even when estimates are ignored. Missing quota measurements stay unknown. See [quota sources](docs/QUOTA-REFRESH.md).
 
-![ChatGPT model switches for Latest Pro, Extra High and High, with a fictional weekly Pro estimate and fallback order](docs/model-switches.png)
+![ChatGPT picker rows and thinking levels with switches and concurrent task capacity](docs/model-switches.png)
 
 For parallel jobs, use `scripts/fanout.sh tasks.jsonl --parallel 3`. Give write-capable workers separate worktrees and verify their output before integrating it. [Selector details](docs/SELECTOR.md) and [adapter contracts](docs/ADAPTERS.md) cover configuration.
 

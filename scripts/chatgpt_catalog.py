@@ -71,7 +71,7 @@ def _expand(roster, state_dir, *, persist=False):
     # Cached rows are display history, never authority to admit a worker.
     previous = catalog_models({"object": "list", "data": [
         {"object": "model", "id": selector, "saved": True,
-         "row": row["row"], "level": row["position"]}
+         "row": row["row"], "level": row["position"], "replicas": row.get("replicas", 1)}
         for selector, row in previous.items()]})
     error, error_code = None, None
     contact, models = {}, {}
@@ -100,7 +100,7 @@ def _expand(roster, state_dir, *, persist=False):
         state = "sleeping" if active and contact.get(label) != "recent" else "probed-ok" if active else "unavailable"
         lane = copy.deepcopy(template)
         lane.update(lane_id=lane_id, model_key=lane_id, selector=selector, harness="chatgpt-chat",
-                    quota_pool=template.get("quota_pool", "chatgpt-work"), max_parallel=1, max_tasks_per_run=1, retries=0,
+                    quota_pool=template.get("quota_pool", "chatgpt-work"), max_parallel=row["replicas"], max_tasks_per_run=1, retries=0,
                     allowed_modes=["read-only"], access_status="verified" if active else "unverified",
                     admission_status="active" if active else "rejected", verified_at=iso() if active else None,
                     catalog_state=state, gateway_service=gateway["service_id"])

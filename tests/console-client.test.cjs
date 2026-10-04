@@ -116,7 +116,7 @@ function page() {
   const oldOne = opt('model-old', 'GPT-5.6 Luna', 'gpt-5.6-luna', true);
   const older = h('details', {class: 'older'}, words('span', 'count', '1'), h('ul', {class: 'opts'}, oldOne));
   const now = h('span', {class: 'now all'}, h('b', {class: 'v'}), h('span', {class: 'n'}));
-  now.querySelector('.v').textContent = 'All models on'; now.querySelector('.n').textContent = 'a task that names none gets GPT-6 Astra';
+  now.querySelector('.v').textContent = 'All enabled'; now.querySelector('.n').textContent = 'a task that names none gets GPT-6 Astra';
   const allOn = h('button', {class: 'all-on', type: 'submit', name: 'model', value: 'auto', hidden: ''});
   const pick = h('details', {class: 'pick', id: 'pick-codex', 'data-pool': 'codex', 'data-note-all': 'a task that names none gets GPT-6 Astra',
     'data-note-some': 'a task that asks for an off model gets the nearest one that is on', 'data-note-one': 'every run on this provider uses it',
@@ -256,7 +256,7 @@ const view = f => [f.now.className, f.now.querySelector('.v').textContent, f.now
 test('the switches add up to the same words the server writes', () => {
   const notes = {all: 'A', some: 'S', one: 'O', none: 'N', only: 'Y', empty: 'E'};
   const models = on => on.map((flag, i) => ({name: `M${i}`, on: flag}));
-  assert.deepEqual(Crossfeed.switchView(models([true, true, true]), notes), {state: 'all', label: 'All models on', note: 'A'});
+  assert.deepEqual(Crossfeed.switchView(models([true, true, true]), notes), {state: 'all', label: 'All enabled', note: 'A'});
   assert.deepEqual(Crossfeed.switchView(models([true, false, true]), notes), {state: 'some', label: '2 of 3 on', note: 'S'});
   assert.deepEqual(Crossfeed.switchView(models([false, true, false]), notes), {state: 'one', label: 'Only M1 on', note: 'O'});
   assert.deepEqual(Crossfeed.switchView(models([false, false]), notes), {state: 'none', label: 'None on', note: 'N'});
@@ -269,7 +269,7 @@ test('the switches add up to the same words the server writes', () => {
 
 test('a switch flips at once, the line says what they add up to, and the server confirms in place', async () => {
   const f = start();
-  assert.deepEqual(view(f), ['now all', 'All models on', 'a task that names none gets GPT-6 Astra']);
+  assert.deepEqual(view(f), ['now all', 'All enabled', 'a task that names none gets GPT-6 Astra']);
   const astra = sw(f, 'gpt-6-astra');
   astra.click();
   assert.equal(astra.getAttribute('aria-checked'), 'false');                             // before any answer
@@ -306,7 +306,7 @@ test('one on, none on and switch all on read right, and an older model is never 
   await flush();
   assert.deepEqual(f.requests.map(r => r.options.body.get('switch')), ['gpt-6-astra=off']);   // saves go one at a time
   f.allOn.click();
-  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All models on']);
+  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All enabled']);
   assert.equal(f.allOn.hidden, true);
   assert.equal(sw(f, 'gpt-6.1-sol').getAttribute('aria-checked'), 'true');
   assert.equal(sw(f, 'gpt-5.6-luna').getAttribute('aria-checked'), 'false');              // all on is the current list: an older model stays as set
@@ -314,7 +314,7 @@ test('one on, none on and switch all on read right, and an older model is never 
   // an older model off leaves the line saying all on, and no "Switch all on" that would change nothing you see
   const h2 = start();
   sw(h2, 'gpt-5.6-luna').click();
-  assert.deepEqual(view(h2).slice(0, 2), ['now all', 'All models on']);
+  assert.deepEqual(view(h2).slice(0, 2), ['now all', 'All enabled']);
   assert.equal(h2.allOn.hidden, true);
   // two quick clicks on one switch send two different states, in order: off, then on
   const g = start();
@@ -335,7 +335,7 @@ test('a failed switch save puts back what is still in force and says so', async 
   f.requests[0].resolve({ok: false});
   await flush(); await flush();
   assert.equal(sw(f, 'gpt-6-astra').getAttribute('aria-checked'), 'true');
-  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All models on']);
+  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All enabled']);
   assert.match(f.document.querySelector('.save-status').textContent, /still in force/);
 });
 
@@ -447,7 +447,7 @@ test('real keyboard handles move across current/older, wait for Enter, and prese
   assert.equal(sent.sort.models.codex, 'your');
   assert.deepEqual(sent.models.codex, modelOrder(f));
   sw(f, 'gpt-5.6-luna').click();
-  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All models on']); // older still excluded
+  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All enabled']); // older still excluded
   sw(f, 'gpt-6-astra').click();
   f.allOn.click();
   assert.equal(sw(f, 'gpt-5.6-luna').getAttribute('aria-checked'), 'false'); // switch all on leaves older alone

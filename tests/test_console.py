@@ -110,6 +110,14 @@ class ConsoleServerTests(unittest.TestCase):
         return fleetctl.pool_level(fleetctl.load_json(self.state / "runtime.json", {}) or {}, pool)
 
     # ---- the page -----------------------------------------------------------------------
+    def test_live_snapshot_preserves_limit_override_guidance(self):
+        overview = self.app.overview(refresh=False)
+        payload = console.snapshot_payload(overview)
+        for pool in payload["pools"]:
+            self.assertIn("Ignore estimates still obeys actual limits.", pool["means"])
+            rendered = console._slider(next(p for p in overview["pools"] if p["pool"] == pool["pool"]), "token")
+            self.assertIn(console.html.escape(pool["means"]), rendered)
+
     def test_binds_to_loopback_only(self):
         self.assertEqual(self.server.server_address[0], "127.0.0.1")
 
@@ -124,7 +132,7 @@ class ConsoleServerTests(unittest.TestCase):
             self.assertIn(f'id="pool-{pool["pool"]}"', page)
             self.assertIn(console.html.escape(pool["label"]), page)
         self.assertEqual(page.count('class="lv at-'), len(pools))
-        for word in ("Off", "Low", "Normal", "High", "Forced"):
+        for word in ("Off", "Low", "Normal", "High", "Ignore estimates"):
             self.assertIn(f"<span>{word}</span>", page)
         self.assertIn("What agents read", page)
         self.assertIn('<p class="allow">About ', page)   # an estimate, said once in words

@@ -50,13 +50,16 @@ def catalog_models(value):
         if not row["saved"]:
             continue
         name, position = row.get("row"), row.get("level")
+        replicas = row.get("replicas", 1)
         if (not isinstance(name, str) or not name.strip() or name != name.strip() or len(name.encode()) > 128
                 or any(unicodedata.category(c).startswith("C") for c in name)
                 or type(position) is not int or not 0 <= position < len(LEVEL_NAMES)):
             raise Rejected(6, "invalid saved worker row or level")
+        if type(replicas) is not int or replicas < 1:
+            raise Rejected(6, "invalid saved worker replica count")
         found[selector] = {"id": selector, "name": name + " / " + LEVEL_NAMES[position],
                            "worker_label": label, "worker_level": LEVEL_NAMES[position],
-                           "row": name, "position": position,
+                           "row": name, "position": position, "replicas": replicas,
                            "older": name.casefold() != "latest"}
     return found
 

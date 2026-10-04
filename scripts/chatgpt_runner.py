@@ -104,9 +104,10 @@ def lane_for(args):
             or "read-only" not in lane.get("allowed_modes", [])
             or "text" not in lane.get("capabilities", {}).get("input", [])):
         raise Rejected(3, "lane has not been admitted for read-only text")
-    if (lane.get("max_parallel") != 1 or not canonical_selector(lane.get("selector"))
+    if (type(lane.get("max_parallel")) is not int or lane["max_parallel"] < 1
+            or not canonical_selector(lane.get("selector"))
             or lane.get("selector") != "chatgpt:" + str(lane.get("worker_label"))):
-        raise Rejected(3, "lane must declare one worker and its configured model label")
+        raise Rejected(3, "lane must declare a positive worker capacity and its configured model label")
     return lane
 
 
@@ -279,9 +280,9 @@ def run(args):
     while True:
         tried.add(args.lane)
         args.pro_downgraded = False
-        with lane_turn(args.lane, check):
+        with lane_turn(args.lane, check) as release_turn:
             try:
-                status = run_turn(args, lane, interrupted, started, check)
+                status = run_turn(args, lane, interrupted, started, check, release_turn)
             except Rejected as error:
                 if not (chatgpt_pro.is_pro(lane) or lane.get("pro_fallback")) or error.code != 4:
                     raise
@@ -309,7 +310,10 @@ def run(args):
         print("chatgpt-agent: Pro fallback selected " + lane["selector"] + "; " + lane["pro_fallback"]["reason"], file=sys.stderr)
 
 
-def run_turn(args, lane, interrupted, started, check):
+def run_turn(args, lane, interrupted, started, check, release_turn):
+    # FIFO orders lease acquisition only. Holding its ticket during HTTP would
+    # serialize every replica. Each acquire probes the current catalog, so a
+    # queued task also sees capacity changes without a cached roster snapshot.
     ttl = args.wall + args.kill_after + 60 if args.wall else 2147483647
     while True:
         check()
@@ -334,6 +338,7 @@ def run_turn(args, lane, interrupted, started, check):
         if "active lease(s), cap is" not in err:
             raise Rejected(4, "quota lease refused")
         time.sleep(.1)
+    release_turn()
     status, output, begun = 5, None, False
     with tempfile.TemporaryDirectory(prefix="chatgpt-agent.") as scratch:
         identity = Path(scratch) / "identity.json"

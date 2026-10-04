@@ -56,6 +56,24 @@ class ConsolePolishTests(unittest.TestCase):
         self.assertEqual(test_console.console.fleetctl.pool_label('chatgpt-work', {'label': 'ChatGPT Chat via Crossfeed Chat'}),
                          'ChatGPT chats via Crossfeed Chat')
 
+    def test_saved_chat_labels_use_row_level_and_capacity_without_changing_switch_ids(self):
+        for row, level, count, expected in [
+                ("Latest", "xhigh", 2, "ChatGPT picker: Latest · Thinking: Extra High · Up to 2 tasks at once"),
+                ("GPT-5.6 Sol", "high", 1, "ChatGPT picker: GPT-5.6 Sol · Thinking: High · Up to 1 task at once")]:
+            key = "chatgpt:opaque-label"
+            roster = {"quota_pools": {"chatgpt-work": {"label": "ChatGPT"}},
+                      "model_cards": {key: {"name": "opaque-label", "pool": "chatgpt-work"}},
+                      "lanes": [{"lane_id": key, "model_key": key, "quota_pool": "chatgpt-work",
+                                 "harness": "chatgpt-chat", "worker_row": row,
+                                 "worker_level": level, "max_parallel": count}]}
+            model = next(m for m in test_console.console.fleetctl.model_overview(roster, {}) if m["model"] == key)
+            option = {"current": True, "on": True, "run_as": key}
+            rendered = test_console.console._option(model, {"pool": "chatgpt-work", "label": "ChatGPT", "plan": {}}, option)
+            self.assertIn(expected, rendered)
+            self.assertIn(f"{count} saved {'chat' if count == 1 else 'chats'}", rendered)
+            self.assertIn(f'aria-label="Use {expected}"', rendered)
+            self.assertIn(f'name="switch" value="{key}=off"', rendered)
+
     def test_picker_covers_every_supported_kind_and_explicit_model_choice(self):
         page = test_console.console.provider_setup([], 'token')
         for kind in providers.KINDS:

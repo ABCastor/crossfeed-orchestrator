@@ -553,7 +553,7 @@ class ConsoleToggleRouteTests(unittest.TestCase):
         self.assertIn("Codex (ChatGPT) is off until you switch one on", codex["note"])
         response, body = self.request("POST", "/model", headers=headers, body=self.form("codex", model="auto"))
         codex = next(p for p in json.loads(body)["pools"] if p["pool"] == "codex")
-        self.assertEqual((codex["state"], codex["label"]), ("all", "All models on"))
+        self.assertEqual((codex["state"], codex["label"]), ("all", "All enabled"))
 
     def test_the_older_model_field_still_means_only_this_one(self):
         headers = {"Cookie": self.cookie(), "Origin": self.origin()}
@@ -608,13 +608,13 @@ class PickerRenderTests(unittest.TestCase):
             self.assertIn(f'data-name="{name}"', codex)
             self.assertIn(f'aria-label="Use {name}"', codex)
         self.assertIn('<span class="st">On</span>', codex)
-        self.assertIn('<b class="v">All models on</b>', codex)
+        self.assertIn('<b class="v">All enabled</b>', codex)
         self.assertRegex(codex, r'class="all-on"[^>]*hidden>Switch all on')
         self.assertNotIn("Crossfeed decides</span>", codex)
 
     def test_the_line_says_what_the_switches_add_up_to(self):
         cases = {
-            (): ("all", "All models on"),
+            (): ("all", "All enabled"),
             ("gpt-6.1-sol",): ("some", "2 of 3 on"),
             ("gpt-6.1-sol", "gpt-6-luna"): ("one", "Only GPT-6 Astra on"),
             ("gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"): ("none", "None on"),
@@ -649,7 +649,7 @@ class PickerRenderTests(unittest.TestCase):
         _, page = self.render(runtime)
         self.assertIn('<span class="count">1 · 0 on</span>', page)
         claude = self.picker(page, "claude")
-        self.assertIn('<b class="v">All models on</b>', claude)          # an older model is never counted...
+        self.assertIn('<b class="v">All enabled</b>', claude)          # an older model is never counted...
         self.assertRegex(claude, r'class="all-on"[^>]*hidden')             # ...and "Switch all on", which is the current list, has nothing to do
         self.assertIn("An older model runs only when a task asks for it by name", claude)
 

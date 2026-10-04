@@ -54,7 +54,7 @@ const Crossfeed = (() => {
     if (!models.length) return {state: 'auto', label: 'Crossfeed decides', note: notes.empty || ''};
     if (on.length === models.length) {
       return models.length === 1 ? {state: 'only', label: models[0].name, note: notes.only || ''}
-                                 : {state: 'all', label: 'All models on', note: notes.all || ''};
+                                 : {state: 'all', label: 'All enabled', note: notes.all || ''};
     }
     if (!on.length) return {state: 'none', label: 'None on', note: notes.none || ''};
     if (on.length === 1) return {state: 'one', label: `Only ${on[0].name} on`, note: notes.one || ''};

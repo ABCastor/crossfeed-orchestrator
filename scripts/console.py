@@ -62,7 +62,7 @@ except ImportError:
 
 PRODUCT_NAME = fleetctl.PRODUCT_NAME
 LEVELS = fleetctl.LEVELS
-LEVEL_WORDS = {"off": "Off", "low": "Low", "normal": "Normal", "high": "High", "forced": "Forced"}
+LEVEL_WORDS = {"off": "Off", "low": "Low", "normal": "Normal", "high": "High", "forced": "Ignore estimates"}
 STATIC_TYPES = {".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".js": "text/javascript; charset=utf-8"}
 # The page is never stored; its assets are. The stylesheet and script are asked for by a content
 # hash (?v=...), so a year is safe; the fonts never change under one name. Sending no-store with
@@ -467,7 +467,8 @@ def _gauge(pool: dict[str, Any]) -> str:
             renews = f'<p class="q renews">Plan renews {html.escape(fleetctl.reset_words(pool["renews_at"]))}</p>'
         return f'{exhausted}<ul class="limits" aria-label="Limits">{"".join(_limit_row(l, pool["pool"]) for l in limits)}</ul>{renews}'
     if pool["plan"].get("limit") == "none-known":
-        return '<p class="q quiet">no known limit</p>'
+        words = 'Chat usage: no published cap' if pool.get('pro_usage') else 'no known limit'
+        return f'<p class="q quiet">{words}</p>'
     if pool.get("stale_age_s") is not None:
         age = html.escape(fleetctl.format_duration(pool["stale_age_s"]))
         return (f'<p class="q quiet">The last reading is {age} old, too old to trust, so '
@@ -481,9 +482,15 @@ def _pro_usage(pool: dict[str, Any]) -> str:
     meter = pool.get("pro_usage")
     if not meter:
         return ""
-    words = fleetctl.chatgpt_pro.text(meter)
+    if meter.get("unavailable"):
+        words = fleetctl.chatgpt_pro.text(meter)
+        return f'<p class="q quiet">{html.escape(words)}</p>'
+    words = f"Pro-thinking uses: ~{meter['used']} of {meter['allowance']} in last 7 days (local estimate)"
+    detail = (f"{meter['requests']} answered requests + {meter['wakes']} observed wakes. "
+              "Crossfeed use only; your own chats are not counted. "
+              "The allowance is configured locally. Pro fallback: Extra High, then High.")
     return (f'<p class="q {"hot" if meter["spent"] else "quiet"}">{html.escape(words)}</p>'
-            '<p class="q quiet">Only orchestrator use is counted. Pro fallback: Extra High, then High.</p>')
+            f'<details class="pro-note"><summary>How Pro is estimated</summary><p class="q">{html.escape(detail)}</p></details>')
 
 
 def _plan_lines(pool: dict[str, Any]) -> str:
@@ -515,8 +522,12 @@ LEVEL_PLAIN = {
     "low": "Used sparingly: one task at a time, cheapest model first, the big model only for a single answer.",
     "normal": "Used as its limits allow: freely while there is room, less as they run low.",
     "high": "Used freely: strong models and several tasks at once, until its limits are nearly spent.",
-    "forced": "Used even when its limits look low: you override them.",
+    "forced": "Uses this provider despite quota estimates. Local budgets and actual refusals still apply.",
 }
+
+
+def _level_meaning(level: str) -> str:
+    return LEVEL_PLAIN[level] + " Ignore estimates still obeys actual limits."
 
 
 def _slider(pool: dict[str, Any], form_token: str) -> str:
@@ -526,7 +537,7 @@ def _slider(pool: dict[str, Any], form_token: str) -> str:
     stops = []
     for level in LEVELS:
         word = LEVEL_WORDS[level]
-        meaning = html.escape(LEVEL_PLAIN[level])
+        meaning = html.escape(_level_meaning(level))
         if level == current:
             stops.append(
                 f'<button type="submit" name="level" value="{level}" class="stop on {level}" role="radio" aria-checked="true" '
@@ -539,12 +550,12 @@ def _slider(pool: dict[str, Any], form_token: str) -> str:
             )
     pool_id = html.escape(pool["pool"])
     return (
-        '<p class="lvh" aria-hidden="true">How much to use</p>'
+        '<p class="lvh" aria-hidden="true">How agents use this plan</p>'
         f'<form class="lv at-{at} is-{current}" method="post" action="/level" role="radiogroup" '
         f'aria-label="How much of {label} to use" aria-describedby="means-{pool_id}">'
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
         f'<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
-        f'<p class="means" id="means-{pool_id}">{html.escape(LEVEL_PLAIN[current])}</p>'
+        f'<p class="means" id="means-{pool_id}">{html.escape(_level_meaning(current))}</p>'
     )
 
 
@@ -601,6 +612,12 @@ def _pretty(key: str) -> str:
 
 
 def _name(model: dict[str, Any] | None, key: str | None = None) -> str:
+    for lane in (model or {}).get("lanes") or []:
+        if lane.get("harness") == "chatgpt-chat" and lane.get("worker_row") and lane.get("worker_level"):
+            level = {"instant": "Instant", "medium": "Medium", "high": "High",
+                     "xhigh": "Extra High", "pro": "Pro"}.get(lane["worker_level"], _pretty(lane["worker_level"]))
+            count = lane.get("max_parallel", 1)
+            return f"ChatGPT picker: {lane['worker_row']} · Thinking: {level} · Up to {count} {'task' if count == 1 else 'tasks'} at once"
     card = (model or {}).get("card") or {}
     return str(card.get("name") or _pretty((model or {}).get("model") or key or ""))
 
@@ -818,7 +835,7 @@ def _models_view(state: str, on: list[dict[str, Any]], total: int, notes: dict[s
     if state == "only":
         return "only", on[0]["name"], notes["only"]
     if state == "all":
-        return "all", "All models on", notes["all"]
+        return "all", "All enabled", notes["all"]
     if state == "none":
         return "none", "None on", notes["none"]
     if state == "one":
@@ -833,9 +850,12 @@ def models_notes(pool: dict[str, Any], by_key: dict[str, dict[str, Any]]) -> dic
     if unavailable:
         every = f"{_name(by_key.get(unavailable), unavailable)} is no longer offered, so every model is on"
     elif direct:
-        every = f"a task that names none gets {usual}" if usual else "each task names the model it needs"
+        every = f"Default when a task names no model: {usual}" if usual else "each task names the model it needs"
     else:
         every = f"Crossfeed picks the best for each task, usually {usual}" if usual else "Crossfeed picks the best for each task"
+    if any(lane.get("worker_row") for model in by_key.values() if pool["pool"] in model.get("pools", [])
+           for lane in model.get("lanes", [])):
+        every = "Crossfeed picks among the saved ChatGPT configurations for each task"
     return {
         "empty": "the roster lists no models here yet",
         "only": "the only model this plan offers",
@@ -871,6 +891,16 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
         line = "Sleeping; wakes automatically when selected" + (". " + line if line else "")
     if older and option.get("run_as"):
         line += "; " + (option.get("retention_reason") or "Off: no recorded advantage over a current model")
+    for lane in model.get("lanes", []):
+        if lane.get("harness") == "chatgpt-chat" and lane.get("worker_row"):
+            count = lane.get("max_parallel", 1)
+            original = line
+            line = f"{count} saved {'chat' if count == 1 else 'chats'}. Text only."
+            if older:
+                line += " " + original
+            elif lane.get("catalog_state") == "sleeping":
+                line += " Wakes automatically."
+            break
     on = option["on"] is True
     blocked = older and not option.get("retention_reason")
     if option["run_as"]:
@@ -936,6 +966,11 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
         hint = f"Switch it off and Crossfeed leaves {label} out."
     else:
         hint = ""
+    chat_setups = any(lane.get("harness") == "chatgpt-chat" and lane.get("worker_row")
+                      for option in options for lane in by_key[option["model"]].get("lanes", []))
+    if chat_setups:
+        hint = "Row labels come from ChatGPT’s picker; they do not confirm the underlying model. Each saved chat lets one task run at a time."
+    choice_label = "Choose chat setups" if chat_setups else "Choose models"
     runnable_now = [o for o in runnable if o["current"]]
     all_on = (f'<button class="all-on" type="submit" name="model" value="auto"'
               f'{"" if any(not o["on"] for o in runnable_now) else " hidden"}>Switch all on</button>'
@@ -944,7 +979,7 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
     note_attrs = " ".join(f'data-note-{name}="{html.escape(text)}"' for name, text in notes.items())
     return (
         f'<details class="pick" id="pick-{pool_id}" data-pool="{pool_id}" {note_attrs}>'
-        f'<summary class="pick-line"><span class="k">Models</span><span class="now {state}">{_summary_html(pool, by_key)}</span>'
+        f'<summary class="pick-line"><span class="k">{choice_label}</span><span class="now {state}">{_summary_html(pool, by_key)}</span>'
         f'{CHEVRON}</summary><div class="picker">'
         + _sort_control('models', order['sort']['models'][pool['pool']] if order else 'your', pool['pool'])
         +
@@ -960,7 +995,7 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
     pools = []
     for p in overview["pools"]:
         state, label, note = models_summary(p, by_key)
-        pools.append({"pool": p["pool"], "level": p["level"], "means": LEVEL_PLAIN[p["level"]],
+        pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
                       "gauge": _gauge(p), "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
@@ -1123,8 +1158,8 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
         )
     body = (
         "<h1>Models and spend</h1>"
-        '<p class="lede">Switch models on or off for each provider, and Crossfeed picks the best one that is on '
-        "for each task. Slide a provider down to save its plan, up to lean on it. Agents read these settings "
+        '<p class="lede">Enable models for agents to choose from. Each provider shows its default or how Crossfeed picks. '
+        "Slide left to conserve each plan’s quota, right to use more. Agents read these settings "
         "before they plan.</p>"
         f'<div class="quota-reading"><p class="stamp">{stamp}</p>'
         '<form class="quota-refresh" method="post" action="/refresh">'

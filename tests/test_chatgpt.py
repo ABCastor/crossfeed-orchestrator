@@ -54,6 +54,8 @@ class Gateway(BaseHTTPRequestHandler):
         assert self.headers["Authorization"] == "Bearer " + KEY
         if self.path == "/v1/models":
             return self.reply(200, {"object": "list", "data": [{"id": selector, "object": "model", "saved": True, "row": "Latest", "level": getattr(self.server, "catalog_levels", {}).get(selector, 1)}
+                | ({'replicas': self.server.catalog_replicas[selector]}
+                   if selector in getattr(self.server, 'catalog_replicas', {}) else {})
                 for selector in getattr(self.server, "catalog_ids", [])]})
         assert self.path == "/v1/gateway/status"
         leased_state = getattr(self.server, 'pro_pause_when_leased', None)
@@ -362,6 +364,54 @@ subprocess.Popen=popen
 
     def tickets(self):
         return list((self.work / 'state/chatgpt-queue').glob('*/*.ticket'))
+
+    def test_two_replicas_run_concurrently_and_decrease_limits_waiting_caller(self):
+        self.gateway.catalog_replicas = {self.gateway.selector: 2}
+        first_release, second_release = threading.Event(), threading.Event()
+        self.addCleanup(first_release.set)
+        self.addCleanup(second_release.set)
+        self.gateway.blocked_keys = {'first': first_release, 'second': second_release}
+        first = self.start_adapter('first', '--wall', '10')
+        self.wait_for(lambda: self.gateway.keys == ['first'])
+        second = self.start_adapter('second', '--wall', '10')
+        self.wait_for(lambda: self.gateway.keys == ['first', 'second'])
+        runtime = self.work / 'state/runtime.json'
+        self.assertEqual(len(json.loads(runtime.read_text())['leases']), 2)
+        third = self.start_adapter('third', '--wall', '10')
+        self.wait_for(lambda: len(self.tickets()) == 1)
+        time.sleep(.2)
+        self.assertEqual(self.gateway.keys, ['first', 'second'])
+        # A decrease is authoritative for queued callers, without interrupting
+        # the two requests that already own leases.
+        self.gateway.catalog_replicas[self.gateway.selector] = 1
+        first_release.set()
+        out, err = first.communicate(timeout=4)
+        self.assertEqual((first.returncode, out), (0, 'PONG\n'), err)
+        time.sleep(.3)
+        self.assertEqual(self.gateway.keys, ['first', 'second'])
+        self.assertEqual(len(json.loads(runtime.read_text())['leases']), 1)
+        second_release.set()
+        for child in (second, third):
+            out, err = child.communicate(timeout=5)
+            self.assertEqual((child.returncode, out), (0, 'PONG\n'), err)
+        self.assertEqual(self.gateway.keys, ['first', 'second', 'third'])
+        self.assertEqual(json.loads(runtime.read_text())['leases'], [])
+        self.assertEqual(self.tickets(), [])
+
+    def test_waiting_caller_discovers_replica_increase_without_restart(self):
+        self.hold_lease()
+        caller = self.start_adapter('waiting', '--wall', '6')
+        self.wait_for(lambda: len(self.tickets()) == 1)
+        time.sleep(.2)
+        self.assertEqual(self.gateway.keys, [])
+        self.gateway.catalog_replicas = {self.gateway.selector: 2}
+        out, err = caller.communicate(timeout=4)
+        self.assertEqual((caller.returncode, out), (0, 'PONG\n'), err)
+        self.assertEqual(self.gateway.keys, ['waiting'])
+        self.assertEqual([lease['token'] for lease in json.loads(
+            (self.work / 'state/runtime.json').read_text())['leases']], ['held'])
+        fleetctl.release_lease(self.work / 'state', 'held')
+        self.assertEqual(self.tickets(), [])
 
     def test_local_quota_lease_wait_is_bounded(self):
         self.hold_lease()
