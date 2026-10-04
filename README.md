@@ -29,7 +29,7 @@ Agents can read [the skill](skill/SKILL.md) from the checkout; [skill installati
 
 Crossfeed runs on its own with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google), [OpenCode](https://opencode.ai), [Copilot CLI](https://github.com/github/copilot-cli) and [OpenRouter](https://openrouter.ai). [Pi](https://github.com/earendil-works/pi) supports admitted API and partner-plan routes.
 
-Optionally, add [Crossfeed Chat](https://github.com/ABCastor/crossfeed-chat) to use your ChatGPT chats as a read-only agent lane; [setup and relay limits](docs/CHATGPT.md).
+Optionally, add [Crossfeed Chat](https://github.com/ABCastor/crossfeed-chat) to use your ChatGPT chats as a read-only agent lane. Its paired Chrome extension wakes sleeping workers; [setup and relay limits](docs/CHATGPT.md).
 
 `python3 scripts/fleetctl.py serve-api` exposes admitted read-only lanes to OpenAI-compatible clients; [API setup](docs/LANES-API.md).
 

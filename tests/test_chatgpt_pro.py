@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import chatgpt_catalog as catalog
 import chatgpt_pro as pro
-import chatgpt_workers as workers
 import console
 import fleetctl
 import selector
@@ -46,25 +45,39 @@ class MeterTests(unittest.TestCase):
         return {"harness": "chatgpt-chat", "run_id": str(age), "selector": "chatgpt:latest-pro",
                 "returncode": 0, "ended_at": fleetctl.iso(self.now - dt.timedelta(seconds=age)), **extra}
 
-    def test_rolling_boundary_failed_requests_duplicates_and_wake_logs(self):
+    def test_rolling_boundary_failed_requests_and_duplicates(self):
         self.ledger([self.answer(), self.answer(), self.answer(1, returncode=4),
                      self.answer(2, selector="chatgpt:latest-medium"), self.answer(pro.WEEK),
                      self.answer(-1), self.answer(3)])
-        path = workers.wake_log_file(self.template)
-        rows = [dict(ts=self.now.timestamp() - age, label=label, outcome=outcome, stage=stage, **extra)
-                for age, label, outcome, stage, extra in [
-                    (1, "latest-pro", "ok", "previous conversation archive", {}),
-                    (2, "latest-pro", "failed", "worker registration", {}),
-                    (3, "latest-pro", "failed", "wake admission", {}),
-                    (3, "latest-pro", "ok", "saved worker lookup", {}),
-                    (4, "latest-pro", "ok", "worker registration", {"refunded": True}),
-                    (5, "latest-medium", "ok", "worker registration", {}),
-                    (pro.WEEK, "latest-pro", "ok", "worker registration", {})]]
-        path.write_text("\n".join(json.dumps(row) for row in rows))
         meter = pro.usage(self.roster, self.root, "chatgpt-work", now=self.now)
-        self.assertEqual((meter["requests"], meter["wakes"], meter["used"], meter["remaining"]), (2, 2, 4, 196))
+        self.assertEqual((meter["requests"], meter["used"], meter["remaining"]), (2, 2, 198))
         self.assertTrue(meter["estimate"])
         self.assertFalse(meter["spent"])
+
+    def test_api_wake_receipts_have_separate_rolling_deduplication(self):
+        def receipt(age=0, **extra):
+            return {"source": "extension", "level": 4,
+                    "observed_at": (self.now.timestamp() - age) * 1000, **extra}
+        self.ledger([
+            self.answer(1, picker_receipt=receipt(10)),
+            self.answer(2, picker_receipt=receipt(10)),  # Same active chat.
+            self.answer(1, picker_receipt=receipt(10)),  # Duplicate run.
+            self.answer(3, returncode=5, picker_receipt=receipt(20)),
+            self.answer(4, picker_receipt=receipt(pro.WEEK)),
+            self.answer(5, picker_receipt=receipt(-1)),
+            self.answer(6, picker_receipt=receipt(source="worker")),
+            self.answer(7, picker_receipt=receipt(level=2)),
+            self.answer(8, picker_receipt=receipt(observed_at=True)),
+            self.answer(9, picker_receipt=receipt(observed_at=float("nan"))),
+            self.answer(11, quota_pool="another-account", picker_receipt=receipt(30)),
+            self.answer(12, harness="codex", picker_receipt=receipt(40)),
+            self.answer(13, selector="chatgpt:latest-high", picker_receipt=receipt(50)),
+        ])
+        meter = pro.usage(self.roster, self.root, "chatgpt-work", now=self.now)
+        self.assertEqual((meter["requests"], meter["wakes"], meter["used"]), (8, 2, 10))
+        self.assertEqual(meter["remaining"], 190)
+        self.assertEqual(meter["next_rolloff_at"],
+                         (self.now + dt.timedelta(seconds=pro.WEEK - 20)).isoformat())
 
     def test_console_and_both_briefs_show_owner_allowance(self):
         self.roster["quota_pools"]["chatgpt-work"]["pro_weekly_allowance"] = 3
@@ -131,16 +144,14 @@ class MeterTests(unittest.TestCase):
         self.ledger([self.answer(3, idempotency_key="same-job"), self.answer(1, idempotency_key="same-job")])
         self.assertEqual(pro.usage(self.roster, self.root, "chatgpt-work", now=self.now)["requests"], 1)
 
-    def test_corrupt_pro_wake_state_preserves_other_providers(self):
-        for contents in ("{torn", "[]", "null"):
-            with self.subTest(contents=contents):
-                (self.root / "wake-state.json").write_text(contents)
-                overview = fleetctl.fleet_overview(self.roster, {}, self.root, self.now)
-                meter = next(pool["pro_usage"] for pool in overview["pools"] if pool["pool"] == "chatgpt-work")
-                self.assertTrue(meter["unavailable"])
-                self.assertTrue(pro.blocked(self.roster, {}, self.lanes["chatgpt:latest-pro"]))
-                self.assertTrue(any(pool["pool"] != "chatgpt-work" for pool in overview["pools"]))
-                self.assertIn("Pro estimate unavailable", console.render_page(overview, "fixture"))
+    def test_unreadable_pro_ledger_preserves_other_providers(self):
+        (self.root / 'runs.jsonl').mkdir()
+        pro.refresh(self.roster, self.root, now=self.now)
+        meter = self.roster['chatgpt_pro_usage']['chatgpt-work']
+        self.assertTrue(meter['unavailable'])
+        self.assertTrue(pro.blocked(self.roster, {}, self.lanes['chatgpt:latest-pro']))
+        self.assertTrue(any(lane['quota_pool'] != 'chatgpt-work' for lane in self.roster['lanes']))
+        self.assertIn('Pro estimate unavailable', pro.text(meter))
 
 
 class ProRunnerTests(unittest.TestCase):
@@ -162,6 +173,23 @@ class ProRunnerTests(unittest.TestCase):
 
     def record(self):
         return json.loads((self.work / "last.crossfeed.json").read_text())
+
+    def test_api_extension_wake_is_retained_and_counted_once_across_answers(self):
+        stamp = int(fleetctl.utc_now().timestamp())
+        self.gateway.picker_receipt = {"row": "Latest", "level": 4,
+                                       "source": "extension", "observed_at": stamp * 1000,
+                                       "arbitrary_payload": "must-not-be-retained"}
+        for _ in range(2):
+            result = self.run_adapter()
+            self.assertEqual(result.returncode, 0, result.stderr)
+        record = self.record()
+        self.assertEqual(record["picker_receipt"],
+                         {"row": "Latest", "level": 4, "source": "extension", "observed_at": stamp})
+        state = Path(self.env["FLEET_STATE_DIR"])
+        roster = dict(self.roster, lanes=[dict(self.lane, selector="chatgpt:latest-pro",
+                                             worker_level="pro", quota_pool="chatgpt-work")])
+        meter = pro.usage(roster, state, "chatgpt-work")
+        self.assertEqual((meter["requests"], meter["wakes"], meter["used"]), (2, 1, 3))
 
     def test_downgrade_rate_limit_and_reset_trigger_extra_high(self):
         for mode in ("downgraded", "429", "rate-text"):
@@ -193,8 +221,8 @@ class ProRunnerTests(unittest.TestCase):
         self.assertEqual([row["model"] for row in self.gateway.payloads], ["chatgpt:latest-xhigh", "chatgpt:latest-high"])
         self.assertEqual(self.record()["selected_model"], "chatgpt:latest-high")
 
-    def test_pause_discovered_after_health_avoids_pro_submission(self):
-        self.gateway.pro_block_after = 4
+    def test_pause_discovered_after_lease_avoids_pro_submission(self):
+        self.gateway.pro_pause_when_leased = Path(self.env['FLEET_STATE_DIR']) / 'runtime.json'
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([row["model"] for row in self.gateway.payloads], ["chatgpt:latest-xhigh"])

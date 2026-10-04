@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import chatgpt_catalog as catalog
 import chatgpt_transport as transport
-import chatgpt_workers as workers
 import fleetctl
 import chatgpt_runner as runner
 import selector
@@ -180,18 +179,36 @@ class CatalogTests(unittest.TestCase):
             result = fleetctl.read_overlay(self.overlay, self.root / 'state')
         self.assertEqual(self.generated(result)['chatgpt:saved-medium']['admission_status'], 'rejected')
 
-    def test_doctor_reports_labels_and_wake_bounds_without_external_cli(self):
-        now = time.time()
-        (self.root / 'wake-state.json').write_text(json.dumps({'wakes': [now - 86401, now - 60], 'cooldown_until': now + 60}))
+    def test_doctor_reports_gateway_wake_status_without_external_cli(self):
+        self.status.update(extension_enabled=True, wakes=[],
+                           wake_limits={'attempts': 11, 'daily_cap': 60, 'cooldown_until': 0})
+        result = self.expand()
         with patch.object(catalog, 'subprocess', create=True) as process:
-            line, failed = catalog.doctor(self.gateway, {'chatgpt:saved-medium': 'sleeping'})
+            line, failed = catalog.doctor(self.gateway, result['chatgpt_catalog']['states'],
+                                          result['chatgpt_catalog']['wake'])
             process.run.assert_not_called()
         self.assertFalse(failed)
         self.assertIn('chatgpt:saved-medium=sleeping', line)
-        self.assertIn('wake guard: 1/30 wakes in last 24 h, cooldown active', line)
+        self.assertIn('Crossfeed Chat wake: extension paired, 11/60 attempts', line)
         self.assertNotIn(self.key, line)
-        _, failed = catalog.doctor(self.gateway, {'chatgpt:saved-medium': 'unavailable'})
-        self.assertTrue(failed)
+
+    def test_doctor_flags_failed_wakes_caps_cooldowns_and_unpaired_extension(self):
+        status = dict(extension_enabled=True, wakes=[],
+                      wake_limits={'attempts': 1, 'daily_cap': 60, 'cooldown_until': 0})
+        for change in ({'extension_enabled': False},
+                       {'wakes': [{'state': 'failed', 'error': self.key}]},
+                       {'wakes': [{'state': 'expired'}]},
+                       {'wake_limits': {'attempts': 60, 'daily_cap': 60, 'cooldown_until': 0}},
+                       {'wake_limits': {'attempts': 0, 'daily_cap': 0, 'cooldown_until': 0}},
+                       {'wake_limits': {'attempts': 1, 'daily_cap': 60, 'cooldown_until': (time.time() + 60) * 1000}},
+                       {'wake_limits': None}):
+            with self.subTest(change=change):
+                wake = catalog.gateway_wake_status(dict(status, **change))
+                line, failed = catalog.doctor(self.gateway, {'chatgpt:saved-medium': 'sleeping'}, wake)
+                self.assertTrue(failed)
+                self.assertNotIn(self.key, line)
+                self.assertIn('owner action: check Crossfeed Chat', line)
+        self.assertTrue(catalog.doctor(self.gateway, {'chatgpt:saved-medium': 'sleeping'})[1])
 
     def test_plain_runner_admission_error_does_not_dispatch(self):
         self.roster['chatgpt_gateway'] = None

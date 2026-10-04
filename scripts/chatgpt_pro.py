@@ -1,4 +1,4 @@
-"""Estimated Pro allowance from existing receipts and retained wake attempts."""
+"""Estimated Pro allowance from answers and API-observed extension wakes."""
 from __future__ import annotations
 
 import datetime as dt
@@ -41,6 +41,14 @@ def _stamp(value):
     return None
 
 
+def wake_stamp(receipt):
+    """Only the extension's timestamped Pro picker observation identifies a wake."""
+    if (not isinstance(receipt, dict) or receipt.get("source") != "extension"
+            or type(receipt.get("level")) is not int or receipt["level"] != 4):
+        return None
+    return _stamp(receipt.get("observed_at"))
+
+
 def usage(roster, state_dir, pool, *, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     clock = now.timestamp()
@@ -49,12 +57,20 @@ def usage(roster, state_dir, pool, *, now=None):
         raise ValueError("pro_weekly_allowance must be a nonnegative integer")
     lanes = [lane for lane in roster.get("lanes", []) if is_pro(lane) and lane.get("quota_pool") == pool]
     selectors = {lane["selector"] for lane in lanes}
-    requests, wakes, timestamps, seen = 0, 0, [], set()
+    requests, wakes, timestamps, seen, seen_wakes = 0, 0, [], set(), set()
     for row in _rows(Path(state_dir) / "runs.jsonl"):
         stamp = _stamp(row.get("ended_at") or row.get("started_at"))
-        if (row.get("harness") != "chatgpt-chat" or row.get("returncode") != 0
-                or row.get("selector") not in selectors or row.get("quota_pool") not in (None, pool)
-                or stamp is None):
+        if (row.get("harness") != "chatgpt-chat" or row.get("selector") not in selectors
+                or row.get("quota_pool") not in (None, pool)):
+            continue
+        woke_at = wake_stamp(row.get("picker_receipt"))
+        wake_id = (row.get("selector"), woke_at)
+        if (woke_at is not None and clock - WEEK < woke_at <= clock
+                and wake_id not in seen_wakes):
+            seen_wakes.add(wake_id)
+            wakes += 1
+            timestamps.append(woke_at)
+        if row.get("returncode") != 0 or stamp is None:
             continue
         identity = (row.get("selector"), row.get("idempotency_key") or row.get("run_id") or stamp)
         if identity in seen:
@@ -63,37 +79,11 @@ def usage(roster, state_dir, pool, *, now=None):
         if clock - WEEK < stamp <= clock:
             requests += 1
             timestamps.append(stamp)
-    # Several lanes share one wake log. Read each path once, only counting wakes
-    # that sent the polling prompt (including later registration failures).
-    try:
-        from chatgpt_workers import wake_log_file, wake_state_file
-    except ImportError:
-        from scripts.chatgpt_workers import wake_log_file, wake_state_file
-    paths = {}
-    wake_pause = 0
-    for lane in lanes:
-        try:
-            wake_state = json.loads(wake_state_file(lane).read_text())
-            wake_pause = max(wake_pause, _stamp(wake_state.get("pro_cooldown_until")) or 0)
-        except FileNotFoundError:
-            pass
-        path = wake_log_file(lane)
-        paths.setdefault(path, set()).add(lane.get("worker_label"))
-    for path, labels in paths.items():
-        for row in _rows(path):
-            stamp = _stamp(row.get("ts"))
-            sent = row.get("stage") in {
-                "worker registration", "new conversation retention", "previous conversation archive"}
-            if (row.get("label") in labels and sent and not row.get("refunded")
-                    and stamp is not None and clock - WEEK < stamp <= clock):
-                wakes += 1
-                timestamps.append(stamp)
     total = requests + wakes
     resets = dt.datetime.fromtimestamp(min(timestamps) + WEEK, dt.timezone.utc).isoformat() if timestamps else None
     return {"requests": requests, "wakes": wakes, "used": total, "allowance": allowance,
             "remaining": max(0, allowance - total), "estimate": True,
-            "spent": total >= allowance, "next_rolloff_at": resets,
-            "wake_paused_until": wake_pause}
+            "spent": total >= allowance, "next_rolloff_at": resets}
 
 
 def refresh(roster, state_dir, *, now=None):
@@ -129,8 +119,6 @@ def blocked(roster, runtime, lane, *, now=None):
     status = lane.get("gateway_status", {})
     if status.get("quota_blocked") or status.get("rate_limited"):
         return "Pro paused by Crossfeed Chat"
-    if roster.get("chatgpt_pro_usage", {}).get(pool, {}).get("wake_paused_until", 0) > now.timestamp():
-        return "Pro wake paused by a reported rate limit"
     if roster.get("chatgpt_pro_usage", {}).get(pool, {}).get("spent"):
         return "Pro rolling 7-day allowance estimate spent"
     return None
@@ -199,7 +187,7 @@ def mark_spent(state_dir, lane, *, until=None):
 
 def text(meter):
     if meter.get("unavailable"):
-        return "Pro estimate unavailable; check allowance configuration and local usage/wake state"
+        return "Pro estimate unavailable; check allowance configuration and local usage ledger"
     return (f"Pro estimate: {meter['used']}/{meter['allowance']} in rolling 7 days "
-            f"({meter['requests']} answered requests + {meter['wakes']} wakes); "
+            f"({meter['requests']} answered requests + {meter['wakes']} observed wakes); "
             f"{meter['remaining']} estimated remaining")

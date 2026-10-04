@@ -77,7 +77,6 @@ def main():
         overlay = demo_overlay()
         for lane in overlay["lanes"]:
             if lane.get("harness") == "chatgpt-chat":
-                lane["wake_state_file"] = str(state / "demo-wake-state.json")
                 lane["auth"]["key_file"] = str(state / "unused-demo-key")
         (state / "overlay.json").write_text(json.dumps(overlay))
         now = console.fleetctl.utc_now()

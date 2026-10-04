@@ -28,7 +28,8 @@ except ModuleNotFoundError:
 
 DEFAULTS = {"target": 90.0, "lambda0": 1.0, "mu": .001, "explore": .1,
             "uncertainty_weight": 1.0,
-            "stakes_weights": {"low": 1.0, "normal": 2.0, "high": 4.0}}
+            "high_cost_cap": 1.0,
+            "stakes_weights": {"low": 1.0, "normal": 2.0, "high": 40.0}}
 FAMILIES = {"coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual"}
 WRAPPERS = {name: name + "-agent.sh" for name in
             ("codex", "claude", "opencode", "agy", "copilot", "openrouter", "pi")}
@@ -330,6 +331,12 @@ def _cost(row: dict, allowance: float | None) -> tuple[float | None, float | Non
 def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
                median_usd: float | None) -> tuple[dict, list[str]]:
     pool = option["pool"]
+    if binding.get("projection_basis") == "none-known":
+        chat = option.get("harness") == "chatgpt-chat" or pool == "chatgpt-work"
+        usd = None if chat else _cost(row, None)[0]
+        return {"estimated_usd": usd, "percent": None, "allowance_usd": None,
+                "estimated": True, "unknown": True, "basis": "no_known_limit",
+                "penalty_percent": 0.0}, ["chat_usage_unpriced" if chat else "usage_unpriced"]
     allowance = _allowance_usd(roster, pool, binding)
     usd, percent = _cost(row, allowance)
     own = row.get("own_cost") or {}
@@ -422,6 +429,12 @@ def _receipt(path: Path, payload: dict) -> None:
         temporary.unlink()
 
 
+def _allow_identity(entry: str) -> tuple[str, str, str]:
+    # Pool and effort delimit the model key, which can itself be namespaced.
+    parts = entry.split(":")
+    return parts[0], ":".join(parts[1:-1]), parts[-1]
+
+
 def parse_allow(value: str | Path | None, fleet: Any) -> list[str] | None:
     """Normalize a comma list or file once so receipts survive file changes."""
     if value is None:
@@ -442,8 +455,9 @@ def parse_allow(value: str | Path | None, fleet: Any) -> list[str] | None:
         entry = entry.strip()
         if not entry:
             continue
-        parts = [part.strip() for part in entry.split(":")]
-        if len(parts) != 3 or not all(parts) or any("*" in part for part in parts[:2]) or (
+        segments = [part.strip() for part in entry.split(":")]
+        parts = _allow_identity(":".join(segments))
+        if len(segments) < 3 or not all(segments) or any("*" in part for part in parts[:2]) or (
                 "*" in parts[2] and parts[2] != "*"):
             raise fleet.FleetError(f"invalid allow entry {entry!r}: expected pool:model_key:level (level may be *)")
         normalized = ":".join(parts)
@@ -500,7 +514,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         options = retained
     allow_list = parse_allow(allow, fleet)
     if allow_list is not None:
-        allowed = {tuple(entry.split(":")) for entry in allow_list}
+        allowed = {_allow_identity(entry) for entry in allow_list}
         retained = []
         for option in options:
             identity = (option["pool"], option["model_key"], option["level"])
@@ -532,6 +546,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     weights = dict(DEFAULTS["stakes_weights"], **policy.get("stakes_weights", {}))
     uncertainty_weight = max(1e-9, float(policy.get("uncertainty_weight", DEFAULTS["uncertainty_weight"])))
     mu = float(policy.get("mu", DEFAULTS["mu"])) * (0 if stakes == "irreversible" else .5 if stakes == "high" else 1)
+    high_cost_cap = _number(policy.get("high_cost_cap", DEFAULTS["high_cost_cap"]))
+    if high_cost_cap is None or high_cost_cap < 0:
+        raise fleet.FleetError("high_cost_cap must be finite and nonnegative")
     pool_costs = {}
     for option in options:
         usd, _ = _cost(rows.get((option["model_key"], option["level"]), {}), None)
@@ -540,7 +557,11 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     medians = {pool: statistics.median(costs) for pool, costs in pool_costs.items()}
     for option in options:
         row = rows.get((option["model_key"], option["level"]), {})
-        q = row.get("q", {}).get(family) or {}
+        strata = row.get("q_by_stakes", {})
+        scoped = strata.get(stakes, {}).get(family)
+        if scoped is None and stakes == "irreversible":
+            scoped = strata.get("high", {}).get(family)
+        q = scoped if scoped is not None else row.get("q", {}).get(family) or {}
         mean, sd = _number(q.get("mean")), _number(q.get("sd"))
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
@@ -554,8 +575,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                  model_key=option["model_key"])
         cost, cost_flags = _task_cost(roster, option, row, pool_price, medians.get(option["pool"]))
         price = pool_price["lambda"]
-        latency = _number(row.get("latency_s"))
+        latency = _number(row.get("latency_by_stakes", {}).get(stakes, row.get("latency_s")))
         penalty = price * cost["penalty_percent"]
+        if stakes == "high":
+            penalty = min(penalty, high_cost_cap)
         score = quality if stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
         scored.append(dict(option, quality=quality, q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,

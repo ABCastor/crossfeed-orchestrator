@@ -3837,7 +3837,8 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
             from chatgpt_catalog import doctor
         except ImportError:
             from scripts.chatgpt_catalog import doctor
-        line, failed = doctor(roster.get("chatgpt_gateway"), roster.get("chatgpt_catalog", {}).get("states", {}))
+        catalog = roster.get("chatgpt_catalog", {})
+        line, failed = doctor(roster.get("chatgpt_gateway"), catalog.get("states", {}), catalog.get("wake"))
         print("  " + line)
         gateway_problem = failed or bool(roster.get("chatgpt_catalog", {}).get("error"))
         problems += int(gateway_problem)
@@ -4924,8 +4925,8 @@ def build_parser() -> argparse.ArgumentParser:
     provider.add_argument("--models", default="", help="comma-separated IDs; omitted means all returned IDs")
     provider.add_argument("--accept-relay-risk", dest="acceptance", default="", help="your acceptance quote, dated when saved")
     provider.add_argument("--daily-cap", default="0", help="estimated API spend cap in USD; zero blocks calls")
-    chatgpt = sub.add_parser("chatgpt", help="refresh gateway lanes or wake a saved worker")
-    chatgpt.add_argument("action", choices=["sync", "wake"])
+    chatgpt = sub.add_parser("chatgpt", help="refresh saved gateway lanes")
+    chatgpt.add_argument("action", choices=["sync"])
     chatgpt.add_argument("label", nargs="?")
     sub.add_parser("roster-json", help="emit the roster with currently probed gateway lanes")
     mcp = sub.add_parser("codex-mcp-denials", help="list live MCP tools disabled for a worker directory")
@@ -5239,24 +5240,6 @@ def main() -> int:
             print(json.dumps(roster))
             return 0
         if args.command == "chatgpt":
-            if args.action == "wake":
-                try:
-                    from chatgpt_workers import wake
-                    from chatgpt_transport import Rejected
-                except ImportError:
-                    from scripts.chatgpt_workers import wake
-                    from scripts.chatgpt_transport import Rejected
-                raw = read_overlay(args.overlay.expanduser(), discover=False)
-                if not args.label:
-                    raise FleetError("chatgpt wake requires a saved worker label")
-                try:
-                    wake(raw["chatgpt_gateway"]["lane_template"], args.label)
-                except Rejected as exc:
-                    raise FleetError(exc.message)
-                except (OSError, ValueError, KeyError, TypeError):
-                    raise FleetError("worker wake configuration is unavailable")
-                print("chatgpt:" + args.label + ": recent")
-                return 0
             if args.label:
                 raise FleetError("chatgpt sync takes no label")
             try:

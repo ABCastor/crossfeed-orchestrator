@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -146,16 +145,16 @@ def request(base, key, path, payload=None, timeout=3, progress=None, idempotency
         raise Rejected(6, "gateway unavailable or no valid terminal response")
 
 
-def health(lane, *, timeout=900, check=None):
-    deadline = time.monotonic() + timeout
-    base, key = settings(lane)
-    label = canonical_selector(lane.get("selector"))
-    if not label or lane.get("worker_label") != label:
-        raise Rejected(3, "lane must name its saved ChatGPT worker")
-    try:
-        from chatgpt_workers import wake, worker_active
-    except ImportError:
-        from scripts.chatgpt_workers import wake, worker_active
-    if not worker_active(base, key, label):
-        wake(lane, label, timeout=max(0, deadline - time.monotonic()), check=check)
-    return base, key
+def contacts(status):
+    """Validate labelled contacts supplied by Crossfeed Chat."""
+    rows = status.get("workers")
+    if not isinstance(rows, list):
+        raise Rejected(6, "gateway did not list labelled worker contacts")
+    found = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("label"), str):
+            raise Rejected(6, "invalid gateway worker contact")
+        if row["label"] in found:
+            raise Rejected(6, "duplicate gateway worker label")
+        found[row["label"]] = row.get("contact")
+    return found

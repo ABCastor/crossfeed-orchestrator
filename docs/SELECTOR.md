@@ -28,7 +28,7 @@ Dispatch tries the chosen option first, including an exploratory choice outside 
 
 `--dry-run` prints JSON with the resolved argument list, working directory and planned receipt paths. It creates selection receipts but starts no wrapper or quota refresh process. Its stdout includes the literal task in the argument list; it writes no dispatch receipt or run log. Use it to inspect the call before sending it.
 
-Use `--allow FILE_OR_LIST` with either command to restrict selection to measured benchmark options or council seats, for example `--allow 'codex:gpt-6.1-sol:high,claude:claude-sonnet-5-5:*'`. Files accept one `pool:model_key:level` entry per line or comma-separated entries; blank lines are ignored. Only the level accepts `*`, meaning any admitted level for that pool and model. Other options are rejected with `not in allow list` before scoring, exploration and fallback. Existing admission gates still apply. An empty list or a list with no eligible options produces an error. Every selection receipt records the normalized entries in `allow` (`null` when unrestricted), so changing the file cannot change the recorded restriction.
+Use `--allow FILE_OR_LIST` with either command to restrict selection to measured benchmark options or council seats, for example `--allow 'codex:gpt-6.1-sol:high,claude:claude-sonnet-5-5:*'`. Files accept one `pool:model_key:level` entry per line or comma-separated entries; blank lines are ignored. Model keys may contain colons, for example `chatgpt-work:chatgpt:latest-high:high`; the first field is the pool and the last is the level. Only the level accepts `*`, meaning any admitted level for that pool and model. Other options are rejected with `not in allow list` before scoring, exploration and fallback. Existing admission gates still apply. An empty list or a list with no eligible options produces an error. Every selection receipt records the normalized entries in `allow` (`null` when unrestricted), so changing the file cannot change the recorded restriction.
 
 ## Quality evidence
 
@@ -55,17 +55,21 @@ LMArena is an optional secondary source for the visual/webdev family only. Confi
 Admission checks model switches, retirement, pool-specific older-model retention reasons, refused roles, task mode, input modality, capacity and the CRITICAL quota guard. The Go pool retains its CRITICAL role allowlist. AGY requires write mode because its wrapper has no proven read-only boundary.
 
 ```text
-score = stakes_weight * quality - pool_lambda * task_pool_percent - mu * latency_seconds
+quota_penalty = pool_lambda * task_pool_percent
+quota_penalty = min(quota_penalty, high_cost_cap)           at high stakes
+score = stakes_weight * quality - quota_penalty - mu * latency_seconds
 pool_lambda = 0                                           when projected_usage <= target
 pool_lambda = lambda0 * (projected_usage - target) / (100 - target) otherwise
 pool_lambda = lambda_unknown                              when projection is unavailable
 ```
 
-Default stakes weights are low 1, normal 2 and high 4. Unknown quality receives an uncertainty discount. For exploitation, an unknown cell with the same mean as a measured cell is dominated by it. The binding quota window is the window with the strongest projected pressure; an unknown projection takes precedence because that window could be binding. `lambda_unknown` defaults to half of `lambda0`, and the option is flagged `quota_projection_unknown`.
+Default stakes weights are low 1, normal 2 and high 40. For high stakes, `high_cost_cap` bounds the quota penalty at one score unit by default. Quota cost alone can therefore trade at most 2.5 percentage points of estimated quality; latency still matters. Hard admission gates apply before scoring. Unknown quality receives an uncertainty discount. For exploitation, an unknown cell with the same mean as a measured cell is dominated by it. The binding quota window is the window with the strongest projected pressure; an unknown projection takes precedence because that window could be binding. `lambda_unknown` defaults to half of `lambda0`, and the option is flagged `quota_projection_unknown`.
 
-`mu` defaults to 0.001 per second of median time to first answer, halves for high stakes and becomes zero for irreversible work. Evidence uses measured `ttfa_s` or `time_to_first_answer_s`, then the publisher's first-answer measurement, then a flagged 120-second placeholder. Total run duration is a separate measure.
+Evidence may supply `q_by_stakes.<stakes>.<family>` with the same quality fields as `q.<family>`. Selection uses that stratum when present, otherwise the family estimate. This lets separately validated hard-task outcomes inform high stakes without treating easy-task success as hard-task evidence. The evidence producer must keep fit and held-out results separate.
 
-`irreversible` selects the highest admitted known quality estimate, ignoring price and latency. All-unknown quality causes refusal.
+`mu` defaults to 0.001 per second, halves for high stakes and becomes zero for irreversible work. The default latency evidence uses measured `ttfa_s` or `time_to_first_answer_s`, then the publisher's first-answer measurement, then a flagged 120-second placeholder. An optional `latency_by_stakes.<stakes>` overrides it with a measured completion-time median for that stratum; the evidence producer must name its basis.
+
+`irreversible` selects the highest admitted known quality estimate, ignoring price and latency. It uses its own quality stratum when present, then the high-stakes stratum, then the family estimate. All-unknown quality causes refusal.
 
 ## Task cost
 
@@ -73,7 +77,7 @@ Measured subscription consumption takes precedence. Evidence rows store `own_cos
 
 When a USD allowance matches the binding window, token medians and API-equivalent input/output prices estimate task percent as `100 * task_usd / allowance_usd`. Configure the allowance in `quota_pools.<pool>.plan.allowance`, including amount, currency and window. An explicitly different window is never used.
 
-Set `quota_pools.<pool>.plan.limit` to `"none-known"` for a pool with no known quota limit: its price is zero, quota snapshots and refresh sources are ignored, and brief/console show "no known limit"; explicit off switches and provider quota errors still block dispatch.
+Set `quota_pools.<pool>.plan.limit` to `"none-known"` for a pool with no known quota limit: its quota price and penalty are zero, usage remains unknown, quota snapshots and refresh sources are ignored, and brief/console show "no known limit"; explicit off switches and provider quota errors still block dispatch. The cost basis is `no_known_limit`. ChatGPT dollar cost is unknown; other pools retain any known API-equivalent price. Fresh-chat guards and elapsed time still constrain chat workers.
 
 Without that allowance, Go uses `quota_pools.opencode-go.request_estimates.per_5h_week_month.<model>`, an array of request counts for the 5-hour, weekly and monthly limits. A level-keyed object of those arrays is also accepted. Task percent is `100 / binding_request_count`, multiplied by measured requests per task, or 1 if unmeasured.
 
@@ -87,6 +91,6 @@ Every choice and immutable receipt records `selection_probability`, the uncondit
 
 The JSON result includes the chosen option, the top three options ranked by exploitation score, all pool prices and exact wrapper commands. An exploratory choice can be outside that top three and has its own receipt. Replace the command's `<task>` placeholder and retain its `FLEET_SELECTION_FILE` assignment. The wrapper records the effort that actually ran. A receipt that disagrees with the actual model, lane, effort, role or family is omitted with a `selection_error`. Each alternative command has its own receipt; its probability describes the selector policy, so a manually chosen alternative is not a randomized policy observation.
 
-`policy.selector` also accepts `allowed_pools_by_role`, `stakes_weights`, `target`, `lambda0`, `families_by_role`, `mode_by_role` and `uncertainty_weight`. Source overrides must supply their assumption text and exactly one anchor per anchored family. See the [example overlay](../examples/access-overlay.example.json).
+`policy.selector` also accepts `allowed_pools_by_role`, `stakes_weights`, `high_cost_cap`, `target`, `lambda0`, `families_by_role`, `mode_by_role` and `uncertainty_weight`. Source overrides must supply their assumption text and exactly one anchor per anchored family. See the [example overlay](../examples/access-overlay.example.json).
 
 Synthetic regression tests establish these mechanics. A held-out comparison against fixed policies is still needed to establish whether the selector improves real task outcomes.

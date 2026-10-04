@@ -56,20 +56,17 @@ class Gateway(BaseHTTPRequestHandler):
             return self.reply(200, {"object": "list", "data": [{"id": selector, "object": "model", "saved": True, "row": "Latest", "level": getattr(self.server, "catalog_levels", {}).get(selector, 1)}
                 for selector in getattr(self.server, "catalog_ids", [])]})
         assert self.path == "/v1/gateway/status"
-        self.server.status_reads = getattr(self.server, 'status_reads', 0) + 1
-        if self.server.status_reads >= getattr(self.server, 'pro_block_after', float('inf')):
+        leased_state = getattr(self.server, 'pro_pause_when_leased', None)
+        if leased_state and leased_state.exists() and json.loads(leased_state.read_text()).get('leases'):
             self.server.quota_blocked = ['chatgpt:latest-pro']
         mode = self.server.mode
         if mode == "auth":
             return self.reply(401, {"error": KEY})
         if mode == "health-429":
             return self.reply(429, {"error": KEY})
-        if hasattr(self.server, 'worker_label'):
-            browser = json.loads(self.server.browser_file.read_text())
-            return self.reply(200, {'workers': [{'label': self.server.worker_label,
-                'contact': 'recent' if browser['recent'] else 'stale', 'polling': browser.get('polling', browser['recent']), 'last_contact_at': 'fixture-time'}]})
         self.reply(200, {'workers': [{'label': selector.removeprefix('chatgpt:'),
-            'contact': 'recent', 'polling': mode not in {'sleep', 'stale-active'},
+            'contact': 'never' if mode == 'sleep' else 'stale' if mode == 'stale-active' else 'recent',
+            'polling': mode not in {'sleep', 'stale-active'},
             'quota_blocked': selector in getattr(self.server, 'quota_blocked', []),
             'processing_claim': mode == 'busy'} for selector in self.server.catalog_ids]})
 
@@ -102,6 +99,8 @@ class Gateway(BaseHTTPRequestHandler):
         answer['model'] = 'chatgpt:wrong-label' if mode == 'mismatched-model' else body['model']
         if mode == 'tool-payload':
             answer['choices'][0]['message']['tool_calls'] = [{'id': 'forbidden-call'}]
+        if hasattr(self.server, 'picker_receipt'):
+            answer['metadata'] = {'picker_receipt': self.server.picker_receipt}
         if mode == 'downgraded':
             answer['metadata'] = {'picker_receipt': {'row': 'Latest', 'level': 1, 'source': 'worker'}}
         if mode == 'rate-text':
@@ -183,8 +182,7 @@ subprocess.Popen=popen
         self.lane.update(lane_id='chatgpt:fixture-medium', model_key='chatgpt:fixture-medium',
                          selector='chatgpt:fixture-medium', harness='chatgpt-chat',
                          worker_label='fixture-medium', worker_level='medium',
-                         access_status='verified', admission_status='active',
-                         gaddi_cli=str(self.work / 'unavailable-gaddi'))
+                         access_status='verified', admission_status='active')
         self.lane['transport']['api_base'] = f'http://127.0.0.1:{self.gateway.server_port}/v1'
         self.lane['auth']['key_file'] = str(self.work / 'key')
         self.gateway.selector = 'chatgpt:fixture-medium'
@@ -279,71 +277,27 @@ subprocess.Popen=popen
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(len(self.gateway.payloads), 1)
 
-    def test_sleeping_worker_fails_fast_even_when_status_active(self):
-        started = time.monotonic()
-        result = self.run_adapter("stale-active")
-        self.assertEqual(result.returncode, 6, result.stderr)
-        self.assertLess(time.monotonic() - started, 4)
-        self.assertEqual(self.gateway.payloads, [])
-        self.assertEqual(result.stdout, "")
-
-    def configure_labelled(self):
-        from tests.test_chatgpt_workers import FAKE_GADDI
-        label = 'fixture-medium'
-        url = 'https://chatgpt.com/c/existing-fixture'
-        (self.work / 'wake-state.json').write_text(json.dumps({'chats': {label: {'url': url}}, '_archive_pending': [], 'wakes': [], 'failed': {}, 'cooldown_until': 0}))
-        gaddi = self.work / 'gaddi'
-        gaddi.write_text(FAKE_GADDI)
-        gaddi.chmod(0o700)
-        self.gateway.browser_file = self.work / 'browser.json'
-        self.gateway.browser_file.write_text(json.dumps({'calls': [], 'recent': False, 'allow': True,
-            'observed': {'chat': True, 'pill': 'Medium', 'url': url}}))
-        self.roster['chatgpt_gateway']['lane_template']['gaddi_cli'] = str(gaddi)
-        self.lane['lane_id'] = 'chatgpt:' + label
-        self.gateway.worker_label = label
-        self.gateway.selector = 'chatgpt:' + label
-        self.gateway.catalog_ids = [self.gateway.selector]
-        self.roster['lanes'] = []
-        self.save()
-
-    def test_labelled_adapter_wakes_before_post_and_sends_explicit_idempotent_label(self):
-        self.configure_labelled()
-        result = self.run_adapter(extra=('--idempotency-key', 'labelled-fixture'))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, 'PONG\n')
-        self.assertEqual(self.gateway.payloads[0]['model'], 'chatgpt:fixture-medium')
+    def test_sleeping_saved_worker_posts_without_local_browser_wake(self):
+        for mode in ('sleep', 'stale-active'):
+            with self.subTest(mode=mode):
+                result = self.run_adapter(mode, extra=('--idempotency-key', 'sleeping-fixture'))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'PONG\n')
+                self.assertEqual(self.gateway.payloads[-1]['model'], self.gateway.selector)
+                self.assertEqual(self.gateway.keys[-1], 'sleeping-fixture')
         receipt = json.loads((self.work / 'last.crossfeed.json').read_text())
         self.assertEqual(receipt['effort'], 'medium')
-        self.assertEqual(receipt['idempotency_key'], 'labelled-fixture')
         self.assertIsNone(receipt['actual_model'])
-        browser = json.loads(self.gateway.browser_file.read_text())
-        self.assertTrue(browser['recent'])
-        self.assertEqual(browser['calls'][-1], ['close', '42'])
-        self.assertEqual(sum(c[0] == 'open' for c in browser['calls']), 1)
-
-    def test_labelled_wake_refusal_never_posts_or_leaks_traceback(self):
-        self.configure_labelled()
-        browser = json.loads(self.gateway.browser_file.read_text())
-        browser['selection'] = {'row': 'Latest', 'position': 1, 'minimum': '0',
-                                'maximum': '5', 'status': 'Light, 2 of 6.'}
-        self.gateway.browser_file.write_text(json.dumps(browser))
-        result = self.run_adapter()
-        self.assertEqual(result.returncode, 6, result.stderr)
-        self.assertIn('Chat power', result.stderr)
-        self.assertNotIn('Traceback', result.stderr)
-        self.assertEqual(self.gateway.payloads, [])
+        self.assertEqual(list(self.work.glob('wake-*')), [])
 
     def test_gateway_503_and_504_are_clean_runtime_failures(self):
-        self.configure_labelled()
-        browser = json.loads(self.gateway.browser_file.read_text())
-        browser['recent'] = True
-        self.gateway.browser_file.write_text(json.dumps(browser))
         for mode in ('503', '504'):
             result = self.run_adapter(mode)
             self.assertEqual(result.returncode, 6, result.stderr)
             self.assertIn('gateway HTTP ' + mode, result.stderr)
             self.assertNotIn('Traceback', result.stderr)
             self.assertEqual(result.stdout, '')
+            self.assertEqual(list(self.work.glob('wake-*')), [])
 
     def test_429_lease_and_auth(self):
         for mode, code in [("429", 4), ("health-429", 4), ("auth", 5)]:

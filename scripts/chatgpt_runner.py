@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import multiprocessing
 import os
@@ -16,7 +17,7 @@ import time
 import run_identity
 import chatgpt_pro
 from chatgpt_queue import lane_turn
-from chatgpt_transport import Rejected, canonical_selector, health, request
+from chatgpt_transport import Rejected, canonical_selector, request, settings
 
 HERE = Path(__file__).resolve().parent
 
@@ -126,13 +127,43 @@ def http_child(pipe, base, key, payload, idempotency_key):
         pipe.close()
 
 
-def supervise(args, base, key, payload, events, interrupted, idempotency_key, started, lane=None):
+@contextlib.contextmanager
+def preflight_budget(deadline):
+    """Interrupt blocking admission calls inside the same wall budget."""
+    if deadline is None:
+        yield
+        return
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise Rejected(124, "wall timeout during preflight")
+    def expired(number, frame):
+        raise Rejected(124, "wall timeout during preflight")
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    saved_at = time.monotonic()
+    previous = signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        yield
+        if time.monotonic() >= deadline:
+            raise Rejected(124, "wall timeout during preflight")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if previous_timer[0]:
+            restored = max(.000001, previous_timer[0] - (time.monotonic() - saved_at))
+            signal.setitimer(signal.ITIMER_REAL, restored, previous_timer[1])
+
+
+def supervise(args, base, key, payload, events, interrupted, idempotency_key, lane=None):
+    deadline = getattr(args, "wall_deadline", None)
+    if deadline is not None and time.monotonic() >= deadline:
+        raise Rejected(124, "wall timeout during preflight")
     context = multiprocessing.get_context("fork")
     receiver, sender = context.Pipe(duplex=False)
     child = context.Process(target=http_child, args=(sender, base, key, payload, idempotency_key))
     child.start()
     sender.close()
-    progress = time.monotonic()
+    started = progress = time.monotonic()
     group_ready = False
     try:
         while True:
@@ -141,9 +172,13 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, st
                 raise Rejected(128 + interrupted[0], "external cancellation")
             if args.wall and now - started >= args.wall:
                 raise Rejected(124, "wall timeout")
+            if deadline is not None and now >= deadline:
+                raise Rejected(124, "wall timeout")
             if args.idle and now - progress >= args.idle:
                 raise Rejected(125, "idle timeout; buffered HTTP bytes are the only progress signal")
-            if receiver.poll(.05):
+            cutoff = deadline if deadline is not None else started + args.wall if args.wall else None
+            poll_wait = min(.05, max(0, cutoff - now)) if cutoff is not None else .05
+            if receiver.poll(poll_wait):
                 try:
                     kind, value = receiver.recv()
                 except EOFError:
@@ -157,6 +192,8 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, st
                 elif kind == "error":
                     raise Rejected(value[0], value[1], pro_spent=value[2], reset_at=value[3])
                 elif kind == "result":
+                    if cutoff is not None and time.monotonic() >= cutoff:
+                        raise Rejected(124, "wall timeout")
                     choices = value.get("choices")
                     choice = choices[0] if isinstance(choices, list) and len(choices) == 1 else {}
                     if not isinstance(choice, dict) or choice.get("finish_reason") != "stop":
@@ -214,11 +251,13 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, st
 
 def run(args):
     started = time.monotonic()
+    args.wall_deadline = started + args.wall if args.wall else None
     interrupted = []
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda number, frame: interrupted.append(number))
     requested_lane = args.lane
-    lane = lane_for(args)
+    with preflight_budget(args.wall_deadline):
+        lane = lane_for(args)
     note_at = started + 60
     def check():
         nonlocal note_at
@@ -231,9 +270,10 @@ def run(args):
             print("chatgpt-agent: waiting for lane " + args.lane, file=sys.stderr, flush=True)
             note_at = now + 60
     if args.action == "health":
-        health(lane, timeout=max(.001, args.wall - (time.monotonic() - started)) if args.wall else 900, check=check)
+        with preflight_budget(args.wall_deadline):
+            settings(lane)
         check()
-        print("Crossfeed Chat worker polling; configured " + lane["model_key"] + "; identity unconfirmed", file=sys.stderr)
+        print("Crossfeed Chat gateway admitted; configured " + lane["model_key"] + "; identity unconfirmed", file=sys.stderr)
         return 0
     tried = set()
     while True:
@@ -251,7 +291,8 @@ def run(args):
             return status
         if not args.pro_downgraded and not lane.get("pro_fallback"):
             return status
-        roster = run_identity.roster(discover=True)
+        with preflight_budget(args.wall_deadline):
+            roster = run_identity.roster(discover=True)
         runtime_path = run_identity.state_dir() / "runtime.json"
         runtime = json.loads(runtime_path.read_text()) if runtime_path.exists() else {}
         original_name = lane.get("pro_fallback", {}).get("requested_model") or requested_lane
@@ -299,18 +340,21 @@ def run_turn(args, lane, interrupted, started, check):
         events = args.events or Path(scratch) / "events.jsonl"
         try:
             check()
-            base, key = health(lane, timeout=max(.001, args.wall - (time.monotonic() - started)) if args.wall else 900, check=check)
+            # Completion POST lets Crossfeed Chat wake a sleeping saved label.
+            with preflight_budget(args.wall_deadline):
+                base, key = settings(lane)
             check()
             if chatgpt_pro.is_pro(lane):
-                # Waking sends its own Pro prompt and can spend the last slot.
-                roster = run_identity.roster(discover=True)
+                # Admission can change while the task waits for its lane turn.
+                with preflight_budget(args.wall_deadline):
+                    roster = run_identity.roster(discover=True)
                 runtime_path = run_identity.state_dir() / "runtime.json"
                 runtime = json.loads(runtime_path.read_text()) if runtime_path.exists() else {}
                 fresh = next((row for row in roster.get("lanes", []) if row["lane_id"] == lane["lane_id"]), None)
                 if (not fresh or fresh.get("admission_status") != "active" or fresh.get("access_status") != "verified"
                         or chatgpt_pro.blocked(roster, runtime, fresh)):
                     args.pro_downgraded = True
-                    raise Rejected(4, "Pro allowance or admission changed during wake")
+                    raise Rejected(4, "Pro allowance or admission changed before dispatch")
             record = run_identity.begin("chatgpt-chat", lane["model_key"], lane["selector"], args.lane,
                                         args.effort_role, lane.get("worker_level", "service-chosen"))
             fallback = lane.get("pro_fallback")
@@ -327,7 +371,7 @@ def run_turn(args, lane, interrupted, started, check):
             payload = {"model": lane["selector"], "messages": [{"role": "user", "content":
                        run_identity.worker_notice(record) + args.prompt}], "tool_choice": "none", "stream": False}
             with events.open("w") as handle:
-                output, receipt = supervise(args, base, key, payload, handle, interrupted, record["idempotency_key"], started, lane)
+                output, receipt = supervise(args, base, key, payload, handle, interrupted, record["idempotency_key"], lane)
             if isinstance(receipt, dict):
                 # Retain observations without copying arbitrary gateway text.
                 clean = {}
@@ -337,6 +381,9 @@ def run_turn(args, lane, interrupted, started, check):
                     clean["source"] = receipt["source"]
                 if receipt.get("row") == lane.get("worker_row"):
                     clean["row"] = lane["worker_row"]
+                woke_at = chatgpt_pro.wake_stamp(receipt)
+                if woke_at is not None:
+                    clean["observed_at"] = woke_at
                 record["picker_receipt"] = clean
                 identity.write_text(json.dumps(record))
             if interrupted:

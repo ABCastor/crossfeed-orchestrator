@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import copy
+import time
 
 try:
-    from chatgpt_transport import Rejected, catalog_models, request, settings
-    from chatgpt_workers import contacts, wake_guard_status, wake_log_status
+    from chatgpt_transport import Rejected, catalog_models, contacts, request, settings
 except ImportError:
-    from scripts.chatgpt_transport import Rejected, catalog_models, request, settings
-    from scripts.chatgpt_workers import contacts, wake_guard_status, wake_log_status
+    from scripts.chatgpt_transport import Rejected, catalog_models, contacts, request, settings
 
 STATES = {"sleeping", "probed-ok", "unavailable"}
 
@@ -128,18 +127,40 @@ def _expand(roster, state_dir, *, persist=False):
                     [lane["lane_id"] for lane in generated if lane["admission_status"] == "active"
                      and role in lane.get("roles", [])] if item == "chatgpt" else [item])]
     result["chatgpt_catalog"] = {"error": error, "error_code": error_code, "checked_at": iso(),
+        "wake": gateway_wake_status(status) if not error else ("Crossfeed Chat wake: unavailable", True),
         "states": {lane["selector"]: lane["catalog_state"] for lane in generated}}
     return _closed_roster(result, error, error_code) if error else result
 
 
-def doctor(gateway, known_states):
+def gateway_wake_status(status):
+    """Summarize the gateway's wake authority without echoing error payloads."""
+    try:
+        limits, wakes = status["wake_limits"], status["wakes"]
+        count, cap, cooldown = limits["attempts"], limits["daily_cap"], limits["cooldown_until"]
+        enabled = status["extension_enabled"]
+        if (type(count) is not int or count < 0 or type(cap) is not int or cap < 0
+                or type(cooldown) not in (int, float) or type(enabled) is not bool
+                or not isinstance(wakes, list)):
+            raise ValueError()
+        failed = sum(row["state"] in {"failed", "expired"} for row in wakes)
+        pending = sum(row["state"] in {"queued", "issued", "claimed"} for row in wakes)
+        paused = cooldown > time.time() * 1000
+        return (f"Crossfeed Chat wake: extension {'paired' if enabled else 'unpaired'}, "
+                f"{count}/{cap} attempts in last 24 h, cooldown {'active' if paused else 'inactive'}, "
+                f"{failed} failed/expired, {pending} pending", not enabled or count >= cap or paused or failed > 0)
+    except (KeyError, TypeError, ValueError):
+        return "Crossfeed Chat wake: unavailable", True
+
+
+def doctor(gateway, known_states, wake_status=None):
     """Report the already-read saved-worker states without a separate CLI."""
     try:
-        template = gateway["lane_template"]
+        wake_line, wake_failed = wake_status or ("Crossfeed Chat wake: unavailable", True)
         failed = not known_states or any(state not in {"sleeping", "probed-ok"}
                                         for state in known_states.values())
         rows = ", ".join(f"{selector}={state}" for selector, state in sorted(known_states.items())) or "no saved labels"
-        action = "configure saved workers or start Crossfeed Chat" if failed else "none"
-        return f"{gateway['service_id']}: {rows}; owner action: {action}; {wake_guard_status(template)}; {wake_log_status(template)}", failed
+        failed = failed or wake_failed
+        action = "check Crossfeed Chat workers and extension wake status" if failed else "none"
+        return f"{gateway['service_id']}: {rows}; owner action: {action}; {wake_line}", failed
     except (Rejected, OSError, KeyError, TypeError, ValueError):
         return "ChatGPT gateway unavailable; owner action: configure or start Crossfeed Chat", True

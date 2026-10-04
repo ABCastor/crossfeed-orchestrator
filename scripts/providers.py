@@ -257,7 +257,6 @@ def add(path, *, id, kind, label="", base_url="", credential_ref="", key="", mod
             template["auth"] = {"kind": "subscription-relay", "terms_class": "owner-accepted",
                                 "owner_acceptance": {"date": datetime.date.today().isoformat(), "quote": acceptance.strip()}}
             template["quota_pool"] = pool
-            template["wake_state_file"] = str(path.expanduser().resolve().parent / "provider-wakes" / id / "wake-state.json")
             source["gateway"] = {"service_id": id, "lane_prefix": id + ":", "lane_template": template,
                                  "models": result["selected"] if models else None}
             lanes = []
