@@ -70,7 +70,8 @@ The code is [MIT](LICENSE). The signature artwork and bundled fonts have separat
 <p>
   <a href="https://abcastor.com">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/castor-footer-dark.png">
+      <source media="(prefers-color-scheme: dark)" srcset="docs/castor-footer-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/castor-footer-light.svg">
       <img src="docs/castor-footer-light.png" width="800" alt="Chip, the Castor beaver, by Castor, we give a dam">
     </picture>
   </a>
