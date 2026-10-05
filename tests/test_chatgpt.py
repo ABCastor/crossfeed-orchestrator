@@ -322,6 +322,13 @@ subprocess.Popen=popen
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "[REDACTED]\n")
 
+    def test_default_silence_reports_without_killing(self):
+        self.env['CROSSFEED_TEST_SILENCE_INTERVAL_S'] = '1'
+        result = self.run_adapter('buffered')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('silent for ', result.stderr)
+        self.assertNotIn('LIMIT FIRED', result.stderr)
+
     def test_buffered_default_and_timeouts(self):
         self.assertEqual(self.run_adapter("buffered").returncode, 0)
         for flag, code in [("--wall", 124), ("--idle", 125)]:

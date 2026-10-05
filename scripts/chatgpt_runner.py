@@ -166,6 +166,8 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
     child.start()
     sender.close()
     started = progress = time.monotonic()
+    reported_silence = 0
+    silence_interval = max(1, int(os.environ.get("CROSSFEED_TEST_SILENCE_INTERVAL_S", "600")))
     group_ready = False
     try:
         while True:
@@ -178,6 +180,12 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
                 raise Rejected(124, "wall timeout")
             if args.idle and now - progress >= args.idle:
                 raise Rejected(125, "idle timeout; buffered HTTP bytes are the only progress signal")
+            idle_for = now - progress
+            if idle_for < reported_silence:
+                reported_silence = 0
+            if idle_for - reported_silence >= silence_interval:
+                print(f"chatgpt-agent: silent for {int(idle_for // 60)} min ({int(idle_for)}s); still running", file=sys.stderr, flush=True)
+                reported_silence = idle_for
             cutoff = deadline if deadline is not None else started + args.wall if args.wall else None
             poll_wait = min(.05, max(0, cutoff - now)) if cutoff is not None else .05
             if receiver.poll(poll_wait):
