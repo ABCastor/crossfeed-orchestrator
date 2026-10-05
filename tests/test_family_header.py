@@ -174,7 +174,7 @@ class FamilyHeaderTests(unittest.TestCase):
     def test_every_part_rides_up_with_the_page_on_one_range_one_to_one_then_holds(self):
         riders = re.search(r"\n  ([^{\n]+)\{animation:mast-ride linear forwards;animation-timeline:scroll\(root\);"
                            r"animation-range:0 var\(--travel\)\}", HELD).group(1)
-        self.assertEqual(riders.split(","), [".mast .brand", ".mast .nav", ".mast .bar-tools", ".mast .here", ".mast::after", ".find-panel"])
+        self.assertEqual(riders.split(","), [".mast .brand", ".mast .nav", ".mast .bar-tools", ".mast .here", ".mast::after", ".find-panel", ".settings-panel"])
         # One keyframe, one range, nothing else moves: no part may start later, last longer or run on its own timeline
         # (the old header eased the name over one range and faded a second name in over another: scattered).
         self.assertEqual(HELD.count("animation:"), 1)
@@ -244,20 +244,25 @@ class FamilyHeaderTests(unittest.TestCase):
             # the name, 12px of air, the lens, toggle and gear (73.2px): the row holds them, at the name's held size
             self.assertLessEqual(brand_width(env) + 12 + 3 * 24.4, column + 1e-9, width)
         self.assertAlmostEqual(tokens(402, False)["--nm"], (402 - 32 - 86 - 21.46) / 12.533)   # three controls keep a 402px row within its column
-        # the drawings' centre 4.7px over the baseline (the toggle disc's radius), riding the large name's baseline
-        self.assertIn(".bar-tools{display:flex;align-items:center;flex:none;align-self:flex-end;gap:0;"
-                      "margin:-10px 0 calc(1.15rem * 6.15 / 24 - 22px) 1.1rem;color:var(--machine)}", CSS)
+        # All three approved 17px controls share colour and baseline geometry.
+        tools = rule(CSS, ".bar-tools")
+        self.assertEqual(tools["--tool-icon-size"], "17px")
+        self.assertEqual(tools["--tool-color"], "light-dark(var(--human),var(--machine))")
+        self.assertEqual(tools["color"], "var(--tool-color)")
+        self.assertEqual(tools["margin"],
+                         "-10px 0 calc(var(--tool-icon-size) * 6.15 / 24 - 22px) 1.1rem")
+        self.assertEqual(tools["align-self"], "flex-end")
         self.assertIn("@media (max-width:680px){.mast .bar-tools{translate:0 calc(10px * (1 - var(--h0)))}}", HELD)
         self.assertNotIn("bar-name", render())
 
     def test_reduced_motion_stops_every_animation_but_the_ride_which_is_the_pages_own_movement(self):
         kill = re.search(r"@media\(prefers-reduced-motion:reduce\)\{([^{]+)\{animation:none!important", CSS).group(1)
-        self.assertEqual(kill, ":not(.mast>.brand,.mast>.nav,.mast>.bar-tools,.mast>.here,.find-panel),"
+        self.assertEqual(kill, ":not(.mast>.brand,.mast>.nav,.mast>.bar-tools,.mast>.here,.find-panel,.settings-panel),"
                                ":not(.mast)::before,:not(.mast)::after")
 
     def test_the_search_panel_opens_under_the_line_at_the_columns_end_and_rides_with_it(self):
-        self.assertEqual(rule(CSS, ".find-panel")["top"], "calc(100% + var(--line-w))")
-        panel = rule(HELD, ".find-panel")
+        self.assertEqual(rule(CSS, ".find-panel,.settings-panel")["top"], "calc(100% + var(--line-w))")
+        panel = rule(HELD, ".find-panel,.settings-panel")
         self.assertEqual((panel["right"], panel["width"]), ("var(--gut)", "min(25rem,100% - 2 * var(--gut))"))
 
     def test_one_block_at_the_end_of_the_file(self):

@@ -3927,6 +3927,7 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
     but routes to a CLI that is not installed or a pool nobody measures.
     """
     problems = 0
+    warnings = 0
     print(f"overlay:   {overlay_path}")
     try:
         roster = read_overlay(overlay_path, state_dir)
@@ -4006,7 +4007,7 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
             if (roster["quota_pools"][pool] or {}).get("daily_usd_cap") is not None:
                 print(f"  ok       {pool:24s} metered by a daily cap, no percentage quota")
                 continue
-            problems += 1
+            warnings += 1
             print(f"  NONE     {pool:24s} unmeasured -> routes unthrottled, band is not real")
             continue
         oracle = cfg.get("oracle", "codexbar")
@@ -4030,8 +4031,12 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
     if problems:
         print(f"{problems} thing(s) to fix. Missing effort refuses wrapper dispatch; "
               "unmeasured quota pools route at full quality.")
+    elif warnings:
+        print("No blocking problems found.")
     else:
         print("No problems found.")
+    if warnings:
+        print(f"{warnings} warning(s): quota is unmeasured; routing remains available.")
     return 1 if problems else 0
 
 
