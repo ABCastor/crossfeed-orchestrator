@@ -22,7 +22,7 @@ Crossfeed Chat wakes a saved sleeping worker when the orchestrator sends its req
 
 Requests go to `/v1/chat/completions` with `model: "chatgpt:<label>"`, text-only input, `tool_choice: "none"` and an `Idempotency-Key`. The default key is the persisted run ID. To retry explicitly, reuse that key with the identical prompt and options. The gateway owns duplicate-request handling; the orchestrator does not automatically retry uncertain delivery. `fleetctl.py dispatch` tries its next selector choice after a worker wake or request failure. A direct wrapper call returns the error to its caller.
 
-Install the [Crossfeed Chat](https://github.com/Anneo22/crossfeed-chat) service and pair its Chrome extension.
+The Crossfeed Chat service and its paired Chrome extension are currently private. If you already have access, install and pair them before configuring this adapter. A Chat relay is optional for the core router.
 
 Crossfeed Chat runs separately. This repository does not install its service or manage its browser connection.
 

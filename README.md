@@ -21,7 +21,7 @@ python3 scripts/fleetctl.py console
 
 The *overlay* is your machine's roster of plans, models and roles. Replace the example settings with your own. Keep only signed-in, tested lanes `verified`; mark the others `unverified`. `doctor` reports setup gaps and exits nonzero until you fix them. Before dispatch, verify the example thinking-level settings and record their evidence dates. [Installation details](docs/USAGE.md#install), [agent skill setup](docs/SKILL-INSTALL.md) and [Linux setup](docs/LINUX.md).
 
-ChatGPT relay integration is optional and follows [Crossfeed Chat’s macOS, Chrome and Node requirements](https://github.com/Anneo22/crossfeed-chat).
+ChatGPT relay integration is optional and needs a separately installed Crossfeed Chat service. That service is currently private; [adapter configuration and limits](docs/CHATGPT.md) are documented here.
 
 ## Give it work
 
