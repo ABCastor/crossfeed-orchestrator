@@ -105,3 +105,77 @@ class SettingsTests(ConsoleServerTests):
         self.assertIn('Details', row)
         self.assertIn('Media tasks.', row)
         self.assertNotIn('Text only.', row)
+
+    def test_provider_page_contains_anchored_settings_without_duplicate_ids(self):
+        import re
+        overview = self.app.overview(refresh=False)
+        page = console.render_page(overview, self.app.form_token)
+        self.assertIn('class="settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden', page)
+        self.assertIn('aria-controls="settings-panel"', page)
+        self.assertIn('data-theme-choice', page)
+        self.assertIn('href="/#provider-setup"', page)
+        ids = re.findall(r' id="([^"]+)"', page)
+        self.assertEqual(len(ids), len(set(ids)), 'panel cannot duplicate existing control or SVG IDs')
+        roster = overview['_brief_context']['roster']
+        roster['quota_pools']['panel-pro'] = {'pro_weekly_allowance': 123}
+        roster['lanes'].append({'harness': 'chatgpt-chat', 'selector': 'chatgpt:latest-pro', 'quota_pool': 'panel-pro'})
+        content = console._settings_content(overview, self.app.form_token, panel=True)
+        self.assertIn('action="/settings/pro"', content)
+        self.assertIn('name="t" value="' + self.app.form_token + '"', content)
+        self.assertIn('name="pool" value="panel-pro"', content)
+        self.assertIn('name="return" value="panel"', content)
+        self.assertIn('value="123"', content)
+
+    def test_allowance_panel_save_returns_to_panel_not_another_page(self):
+        import urllib.parse
+        with mock.patch.object(self.app, 'set_pro_allowance') as save:
+            response, _ = self.request('POST', '/settings/pro',
+                headers={'Cookie': self.cookie(), 'Origin': self.origin()},
+                body=urllib.parse.urlencode({'t': self.app.form_token, 'pool': 'fixture-pro',
+                                            'allowance': '123', 'return': 'panel'}))
+        save.assert_called_once_with('fixture-pro', '123')
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader('Location'), '/#settings')
+
+    def test_toolbar_shares_stroke_and_resolved_theme_colour_without_moon_ring(self):
+        import xml.etree.ElementTree as ET
+        css = (console.ASSETS / 'console.css').read_text()
+        controls = ':is(.find-lens,.theme-toggle,.settings-toggle)'
+        self.assertIn('--tool-color:light-dark(var(--human),var(--machine))', css)
+        self.assertIn('.bar-tools' + controls + 'svg', css.replace(' ', ''))
+        self.assertIn('fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round', css)
+        self.assertNotIn('html:is([data-theme-choice="light"],[data-theme-choice="dark"]) .bar-tools .theme-toggle', css)
+        svg = ET.fromstring('<svg' + console.THEME_TOGGLE.split('<svg', 1)[1].split('</svg>', 1)[0] + '</svg>')
+        self.assertEqual(svg.get('viewBox'), '0 0 24 24')
+        self.assertEqual([node.tag for node in svg if node.get('class') == 't-moon'], ['path'])
+        self.assertNotIn('mask', console.THEME_TOGGLE)
+        self.assertNotIn('t-ring', console.THEME_TOGGLE)
+        for mode, icon in [('light', 't-sun'), ('dark', 't-moon'), ('system', 't-system')]:
+            self.assertIn(f'html[data-theme-choice="{mode}"] .theme-toggle .{icon}', css)
+        self.assertEqual(svg.find('g[@class="t-system"]/circle').get('r'), '9')
+        lens = ET.fromstring(console.LENS)
+        self.assertEqual(lens.find('g/circle').get('stroke-width'), '1.6')
+        self.assertEqual(lens.find('g/path').get('stroke-width'), '1.6')
+
+    def test_panel_render_does_not_fetch_a_live_cap_until_opened(self):
+        overview = self.app.overview(refresh=False)
+        with mock.patch.object(console, '_settings_cap', return_value='7 fresh chats per rolling hour') as cap:
+            console.render_page(overview, self.app.form_token)
+            cap.assert_not_called()
+            response, body = self.request('GET', '/settings?cap=1', headers={'Cookie': self.cookie()})
+            cap.assert_called_once()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(body), {'cap': '7 fresh chats per rolling hour'})
+
+    def test_settings_panel_retains_header_scroll_alignment_with_reduced_motion(self):
+        import re
+        css = (console.ASSETS / 'console.css').read_text()
+        exemptions = re.search(r'@media\(prefers-reduced-motion:reduce\)\{:not\(([^)]*)\)', css)
+        self.assertIsNotNone(exemptions)
+        self.assertIn('.settings-panel', exemptions.group(1).split(','),
+                      'reduced motion must retain the panel header ride, as it retains the search panel ride')
+        ride = re.search(r'([^{}]+)\{animation:mast-ride linear forwards;([^}]*)\}', css)
+        self.assertIsNotNone(ride)
+        self.assertIn('.settings-panel', ride.group(1).strip().split(','))
+        self.assertIn('animation-timeline:scroll(root)', ride.group(2))
+        self.assertIn('animation-range:0 var(--travel)', ride.group(2))

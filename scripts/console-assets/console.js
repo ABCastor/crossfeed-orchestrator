@@ -232,14 +232,18 @@ function boot(document, window) {
       mark.style.setProperty('--cf-left', `${level * 7}px`);
       mark.style.setProperty('--cf-right', `${level * -7}px`);
       mark.style.setProperty('--cf-pipe', pipe);
-      mark.style.setProperty('--cf-flow', phase === 'travel' || phase === 'transfer' ? 1 : 0);
+      const flowing = ['opening', 'travel', 'transfer', 'hold', 'closing'].includes(phase) && angle > 0 && pipe < 1;
+      mark.style.setProperty('--cf-flow', flowing ? 1 : 0);
+      flowing ? mark.setAttribute('data-flow-active', '') : mark.removeAttribute('data-flow-active');
+      pipe === 0 ? mark.setAttribute('data-flow-filled', '') : mark.removeAttribute('data-flow-filled');
+      flowing && runnable() ? mark.setAttribute('data-flow-running', '') : mark.removeAttribute('data-flow-running');
       runnable() && wanted() ? mark.setAttribute('data-mark-active', '') : mark.removeAttribute('data-mark-active');
     };
     const begin = next => {
       phase = next; elapsed = 0;
       if (next === 'opening') { from = angle; duration = (1 - angle) * 400; }
-      if (next === 'travel') { pipe = 1; from = pipe; duration = 800; }
-      if (next === 'transfer') { from = level; duration = (1 - level) * 1600; }
+      if (next === 'travel') { from = pipe; duration = pipe * 800; }
+      if (next === 'transfer') { from = level; duration = (1 - level) * 1200; }
       if (next === 'hold') duration = touching && !hovering ? 600 : Infinity;
       if (next === 'closing') { from = angle; duration = angle * 400; }
       if (next === 'reset') { from = level; duration = level * 2000; }
@@ -251,12 +255,12 @@ function boot(document, window) {
         elapsed += used; delta -= used;
         const progress = duration === 0 ? 1 : elapsed / duration;
         if (phase === 'opening') angle = from + (1 - from) * progress;
-        if (phase === 'travel') pipe = 1 - progress;
+        if (phase === 'travel') pipe = from * (1 - progress);
         if (phase === 'transfer') level = from + (1 - from) * progress;
         if (phase === 'closing') angle = from * (1 - progress);
         if (phase === 'reset') level = from * (1 - progress);
         if (elapsed < duration) break;
-        if (phase === 'opening') begin(level === 1 ? 'hold' : 'travel');
+        if (phase === 'opening') begin(level === 1 ? 'hold' : pipe === 0 ? 'transfer' : 'travel');
         else if (phase === 'travel') begin('transfer');
         else if (phase === 'transfer') begin('hold');
         else if (phase === 'hold') { touching = false; begin('closing'); }
@@ -383,6 +387,7 @@ function boot(document, window) {
   }
   function openSearch() {
     if (!panel) return;
+    closeSettings();
     if (panel.hidden) returnFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : lens;
     panel.hidden = false; lens.setAttribute('aria-expanded', 'true');
     search(); input.focus(); input.select?.();
@@ -392,6 +397,42 @@ function boot(document, window) {
     panel.hidden = true; lens.setAttribute('aria-expanded', 'false');
     if (restore) (returnFocus || lens).focus();
     returnFocus = null;
+  }
+  // Settings is a non-modal panel; the link remains a working fallback without JS.
+  const settingsToggle = document.querySelector('.settings-toggle');
+  const settingsPanel = document.querySelector('#settings-panel');
+  const settingsCap = settingsPanel?.querySelector('[data-settings-cap]');
+  let capLoaded = false;
+  function openSettings() {
+    if (!settingsPanel) return;
+    closeSearch(false);
+    settingsPanel.hidden = false;
+    settingsToggle.setAttribute('aria-expanded', 'true');
+    if (settingsCap && !capLoaded) {
+      capLoaded = true;
+      window.fetch('/settings?cap=1', {headers: {Accept: 'application/json'}})
+        .then(response => { if (!response.ok) throw new Error('Cap unavailable'); return response.json(); })
+        .then(result => { settingsCap.textContent = result.cap; })
+        .catch(() => { settingsCap.textContent = 'Unavailable, the live cap could not be read.'; capLoaded = false; });
+    }
+    settingsPanel.querySelector('select, input:not([type="hidden"]), button, a')?.focus();
+  }
+  function closeSettings(restore = true) {
+    if (!settingsPanel || settingsPanel.hidden) return;
+    settingsPanel.hidden = true;
+    settingsToggle.setAttribute('aria-expanded', 'false');
+    if (restore) settingsToggle.focus();
+  }
+  if (settingsToggle && settingsPanel) {
+    settingsToggle.setAttribute('role', 'button');
+    settingsToggle.addEventListener('click', event => {
+      event.preventDefault();
+      settingsPanel.hidden ? openSettings() : closeSettings();
+    });
+    settingsToggle.addEventListener('keydown', event => {
+      if (event.key === ' ') { event.preventDefault(); settingsToggle.click(); }
+    });
+    if (window.location.hash === '#settings') openSettings();
   }
   lens?.addEventListener('click', () => (panel.hidden ? openSearch() : closeSearch()));
   input?.addEventListener('input', search);
@@ -408,10 +449,12 @@ function boot(document, window) {
     links[next].focus();
   });
   document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && settingsPanel && !settingsPanel.hidden) { event.preventDefault(); closeSettings(); return; }
     if (event.key === 'Escape' && panel && !panel.hidden) { event.preventDefault(); closeSearch(); return; }
     if (lens && Crossfeed.searchShortcut(event)) { event.preventDefault(); openSearch(); }
   });
   document.addEventListener('click', event => {
+    if (settingsPanel && !settingsPanel.hidden && !event.target.closest('.settings-panel, .settings-toggle')) closeSettings(false);
     if (panel && !panel.hidden && !event.target.closest('.find-panel, .find-lens')) closeSearch(false);
   });
   if (window.location.hash) {

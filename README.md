@@ -1,17 +1,17 @@
-<img src="docs/readme-header.svg" width="440" height="196.968" alt="Crossfeed Orchestrator">
+<h1><img src="docs/readme-header.svg" width="112" height="72" align="absmiddle" alt=""> Crossfeed Orchestrator</h1>
 
 Crossfeed Orchestrator routes AI coding work to the right provider and model across your subscriptions, then supervises each worker.
 
 Your local console controls which models agents may use and how freely they spend each plan. Routing reads those settings before every job.
 
-[![Tests](https://github.com/ABCastor/crossfeed-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/ABCastor/crossfeed-orchestrator/actions/workflows/tests.yml)
+[![Tests](https://github.com/Anneo22/orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/Anneo22/orchestrator/actions/workflows/tests.yml)
 
 ## Install
 
 You need Python 3.9+, bash, [jq](https://jqlang.org) and your chosen vendor CLIs, installed and signed in. No extra Python packages.
 
 ```bash
-git clone https://github.com/ABCastor/crossfeed-orchestrator ~/crossfeed-orchestrator
+git clone https://github.com/Anneo22/orchestrator ~/crossfeed-orchestrator
 cd ~/crossfeed-orchestrator
 mkdir -p ~/.config/orchestrator
 cp examples/access-overlay.example.json ~/.config/orchestrator/access-overlay.json
@@ -35,8 +35,7 @@ A *lane* is a model on a tool, funded by a quota pool. Crossfeed selects a lane 
 
 ## Documentation
 
-- [Demo console](docs/DEMO.md), [quota refresh](docs/QUOTA-REFRESH.md) and [benchmark harness](bench/README.md).
-- [Usage guide](docs/USAGE.md) and [portable examples](docs/PORTABLE-USAGE.md): routing, wrappers, parallel jobs, spend levels, model switches, providers and quota sources.
+- [Usage guide](docs/USAGE.md): routing, wrappers, parallel jobs, spend levels, model switches, providers and quota sources.
 - [Selector](docs/SELECTOR.md), [thinking levels](docs/EFFORT.md) and [adapter contracts](docs/ADAPTERS.md).
 - [ChatGPT relay setup and limits](docs/CHATGPT.md) and [API client setup](docs/LANES-API.md).
 - [Agent operating manual](skill/SKILL.md): briefs, isolation, supervision and verification.
@@ -44,8 +43,6 @@ A *lane* is a model on a tool, funded by a quota pool. Crossfeed selects a lane 
 Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google), [OpenCode](https://opencode.ai), [Copilot CLI](https://github.com/github/copilot-cli) and [OpenRouter](https://openrouter.ai). [Pi](https://github.com/earendil-works/pi) supports admitted API and partner-plan routes.
 
 ## Limits and tests
-
-The selector has not yet been proven better than simpler routing policies on hard tasks. Use the [benchmark harness](bench/README.md) to measure your own workloads.
 
 Missing quota measurements stay unknown. The Copilot wrapper runs one read-only Auto observer at a time; Antigravity requires write mode. ChatGPT relay lanes need dated acceptance of account risk, and their underlying model identity remains unconfirmed. [Full status and limits](docs/USAGE.md#status-and-limits).
 
@@ -63,4 +60,6 @@ Credit to upstream contributor: Rocco Angelella's [PiLink](https://github.com/ro
 
 The code is [MIT](LICENSE). The artwork and bundled fonts have separate terms in [NOTICE](NOTICE).
 
-<p><a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, by Castor, we give a dam"></a></p>
+<p>
+  <a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, by Castor, we give a dam"></a>
+</p>

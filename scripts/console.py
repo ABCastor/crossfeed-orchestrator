@@ -352,12 +352,12 @@ THEME_TOGGLE = (ASSETS / "theme-toggle.html").read_text(encoding="utf-8")
 
 LENS = (
     '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round">'
-    '<circle cx="10" cy="10" r="7" stroke-width="1.5"/>'
+    '<circle cx="10" cy="10" r="7" stroke-width="1.6"/>'
     '<path d="M15.2 15.2 21 21" stroke-width="1.6"/></g></svg>'
 )
 SETTINGS_ICON = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path '
                  'd="M9.7 3.7h4.6l.6 2.4 2.1 1.2 2.4-.6 2.3 4-1.8 1.8v2.4l1.8 1.8-2.3 4-2.4-.6-2.1 1.2-.6 2.4H9.7l-.6-2.4L7 20.1l-2.4.6-2.3-4 1.8-1.8v-2.4l-1.8-1.8 2.3-4 2.4.6 2.1-1.2.6-2.4Z" '
-                 'transform="translate(1 0) scale(.91)"/><circle cx="12" cy="12" r="3"/></svg>')
+                 'transform="translate(1.2 -.33) scale(.9)" stroke-width="1.7777778"/><circle cx="12" cy="12" r="3"/></svg>')
 CHEVRON = '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9.5 5 5 5-5"/></svg>'
 # Drawn in the lens's stroke, so every icon on the page is one family.
 OUT = ('<svg class="out" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h8.5V15M17.2 6.8 7 17"/></svg>')
@@ -374,7 +374,7 @@ _BN, _, _BD = PRODUCT_NAME.partition(" ")
 BRAND_WORDS = f'<span class="bn">{html.escape(_BN)}</span> <span class="bd">{html.escape(_BD)}</span>'
 
 
-def _masthead(settings: bool = False) -> str:
+def _masthead(settings: bool = False, settings_content: str = "") -> str:
     """The Castor product header: everything stands on one line that is exactly the column.
 
     It is fixed to the screen and every part rides up with the page, 1:1, until the air above the
@@ -383,6 +383,7 @@ def _masthead(settings: bool = False) -> str:
     name = html.escape(PRODUCT_NAME)
     provider_current = ' aria-current="page"' if not settings else ""
     settings_current = ' aria-current="page"' if settings else ""
+    settings_controls = ' aria-expanded="false" aria-controls="settings-panel"' if settings_content else ""
     return (
         '<header class="mast" data-line><i class="here" aria-hidden="true"></i><span class="brand">'
         f'<a class="product-mark" href="/" aria-label="{name} console">{MARK}</a>'
@@ -393,16 +394,19 @@ def _masthead(settings: bool = False) -> str:
         '<button class="find-lens" type="button" aria-label="Search everything  /" title="Search everything  /" '
         'aria-keyshortcuts="/ Meta+K Control+K" aria-expanded="false" aria-controls="find">'
         f'{LENS}</button></span>{THEME_TOGGLE}'
-        f'<a class="settings-toggle" href="/settings"{settings_current} aria-label="Settings" title="Settings">{SETTINGS_ICON}</a></span>'
+        f'<a class="settings-toggle" href="/settings"{settings_current} aria-label="Settings" title="Settings"{settings_controls}>{SETTINGS_ICON}</a></span>'
         '<div class="find-panel" id="find" hidden><label for="global-search-input">Search everything</label>'
         '<span class="find-field"><input id="global-search-input" type="search" autocomplete="off" '
         'placeholder="Find a provider or model" aria-controls="search-results" aria-keyshortcuts="Meta+K Control+K">'
         '<kbd class="key-hint" aria-hidden="true">⌘K</kbd></span>'
-        '<p class="search-status" role="status"></p><ul id="search-results"></ul></div></header>'
+        '<p class="search-status" role="status"></p><ul id="search-results"></ul></div>'
+        + (f'<section class="settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden>'
+           f'<h2 id="settings-title">Settings</h2>{settings_content}</section>' if settings_content else '')
+        + '</header>'
     )
 
 
-def shell(title: str, body: str, front: bool = False, settings: bool = False) -> str:
+def shell(title: str, body: str, front: bool = False, settings: bool = False, settings_content: str = "") -> str:
     """A page. `front` is the console's front page, where the name starts as large as its row allows."""
     fonts = "".join(f'<link rel="preload" href="/static/fonts/{font}" as="font" type="font/woff2" crossorigin>'
                     for font in PRELOAD_FONTS)
@@ -416,12 +420,12 @@ def shell(title: str, body: str, front: bool = False, settings: bool = False) ->
         f'<link rel="stylesheet" href="/static/console.css?v={_asset_version("console.css")}">'
         f'<script src="/static/console.js?v={_asset_version("console.js")}" defer></script>'
         f'<script src="/static/keep.js?v={_asset_version("keep.js")}" defer></script></head>'
-        f'<body><div class="wrap">{_masthead(settings)}<main>{body}</main>{FOOTER}</div></body></html>'
+        f'<body><div class="wrap">{_masthead(settings, settings_content)}<main>{body}</main>{FOOTER}</div></body></html>'
     )
 
 
-def render_settings(overview: dict[str, Any], token: str) -> str:
-    roster = overview['_brief_context']['roster']
+def _settings_cap(overview: dict[str, Any]) -> str:
+    roster = overview.get('_brief_context', {}).get('roster', {})
     cap = "Unavailable, Crossfeed Chat did not report a live cap."
     template = roster.get('chatgpt_gateway', {}).get('lane_template')
     if template:
@@ -434,27 +438,38 @@ def render_settings(overview: dict[str, Any], token: str) -> str:
                 cap = f"{hourly} fresh chats per rolling hour" if hourly else "No hourly cap"
         except (Rejected, OSError, ValueError, TypeError, AttributeError):
             pass
+    return cap
+
+
+def _settings_content(overview: dict[str, Any], token: str, *, panel: bool = False) -> str:
+    roster = overview.get('_brief_context', {}).get('roster', {})
+    cap = "Loading the live cap…" if panel else _settings_cap(overview)
     forms = []
     for pool, config in roster.get('quota_pools', {}).items():
         if any(fleetctl.chatgpt_pro.is_pro(lane) and lane.get('quota_pool') == pool for lane in roster.get('lanes', [])):
             forms.append(f'<form method="post" action="/settings/pro" class="setting-row">'
                          f'<input type="hidden" name="t" value="{html.escape(token)}">'
                          f'<input type="hidden" name="pool" value="{html.escape(pool)}">'
+                         + ('<input type="hidden" name="return" value="panel">' if panel else '') +
                          f'<label>Pro weekly allowance<input type="number" name="allowance" min="0" max="999999" required '
                          f'value="{config.get("pro_weekly_allowance", 200)}"></label><button type="submit">Save allowance</button>'
                          '<p class="quiet">Local estimate over the last seven days, not a published ChatGPT limit. '
                          'This changes the Pro meter and its fallback threshold. Zero disables Pro by this estimate.</p></form>')
-    return shell('Settings', '<h1>Settings</h1><p class="lede">Preferences and local limits.</p>'
-                 '<section class="settings"><div class="setting-row"><label for="theme-choice">Theme</label>'
+    return ('<section class="settings"><div class="setting-row"><label for="theme-choice">Theme</label>'
                  '<select id="theme-choice" data-theme-choice><option value="system">System</option>'
                  '<option value="light">Light</option><option value="dark">Dark</option></select>'
                  '<p class="quiet">Saved in this browser.</p></div>' + ''.join(forms) +
-                 f'<div class="setting-row"><h2>Fresh ChatGPT chats</h2><p>Hourly cap: {html.escape(cap)}.</p>'
+                 f'<div class="setting-row"><h2>Fresh ChatGPT chats</h2><p>Hourly cap: <span data-settings-cap>{html.escape(cap)}</span>.</p>'
                  '<p class="quiet">Read the service status for the live cap. Set <code>--wake-hourly-cap</code> '
                  'in the Crossfeed Chat service launcher and restart that service. This console cannot change it.</p></div>'
                  '<div class="setting-row"><h2>Provider keys</h2><p>Keys entered here stay in <code>provider-keys/</code> beside your access overlay, '
                  'or in the secret reference you supplied. Values are never shown here.</p>'
-                 '<a href="/#provider-setup">Add provider</a></div></section>', settings=True)
+                 '<a href="/#provider-setup">Add provider</a></div></section>')
+
+
+def render_settings(overview: dict[str, Any], token: str) -> str:
+    return shell('Settings', '<h1>Settings</h1><p class="lede">Preferences and local limits.</p>'
+                 + _settings_content(overview, token), settings=True)
 
 
 def _ago(seconds: int | None) -> str:
@@ -1254,7 +1269,7 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
         f'<pre id="agent-brief">{html.escape(_brief(overview))}</pre>'
         f'<pre class="brief-full" hidden>{html.escape(_brief(overview, True))}</pre></div></section>'
     )
-    return shell("Providers", body, front=True)
+    return shell("Providers", body, front=True, settings_content=_settings_content(overview, form_token, panel=True))
 
 
 def message_page(title: str, text: str) -> str:
@@ -1334,6 +1349,9 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 if url.path == "/snapshot":
                     self._send(200, json.dumps(snapshot_payload(overview)).encode(), "application/json; charset=utf-8")
                     return
+                if url.path == "/settings" and urllib.parse.parse_qs(url.query).get('cap') == ['1']:
+                    self._send(200, json.dumps({'cap': _settings_cap(overview)}).encode(), "application/json; charset=utf-8")
+                    return
                 page = render_settings(overview, console.form_token) if url.path == "/settings" else render_page(overview, console.form_token)
             except (fleetctl.FleetError, OSError, ValueError) as exc:
                 self._refuse(500, "The fleet could not be read", str(exc))
@@ -1395,7 +1413,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     return
                 if path == '/settings/pro':
                     console.set_pro_allowance(pool, fields.get('allowance', [''])[0])
-                    self._redirect('/settings')
+                    self._redirect('/#settings' if fields.get('return', [''])[0] == 'panel' else '/settings')
                     return
                 if path == '/order':
                     console.set_order(json.loads(fields.get('order', [''])[0]))

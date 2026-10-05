@@ -996,9 +996,9 @@ test('hover beyond the old 8s cycle holds the valve open and equal without loopi
   f.advance(800);
   assert.equal(f.markValues().pipe, 0);
   assert.equal(f.markValues().left, 0);
-  assertPhysicalTrace(f, 1600);
+  assertPhysicalTrace(f, 1200);
   const held = f.markValues();
-  assert.deepEqual(held, {state: 'hold', valve: 90, left: 7, right: -7, pipe: 0, flow: 0});
+  assert.deepEqual(held, {state: 'hold', valve: 90, left: 7, right: -7, pipe: 0, flow: 1});
   f.advance(24000);
   assert.deepEqual(f.markValues(), held);
   assert.equal(f.pendingFrames(), 0, 'hold consumes no animation frames');
@@ -1099,7 +1099,7 @@ test('touch tap runs one bounded cycle without navigation; repeat tap can close 
   f.mark.dispatch('pointerdown', {pointerType: 'touch'});
   f.mark.dispatch('click', {preventDefault() { prevented = true; }});
   assert.equal(prevented, true);
-  assertPhysicalTrace(f, 2800);
+  assertPhysicalTrace(f, 2400);
   assert.equal(f.markValues().state, 'hold');
   assertPhysicalTrace(f, 3000);
   assert.equal(f.markValues().state, 'idle');
@@ -1123,4 +1123,180 @@ test('reduced motion stays static on hover/touch and stops an in-flight sequence
   assert.equal(f.markValues().state, 'idle');
   assert.equal(f.markValues().left, 0);
   assert.equal(f.pendingFrames(), 0);
+});
+
+function settingsFixture(options = {}) {
+  return start({...options, prepare(env) {
+    env.gear = h('a', {class: 'settings-toggle', href: '/settings', 'aria-expanded': 'false'});
+    env.themeSelect = h('select', {'data-theme-choice': ''});
+    env.settings = h('section', {class: 'settings-panel', id: 'settings-panel', hidden: ''}, env.themeSelect,
+      h('form', {action: '/settings/pro'}, h('input', {name: 'allowance', value: '200'}), h('button', {type: 'submit'})),
+      h('a', {href: '/#provider-setup'}));
+    env.document.querySelector('.mast').append(env.gear, env.settings);
+  }});
+}
+
+test('settings opens anchored without navigating, preserves form, Escape restores gear focus', () => {
+  const f = settingsFixture();
+  let prevented = false;
+  f.gear.dispatch('click', {preventDefault() { prevented = true; }});
+  assert.equal(prevented, true);
+  assert.equal(f.settings.hidden, false);
+  assert.equal(f.gear.getAttribute('aria-expanded'), 'true');
+  assert.equal(f.gear.getAttribute('role'), 'button');
+  assert.equal(f.document.activeElement, f.themeSelect);
+  f.settings.querySelector('input').value = '123';
+  f.document.dispatch('keydown', {key: 'Escape'});
+  assert.equal(f.settings.hidden, true);
+  assert.equal(f.document.activeElement, f.gear);
+  f.gear.dispatch('keydown', {key: ' '});
+  assert.equal(f.settings.hidden, false);
+  assert.equal(f.settings.querySelector('input').value, '123');
+});
+
+test('settings and search close each other; clicks inside stay open, outside keeps its focus', () => {
+  const f = settingsFixture(); f.lens.click(); f.gear.click();
+  assert.equal(f.panel.hidden, true);
+  f.document.dispatch('click', {target: f.themeSelect});
+  assert.equal(f.settings.hidden, false);
+  f.other.focus(); f.document.dispatch('click', {target: f.other});
+  assert.equal(f.settings.hidden, true);
+  assert.equal(f.document.activeElement, f.other);
+  f.gear.click(); f.lens.click();
+  assert.equal(f.settings.hidden, true);
+  assert.equal(f.panel.hidden, false);
+  f.document.dispatch('keydown', {key: 'Escape'});
+  assert.equal(f.document.activeElement, f.gear, 'search must not restore focus into a hidden settings panel');
+});
+
+test('saving panel return reopens settings and its theme selector follows the toolbar cycle', () => {
+  const stored = [];
+  const f = settingsFixture({configureWindow(win) {
+    win.location.hash = '#settings';
+    win.localStorage = {getItem: () => 'dark', setItem: (...args) => stored.push(args)};
+  }});
+  assert.equal(f.settings.hidden, false);
+  assert.equal(f.themeSelect.value, 'dark');
+  f.document.querySelector('[data-theme-toggle]').click();
+  assert.equal(f.themeSelect.value, 'system');
+  f.themeSelect.value = 'light'; f.themeSelect.dispatch('change');
+  assert.equal(f.document.documentElement.dataset.themeChoice, 'light');
+  assert.deepEqual(stored.at(-1), ['crossfeed-theme', 'light']);
+});
+
+test('pipe current stays visible through indefinite hold and closure, pauses when hidden, stops before reset', () => {
+  const f = startMark(); enterMark(f); f.advance(2400);
+  assert.equal(f.markValues().state, 'hold');
+  assert.equal(f.markValues().flow, 1);
+  assert.equal(f.mark.hasAttribute('data-flow-running'), true);
+  f.advance(12000);
+  assert.equal(f.markValues().flow, 1);
+  assert.equal(f.pendingFrames(), 0);
+  f.document.hidden = true; f.document.dispatch('visibilitychange');
+  assert.equal(f.mark.hasAttribute('data-flow-running'), false);
+  f.document.hidden = false; f.document.dispatch('visibilitychange');
+  assert.equal(f.mark.hasAttribute('data-flow-running'), true);
+  leaveMark(f); f.advance(200);
+  assert.equal(f.markValues().flow, 1);
+  assert.equal(f.markValues().left, 7);
+  f.advance(200);
+  assert.equal(f.markValues().valve, 0);
+  assert.equal(f.markValues().flow, 0);
+  assert.equal(f.mark.hasAttribute('data-flow-active'), false);
+  assert.equal(f.markValues().left, 7);
+  assertPhysicalTrace(f, 2000);
+});
+
+
+test('live cap loads only on settings open, once, and failed load remains retryable', async () => {
+  const f = start({prepare(env) {
+    env.gear = h('a', {class: 'settings-toggle', href: '/settings'});
+    env.cap = h('span', {'data-settings-cap': ''});
+    env.settings = h('section', {class: 'settings-panel', id: 'settings-panel', hidden: ''}, env.cap);
+    env.document.querySelector('.mast').append(env.gear, env.settings);
+  }});
+  assert.equal(f.requests.length, 0);
+  f.gear.click();
+  assert.equal(f.requests[0].url, '/settings?cap=1');
+  f.requests[0].reject(new Error('Offline')); await flush();
+  assert.match(f.cap.textContent, /Unavailable/);
+  f.gear.click(); f.gear.click();
+  assert.equal(f.requests.length, 2);
+  reply(f.requests[1], {cap: '7 fresh chats per rolling hour'}); await flush();
+  assert.equal(f.cap.textContent, '7 fresh chats per rolling hour');
+  f.gear.click(); f.gear.click();
+  assert.equal(f.requests.length, 2);
+});
+
+test('re-entering during valve closure preserves current through reopening and pauses hidden or reduced motion', () => {
+  const f = startMark(); enterMark(f); f.advance(2400);
+  leaveMark(f); f.advance(200);
+  assert.equal(f.markValues().valve, 45);
+  assert.equal(f.markValues().flow, 1);
+  enterMark(f);
+  assert.equal(f.markValues().state, 'opening');
+  assert.equal(f.markValues().flow, 1, 'reopening never interrupts flow through a valve that has not closed');
+  assert.equal(f.mark.hasAttribute('data-flow-active'), true);
+  assert.equal(f.mark.hasAttribute('data-flow-running'), true);
+  const reopening = f.markValues();
+  f.document.hidden = true; f.document.dispatch('visibilitychange');
+  assert.equal(f.mark.hasAttribute('data-flow-running'), false);
+  f.advance(1000);
+  assert.deepEqual(f.markValues(), reopening);
+  f.document.hidden = false; f.document.dispatch('visibilitychange');
+  assert.equal(f.mark.hasAttribute('data-flow-running'), true);
+  f.advance(100);
+  assert.equal(f.markValues().valve, 67.5);
+  assert.equal(f.markValues().left, 7);
+  assert.equal(f.markValues().flow, 1);
+  f.advance(100);
+  assert.equal(f.markValues().state, 'hold');
+  assert.equal(f.markValues().flow, 1);
+  assert.equal(f.pendingFrames(), 0);
+  leaveMark(f); f.advance(200); enterMark(f);
+  f.media.change(true);
+  assert.equal(f.markValues().flow, 0);
+  assert.equal(f.markValues().state, 'idle');
+  assert.equal(f.mark.hasAttribute('data-flow-running'), false);
+  assert.equal(f.pendingFrames(), 0);
+});
+
+test('reopening a partially transferred vessel resumes transfer without restarting pipe travel', () => {
+  const f = startMark(); enterMark(f); f.advance(1700);
+  assert.equal(f.markValues().state, 'transfer');
+  assert.equal(f.markValues().pipe, 0);
+  const partial = f.markValues();
+  assert.ok(partial.left > 0 && partial.left < 7);
+  leaveMark(f); f.advance(200); enterMark(f);
+  assert.equal(f.markValues().flow, 1);
+  f.advance(200);
+  assert.equal(f.markValues().state, 'transfer');
+  assert.equal(f.markValues().pipe, 0, 'pipe stays filled because the interrupted valve never closed');
+  assert.equal(f.markValues().flow, 1);
+  assert.equal(f.markValues().left, partial.left, 'reopening holds the existing level before transfer resumes');
+  assertPhysicalTrace(f, 700);
+  assert.equal(f.markValues().state, 'hold');
+  assert.equal(f.markValues().left, 7);
+  assert.equal(f.markValues().flow, 1);
+});
+
+test('reopening during partial pipe travel resumes its remaining distance without a backward jump', () => {
+  const f = startMark(); enterMark(f); f.advance(700);
+  assert.equal(f.markValues().state, 'travel');
+  const partial = f.markValues();
+  assert.equal(partial.pipe, .625);
+  leaveMark(f); f.advance(200); enterMark(f);
+  assert.equal(f.markValues().flow, 1);
+  f.advance(200);
+  assert.equal(f.markValues().state, 'travel');
+  assert.equal(f.markValues().pipe, partial.pipe, 'reopening does not refill the already travelled pipe segment');
+  assert.equal(f.markValues().flow, 1);
+  f.advance(250);
+  assert.equal(f.markValues().pipe, .3125, 'retained travel uses only its remaining 500ms');
+  f.advance(250);
+  assert.equal(f.markValues().pipe, 0);
+  assert.equal(f.markValues().state, 'transfer');
+  assert.equal(f.markValues().left, 0);
+  assertPhysicalTrace(f, 1200);
+  assert.equal(f.markValues().state, 'hold');
 });
