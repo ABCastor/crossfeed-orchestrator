@@ -1,6 +1,6 @@
 """The shipped gateway has one identity; upstream attribution stays intact."""
 from pathlib import Path
-import subprocess
+import os
 import tempfile
 import unittest
 
@@ -11,30 +11,52 @@ PRODUCT_PATHS = ('scripts', 'tests', 'docs', 'examples', 'skill', 'README.md',
 
 def retired_name_failures(root):
     retired = 'pi' + 'link'
-    paths = [path for path in PRODUCT_PATHS if (root / path).exists()]
-    if not paths:
-        return []
-    options = ['--hidden', '-g', '!scripts/runs/**', '-g', '!**/__pycache__/**',
-               '-g', '!.sabotage-*', '-g', '!*.log']
-    listed = subprocess.run(['rg', '--files', *options, '--', *paths],
-                            cwd=root, text=True, capture_output=True)
-    if listed.returncode not in (0, 1):
-        raise RuntimeError(listed.stderr)
+
+    def ignored(path):
+        parts = path.relative_to(root).parts
+        return (parts[:2] == ('scripts', 'runs') or
+                any(part == '__pycache__' or part.startswith('.sabotage-') or
+                    part.endswith('.log') for part in parts))
+
+    def walk_error(error):
+        raise error
+
+    paths = []
+    for name in PRODUCT_PATHS:
+        product = root / name
+        if product.is_file():
+            paths.append(product)
+        elif product.is_dir():
+            for directory, directories, files in os.walk(product, onerror=walk_error):
+                directory = Path(directory)
+                directories[:] = [name for name in directories
+                                  if not ignored(directory / name)]
+                paths.extend(directory / name for name in files
+                             if not ignored(directory / name))
+    paths.sort()
     failures = []
-    for relative in listed.stdout.splitlines():
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
         if retired in relative.casefold():
             failures.append(relative + ': retired filename')
-    result = subprocess.run(['rg', '-n', '-i', *options, '--', retired, *paths],
-                            cwd=root, text=True, capture_output=True)
-    if result.returncode not in (0, 1):
-        raise RuntimeError(result.stderr)
-    for line in result.stdout.splitlines():
-        path, number, content = line.split(':', 2)
-        if path == 'NOTICE':
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if relative == 'NOTICE':
             continue
-        if path == 'README.md' and 'credit to upstream contributor:' in content.casefold():
+        content = path.read_bytes()
+        if content.startswith((b'\xff\xfe', b'\xfe\xff')):
+            text = content.decode('utf-16', errors='replace')
+        elif b'\0' in content:
+            # Bundled fonts and other binaries are not text sources.
             continue
-        failures.append(path + ':' + number)
+        else:
+            text = content.decode('utf-8', errors='replace')
+        for number, line in enumerate(text.splitlines(), 1):
+            if retired not in line.casefold():
+                continue
+            if relative == 'README.md' and 'credit to upstream contributor:' in line.casefold():
+                continue
+            failures.append(relative + ':' + str(number))
     return failures
 
 
@@ -42,6 +64,21 @@ class GatewayNamesTests(unittest.TestCase):
     def test_retired_gateway_name_only_appears_in_attribution(self):
         failures = retired_name_failures(ROOT)
         self.assertEqual(failures, [], '\n'.join(failures))
+
+    def test_nested_hidden_source_names_and_content_are_checked(self):
+        retired = 'pi' + 'link'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / 'docs' / '.hidden' / 'nested'
+            nested.mkdir(parents=True)
+            (nested / 'current.py').write_text('Current identity\n' + retired.upper())
+            (nested / 'encoded.txt').write_text(retired, encoding='utf-16')
+            (nested / (retired.upper() + '.txt')).write_text('Current identity')
+            self.assertCountEqual(retired_name_failures(root), [
+                'docs/.hidden/nested/current.py:2',
+                'docs/.hidden/nested/encoded.txt:1',
+                'docs/.hidden/nested/' + retired.upper() + '.txt: retired filename',
+            ])
 
     def test_runtime_files_are_ignored_in_both_layouts(self):
         retired = 'pi' + 'link'
