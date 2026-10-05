@@ -493,15 +493,83 @@ subprocess.Popen=popen
     def test_wait_time_is_not_added_to_http_wall_budget(self):
         self.hold_lease()
         self.gateway.mode = 'hang'
-        timer = threading.Timer(.6, fleetctl.release_lease, args=(self.work / 'state', 'held'))
-        self.addCleanup(timer.cancel)
-        started = time.monotonic()
-        timer.start()
-        result = subprocess.run(self.command('--wall', '1'), env=self.env, pass_fds=self.pass_fds,
-                                text=True, capture_output=True, timeout=3)
-        self.assertEqual(result.returncode, 124, result.stderr)
+        real_now = time.monotonic
+        clock = [0.0]
+        context = runner.multiprocessing.get_context('fork')
+        original_turn = runner.lane_turn
+        original_popen = subprocess.Popen
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+
+        @contextlib.contextmanager
+        def waited_turn(lane, check):
+            with original_turn(lane, check) as release:
+                # Consume 600 ms of the production deadline without depending
+                # on interpreter/admission speed or a scheduled timer callback.
+                clock[0] = .6
+                fleetctl.release_lease(self.work / 'state', 'held')
+                yield release
+
+        def pipe(*args, **kwargs):
+            receiver, sender = context.Pipe(*args, **kwargs)
+            def poll(timeout):
+                ready = receiver.poll(0)
+                # The HTTP-start barrier below establishes an actual POST
+                # before the controlled clock consumes its remaining 400 ms.
+                clock[0] = round(clock[0] + .1, 1)
+                return ready
+            return SimpleNamespace(poll=poll, recv=receiver.recv, close=receiver.close), sender
+
+        def process(*args, **kwargs):
+            self.assertEqual(options.wall_deadline, 1)
+            child = context.Process(*args, **kwargs)
+            start = child.start
+            def started():
+                start()
+                until = real_now() + 1
+                while not self.gateway.payloads and real_now() < until:
+                    time.sleep(.001)
+                if len(self.gateway.payloads) != 1:
+                    child.terminate()
+                    child.join(options.kill_after)
+                self.assertEqual(len(self.gateway.payloads), 1, 'real HTTP child must reach the loopback gateway')
+                if self.socketpair:
+                    # Fork copies the fixture iterator. Reserve the socket the
+                    # child used so lease cleanup gets a fresh connection.
+                    next(self.fds)
+            child.start = started
+            return child
+
+        def popen(argv, *args, **kwargs):
+            if self.socketpair and isinstance(argv, list) and any(str(part).endswith('/fleetctl.py') for part in argv):
+                owned = [next(self.fds) for _ in range(2)]
+                kwargs['env'] = dict(os.environ, CHATGPT_FIXTURE_FDS=','.join(map(str, owned)))
+                kwargs['pass_fds'] = tuple(owned)
+            return original_popen(argv, *args, **kwargs)
+
+        with patch.object(sys, 'argv', self.command('--wall', '1')):
+            options = runner.arguments()
+        started = real_now()
+        try:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, self.env))
+                # Keep native multiprocessing/socket poll clocks real.
+                stack.enter_context(patch.object(runner, 'time',
+                                                SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep)))
+                stack.enter_context(patch.object(runner, 'lane_turn', waited_turn))
+                stack.enter_context(patch.object(runner.multiprocessing, 'get_context',
+                                                return_value=SimpleNamespace(Pipe=pipe, Process=process)))
+                stack.enter_context(patch.object(subprocess, 'Popen', popen))
+                if self.socketpair:
+                    stack.enter_context(patch.object(socket, 'create_connection', self.socket_connection))
+                with contextlib.redirect_stderr(io.StringIO()):
+                    status = runner.run(options)
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+        self.assertEqual(status, 124)
         self.assertEqual(len(self.gateway.payloads), 1)
-        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(clock[0], 1, 'queue time must leave only 400 ms for HTTP')
+        self.assertLess(real_now() - started, 1.5)
         self.assertEqual(self.tickets(), [])
         self.assertEqual(json.loads((self.work / 'state/runtime.json').read_text())['leases'], [])
 
