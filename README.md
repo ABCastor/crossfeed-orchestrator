@@ -1,6 +1,6 @@
 <h1><img src="docs/readme-header.svg" width="112" height="72" align="absmiddle" alt=""> <img src="docs/crossfeed-orchestrator-title.svg" width="354" align="absmiddle" alt="Crossfeed Orchestrator*"></h1>
 
-Crossfeed Orchestrator routes AI coding work to the right provider and model across your subscriptions, then supervises each worker.
+Crossfeed Orchestrator routes AI coding work among configured providers and models, then supervises each worker.
 
 Your local console controls which models agents may use and how freely they spend each plan. Routing reads those settings before every job.
 
@@ -42,7 +42,7 @@ A *lane* is a model on a tool, funded by a quota pool. Crossfeed selects a lane 
 - [ChatGPT relay setup and limits](docs/CHATGPT.md) and [API client setup](docs/LANES-API.md).
 - [Agent operating manual](skill/SKILL.md): briefs, isolation, supervision and verification.
 
-Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google), [OpenCode](https://opencode.ai), [Copilot CLI](https://github.com/github/copilot-cli) and [OpenRouter](https://openrouter.ai). [Pi](https://github.com/earendil-works/pi) supports admitted API and partner-plan routes.
+Adapters are provided for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google), [OpenCode](https://opencode.ai), [Copilot CLI](https://github.com/github/copilot-cli) and [OpenRouter](https://openrouter.ai). [Pi](https://github.com/earendil-works/pi) supports admitted API and partner-plan routes.
 
 ## Limits and tests
 
