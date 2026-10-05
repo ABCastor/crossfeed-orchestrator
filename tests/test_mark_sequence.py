@@ -1,4 +1,4 @@
-"""Sample communicating-vessel levels and visible pipe travel at 100 ms."""
+"""Check web motion bindings and sample the independent README loop at 100 ms."""
 from pathlib import Path
 import re
 import unittest
@@ -6,9 +6,10 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 CSS = (ROOT / 'scripts/console-assets/console.css').read_text()
+LOOP = (ROOT / 'docs/readme-header.svg').read_text()
 
 
-def frames(name, property=None, css=CSS):
+def frames(name, property=None, css=LOOP):
     body = re.search(r'@keyframes ' + name + r'\{(.*?)\n\}', css, re.S).group(1)
     result = {}
     pattern = r'opacity:([\d.]+)' if property == 'opacity' else r'(?:rotate\(|translateY\(|stroke-dashoffset:)(-?[\d.]+)'
@@ -22,7 +23,7 @@ def frames(name, property=None, css=CSS):
     return sorted(result.items())
 
 
-def value_at(name, percent, property=None, css=CSS):
+def value_at(name, percent, property=None, css=LOOP):
     points = frames(name, property, css)
     for (start, a), (end, b) in zip(points, points[1:]):
         if start <= percent <= end:
@@ -84,20 +85,24 @@ class MarkSequenceTests(unittest.TestCase):
             self.assertGreaterEqual(value_at('cf-pipe', percent), 0)
             if step and value_at('cf-pipe', percent, 'opacity') > .01:
                 self.assertLessEqual(value_at('cf-pipe', percent), value_at('cf-pipe', percent-1.25))
-        for name in ('cf-valve', 'cf-pipe', 'cf-left', 'cf-right'):
-            self.assertIn(f'animation:{name} 8s linear infinite paused', CSS)
+        self.assertNotIn('@keyframes cf-', CSS)
+        self.assertNotIn('linear infinite paused', CSS)
+        for name in ('valve', 'pipe', 'left', 'right', 'flow'):
+            self.assertIn(f'var(--cf-{name},', CSS)
         self.assertIn('.product-mark[data-mark-active]', CSS)
         self.assertNotIn('.product-mark:is(:hover,:focus-visible)', CSS)
         self.assertIn('@media(prefers-reduced-motion:reduce)', CSS)
 
-    def test_readme_loops_same_final_sequence_in_plain_self_themed_svg(self):
+    def test_readme_loops_independently_in_plain_self_themed_svg(self):
         header = (ROOT / 'docs/readme-header.svg').read_text()
         ET.fromstring(header)
         for name in ('cf-valve', 'cf-pipe', 'cf-left', 'cf-right'):
-            self.assertEqual(frames(name), frames(name, css=header))
+            self.assertEqual(frames(name)[0][0], 0)
+            self.assertEqual(frames(name)[-1][0], 100)
             self.assertIn(f'animation:{name} 8s linear infinite', header)
             self.assertNotIn(f'animation:{name} 8s linear infinite paused', header)
-        self.assertEqual(frames('cf-pipe', 'opacity'), frames('cf-pipe', 'opacity', header))
+        self.assertEqual(value_at('cf-pipe', 0, 'opacity'), 1)
+        self.assertEqual(value_at('cf-pipe', 100, 'opacity'), 0)
         self.assertIn('prefers-reduced-motion:reduce', header)
         self.assertIn('prefers-color-scheme:dark', header)
         readme = (ROOT / 'README.md').read_text()

@@ -220,38 +220,96 @@ function boot(document, window) {
   root.classList.add('js');
   const mark = document.querySelector('.product-mark');
   if (mark) {
-    let visible = true, hovering = false, touching = false, pointerType, touchTimer;
+    let visible = true, hovering = false, touching = false, pointerType;
+    let phase = 'idle', elapsed = 0, duration = 0, from = 0;
+    let angle = 0, level = 0, pipe = 1, frame = null, lastTime = null;
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const active = () => {
-      const playing = visible && !document.hidden && !reduced.matches && (hovering || touching);
-      playing ? mark.setAttribute('data-mark-active', '') : mark.removeAttribute('data-mark-active');
+    const wanted = () => hovering || touching;
+    const runnable = () => visible && !document.hidden && !reduced.matches;
+    const render = () => {
+      mark.dataset.markState = phase;
+      mark.style.setProperty('--cf-valve', `${angle * 90}deg`);
+      mark.style.setProperty('--cf-left', `${level * 7}px`);
+      mark.style.setProperty('--cf-right', `${level * -7}px`);
+      mark.style.setProperty('--cf-pipe', pipe);
+      mark.style.setProperty('--cf-flow', phase === 'travel' || phase === 'transfer' ? 1 : 0);
+      runnable() && wanted() ? mark.setAttribute('data-mark-active', '') : mark.removeAttribute('data-mark-active');
+    };
+    const begin = next => {
+      phase = next; elapsed = 0;
+      if (next === 'opening') { from = angle; duration = (1 - angle) * 400; }
+      if (next === 'travel') { pipe = 1; from = pipe; duration = 800; }
+      if (next === 'transfer') { from = level; duration = (1 - level) * 1600; }
+      if (next === 'hold') duration = touching && !hovering ? 600 : Infinity;
+      if (next === 'closing') { from = angle; duration = angle * 400; }
+      if (next === 'reset') { from = level; duration = level * 2000; }
+    };
+    const advance = delta => {
+      // Consume only visible time. Boundaries can share a frame, never the wrong valve state.
+      while (phase !== 'idle' && delta >= 0) {
+        const used = Math.min(delta, Math.max(0, duration - elapsed));
+        elapsed += used; delta -= used;
+        const progress = duration === 0 ? 1 : elapsed / duration;
+        if (phase === 'opening') angle = from + (1 - from) * progress;
+        if (phase === 'travel') pipe = 1 - progress;
+        if (phase === 'transfer') level = from + (1 - from) * progress;
+        if (phase === 'closing') angle = from * (1 - progress);
+        if (phase === 'reset') level = from * (1 - progress);
+        if (elapsed < duration) break;
+        if (phase === 'opening') begin(level === 1 ? 'hold' : 'travel');
+        else if (phase === 'travel') begin('transfer');
+        else if (phase === 'transfer') begin('hold');
+        else if (phase === 'hold') { touching = false; begin('closing'); }
+        else if (phase === 'closing') begin('reset');
+        else { phase = 'idle'; pipe = 1; }
+      }
+      render();
+    };
+    const moving = () => phase !== 'idle' && !(phase === 'hold' && duration === Infinity);
+    const tick = time => {
+      frame = null;
+      advance(lastTime === null ? 0 : Math.max(0, time - lastTime));
+      lastTime = time;
+      if (runnable() && moving()) frame = window.requestAnimationFrame(tick);
+      else lastTime = null;
+    };
+    const sync = () => {
+      if (reduced.matches) {
+        touching = false; phase = 'idle'; angle = level = 0; pipe = 1;
+      } else if (wanted()) {
+        if (phase === 'idle' || phase === 'closing' || phase === 'reset') begin('opening');
+        else if (phase === 'hold') {
+          const holdDuration = hovering ? Infinity : 600;
+          // A finite touch hold starts now; prior indefinite hover time cannot pay for it.
+          if (holdDuration !== duration) elapsed = 0;
+          duration = holdDuration;
+        }
+      } else if (!['idle', 'closing', 'reset'].includes(phase)) begin('closing');
+      if (!runnable() && frame !== null) {
+        window.cancelAnimationFrame(frame); frame = null; lastTime = null;
+      }
+      render();
+      if (runnable() && moving() && frame === null) frame = window.requestAnimationFrame(tick);
     };
     mark.addEventListener('pointerenter', event => {
-      if (event.pointerType !== 'touch') { hovering = true; active(); }
+      if (event.pointerType !== 'touch') { hovering = true; sync(); }
     });
     mark.addEventListener('pointerleave', event => {
-      if (event.pointerType !== 'touch') { hovering = false; active(); }
+      if (event.pointerType !== 'touch') { hovering = false; sync(); }
     });
     mark.addEventListener('pointerdown', event => { pointerType = event.pointerType; });
     mark.addEventListener('click', event => {
       const tapped = (event.pointerType || pointerType) === 'touch';
       pointerType = undefined;
       if (!tapped) return;
-      event.preventDefault();
-      window.clearTimeout(touchTimer);
-      touching = !touching;
-      active();
-      if (touching) touchTimer = window.setTimeout(() => {
-        touching = false; active();
-        for (const animation of mark.getAnimations({subtree: true})) animation.currentTime = 0;
-      }, 8000);
+      event.preventDefault(); touching = !touching; sync();
     });
     if (window.IntersectionObserver) new window.IntersectionObserver(entries => {
-      visible = entries[0].isIntersecting; active();
+      visible = entries[0].isIntersecting; sync();
     }).observe(mark);
-    document.addEventListener('visibilitychange', active);
-    reduced.addEventListener('change', active);
-    active();
+    document.addEventListener('visibilitychange', sync);
+    reduced.addEventListener('change', sync);
+    sync();
   }
 
   // ---- light and dark: the icon shows the choice (system, light, dark), never the resolution ----

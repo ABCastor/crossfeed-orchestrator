@@ -1,4 +1,4 @@
-<img src="docs/readme-header.svg" width="500" alt="Crossfeed Orchestrator">
+<img src="docs/readme-header.svg" width="440" height="196.968" alt="Crossfeed Orchestrator">
 
 Crossfeed Orchestrator routes AI coding work to the right provider and model across your subscriptions, then supervises each worker.
 
@@ -63,6 +63,4 @@ Credit to upstream contributor: Rocco Angelella's [PiLink](https://github.com/ro
 
 The code is [MIT](LICENSE). The artwork and bundled fonts have separate terms in [NOTICE](NOTICE).
 
-<p>
-  <a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, by Castor, we give a dam"></a>
-</p>
+<p><a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, by Castor, we give a dam"></a></p>

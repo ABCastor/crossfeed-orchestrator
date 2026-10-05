@@ -154,7 +154,7 @@ function page() {
   return {document, lens, input, panel, other, pick, now, astra, sol, luna, oldOne, older, allOn, stops};
 }
 
-function start({fetchImpl, prepare, platform = 'MacIntel', clipboard, motion = false, reduced = false, legacyCopy = false} = {}) {
+function start({fetchImpl, prepare, platform = 'MacIntel', clipboard, motion = false, reduced = false, legacyCopy = false, configureWindow} = {}) {
   const env = page();
   prepare?.(env);
   env.document.createTextNode = text => { const node = h('text'); node.textContent = text; return node; };
@@ -201,6 +201,7 @@ function start({fetchImpl, prepare, platform = 'MacIntel', clipboard, motion = f
     matchMedia: () => media,
     fetch: fetchImpl || ((url, options) => new Promise((resolve, reject) => requests.push({url, options, resolve, reject}))),
   };
+  configureWindow?.(window, env);
   global.FormData = class { constructor(form) { return form.querySelectorAll('input, textarea, select').filter(i => i.name && !i.disabled).map(i => [i.name, i.value]); } };
   const api = boot(env.document, window);
   return {...env, api, window, requests, timers, animations, media, windowListeners};
@@ -928,45 +929,198 @@ test('reordering restores scroll with anchoring disabled through deferred layout
 
 function markFixture(env) {
   env.mark = h('a', {class: 'product-mark', href: '/'});
-  env.markFrames = [{currentTime: 0}];
-  env.mark.getAnimations = () => env.markFrames;
+  const values = {};
+  env.mark.style = {setProperty(name, value) { values[name] = String(value); }};
+  env.markValues = () => ({state: env.mark.dataset.markState,
+    valve: Number.parseFloat(values['--cf-valve']), left: Number.parseFloat(values['--cf-left']),
+    right: Number.parseFloat(values['--cf-right']), pipe: Number(values['--cf-pipe']), flow: Number(values['--cf-flow'])});
   env.document.querySelector('header').append(env.mark);
 }
+function startMark(options = {}) {
+  return start({...options, prepare: markFixture, configureWindow(win, env) {
+    let now = 0, next = 0;
+    const frames = new Map();
+    win.requestAnimationFrame = fn => { frames.set(++next, fn); return next; };
+    win.cancelAnimationFrame = id => frames.delete(id);
+    win.IntersectionObserver = class {
+      constructor(fn) { env.intersect = visible => fn([{isIntersecting: visible}]); }
+      observe() {}
+    };
+    env.pendingFrames = () => frames.size;
+    env.delayedFrame = ms => {
+      now += ms;
+      const queued = [...frames.values()]; frames.clear();
+      for (const fn of queued) fn(now);
+    };
+    env.advance = (ms, sample = () => {}) => {
+      const paint = () => {
+        const queued = [...frames.values()]; frames.clear();
+        for (const fn of queued) fn(now);
+        sample(env.markValues());
+      };
+      paint();
+      const end = now + ms;
+      while (now < end) { now = Math.min(end, now + 25); paint(); }
+    };
+  }});
+}
+const enterMark = f => f.mark.dispatch('pointerenter', {pointerType: 'mouse'});
+const leaveMark = f => f.mark.dispatch('pointerleave', {pointerType: 'mouse'});
 
-test('mark is still on load, runs on hover, and pauses when hidden or pointer leaves', () => {
-  const f = start({prepare: markFixture});
-  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
-  f.mark.dispatch('pointerenter', {pointerType: 'mouse'});
-  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
-  f.document.hidden = true; f.document.dispatch('visibilitychange');
-  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
-  f.document.hidden = false; f.document.dispatch('visibilitychange');
-  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
-  f.mark.dispatch('pointerleave', {pointerType: 'mouse'});
-  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+function assertPhysicalTrace(f, duration) {
+  let previous = f.markValues();
+  f.advance(duration, value => {
+    assert.equal(value.left + value.right, 0);
+    assert.ok(value.left >= 0 && value.left <= 7, `bounded levels ${JSON.stringify(value)}`);
+    if (value.left > previous.left) {
+      assert.equal(value.valve, 90, 'only an open valve transfers left to right');
+      assert.equal(value.pipe, 0, 'liquid reaches the right vessel before its level rises');
+    }
+    if (value.left < previous.left) {
+      assert.equal(value.valve, 0, 'independent refill/drain starts after the valve closes');
+      assert.equal(value.flow, 0, 'reset never travels through the pipe');
+    }
+    if (value.flow && previous.flow) assert.ok(value.pipe <= previous.pipe, 'visible flow never travels backwards');
+    previous = value;
+  });
+}
+
+test('hover beyond the old 8s cycle holds the valve open and equal without looping', () => {
+  const f = startMark();
+  assert.equal(f.markValues().state, 'idle');
+  assert.equal(f.pendingFrames(), 0);
+  enterMark(f);
+  f.advance(400);
+  assert.equal(f.markValues().valve, 90);
+  assert.equal(f.markValues().left, 0);
+  f.advance(800);
+  assert.equal(f.markValues().pipe, 0);
+  assert.equal(f.markValues().left, 0);
+  assertPhysicalTrace(f, 1600);
+  const held = f.markValues();
+  assert.deepEqual(held, {state: 'hold', valve: 90, left: 7, right: -7, pipe: 0, flow: 0});
+  f.advance(24000);
+  assert.deepEqual(f.markValues(), held);
+  assert.equal(f.pendingFrames(), 0, 'hold consumes no animation frames');
 });
 
-test('touch mark tap starts one cycle without navigating; reduced motion stays still', () => {
-  const f = start({prepare: markFixture});
+test('a delayed frame followed by hover-to-touch hold cannot invent closing/reset time', () => {
+  const f = startMark(); enterMark(f);
+  f.advance(0); // First rAF timestamp is zero.
+  f.delayedFrame(10000); // One visible, delayed callback overshoots equalisation by 7200ms.
+  assert.equal(f.markValues().state, 'hold');
+  assert.equal(f.markValues().left, 7);
+  f.mark.dispatch('click', {pointerType: 'touch'});
+  leaveMark(f); // The remaining interaction is now a finite 600ms touch hold.
+  const held = f.markValues();
+  f.advance(0); // Same timestamp: no time has passed to close or reset anything.
+  assert.deepEqual(f.markValues(), held);
+  assert.equal(f.markValues().state, 'hold');
+  f.advance(599);
+  assert.deepEqual(f.markValues(), held);
+  f.advance(1);
+  assert.equal(f.markValues().state, 'closing');
+  assert.equal(f.markValues().valve, 90);
+  assert.equal(f.markValues().left, 7);
+  f.advance(200);
+  assert.equal(f.markValues().valve, 45);
+  assert.equal(f.markValues().left, 7);
+  assertPhysicalTrace(f, 2200);
+  assert.equal(f.markValues().state, 'idle');
+});
+
+test('leave closes first, holds the levels during closure, then refills/drains independently', () => {
+  const f = startMark(); enterMark(f); f.advance(3000);
+  leaveMark(f);
+  assert.equal(f.markValues().state, 'closing');
+  f.advance(200);
+  assert.equal(f.markValues().valve, 45);
+  assert.equal(f.markValues().left, 7);
+  f.advance(200);
+  assert.equal(f.markValues().valve, 0);
+  assert.equal(f.markValues().left, 7);
+  assertPhysicalTrace(f, 2000);
+  assert.equal(f.markValues().state, 'idle');
+  assert.equal(f.markValues().left, 0);
+  assert.equal(f.pendingFrames(), 0);
+});
+
+test('leave/re-enter during opening, travel, transfer, closure and reset preserves current levels', () => {
+  for (const elapsed of [150, 700, 1700, 2900]) {
+    for (const away of [0, 100, 650]) {
+      const f = startMark(); enterMark(f); assertPhysicalTrace(f, elapsed);
+      const beforeLeave = f.markValues(); leaveMark(f);
+      assert.equal(f.markValues().left, beforeLeave.left, 'leave never jumps levels');
+      assertPhysicalTrace(f, away);
+      const beforeEnter = f.markValues(); enterMark(f);
+      assert.equal(f.markValues().left, beforeEnter.left, 're-enter never jumps left level');
+      assert.equal(f.markValues().right, beforeEnter.right, 're-enter never swaps levels');
+      assert.equal(f.markValues().valve, beforeEnter.valve, 're-enter retains current valve angle');
+      assertPhysicalTrace(f, 4000);
+      assert.equal(f.markValues().state, 'hold');
+      assert.equal(f.markValues().left, 7);
+      leaveMark(f); assertPhysicalTrace(f, 3000);
+      assert.equal(f.markValues().state, 'idle');
+    }
+  }
+});
+
+test('hidden and offscreen pause without catch-up, including leave/re-enter while paused', () => {
+  for (const suspend of ['hidden', 'offscreen']) {
+    const f = startMark(); enterMark(f); f.advance(1700);
+    const visibility = value => {
+      if (suspend === 'hidden') { f.document.hidden = !value; f.document.dispatch('visibilitychange'); }
+      else f.intersect(value);
+    };
+    const before = f.markValues(); visibility(false);
+    assert.equal(f.pendingFrames(), 0);
+    f.advance(20000);
+    assert.deepEqual(f.markValues(), before);
+    leaveMark(f); enterMark(f);
+    assert.equal(f.markValues().left, before.left);
+    visibility(true);
+    f.advance(0);
+    assert.equal(f.markValues().left, before.left, 'resuming does not consume hidden time');
+    assertPhysicalTrace(f, 4000);
+    assert.equal(f.markValues().state, 'hold');
+    leaveMark(f); f.advance(500); visibility(false);
+    const reset = f.markValues(); f.advance(20000);
+    assert.deepEqual(f.markValues(), reset);
+    visibility(true); assertPhysicalTrace(f, 3000);
+    assert.equal(f.markValues().state, 'idle');
+  }
+});
+
+test('touch tap runs one bounded cycle without navigation; repeat tap can close it', () => {
+  const f = startMark();
   f.mark.dispatch('pointerenter', {pointerType: 'touch'});
-  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+  assert.equal(f.pendingFrames(), 0);
   let prevented = false;
-  f.mark.dispatch('click', {pointerType: 'touch', preventDefault() { prevented = true; }});
-  assert.equal(prevented, true);
-  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
-  f.markFrames[0].currentTime = 8000; f.timers.at(-1)();
-  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
-  assert.equal(f.markFrames[0].currentTime, 0);
-  const g = start({prepare: markFixture, reduced: true});
-  g.mark.dispatch('pointerenter', {pointerType: 'mouse'});
-  assert.equal(g.mark.hasAttribute('data-mark-active'), false);
-});
-
-test('touch tap supports browsers whose click omits pointer type', () => {
-  const f = start({prepare: markFixture});
   f.mark.dispatch('pointerdown', {pointerType: 'touch'});
-  let prevented = false;
   f.mark.dispatch('click', {preventDefault() { prevented = true; }});
   assert.equal(prevented, true);
-  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
+  assertPhysicalTrace(f, 2800);
+  assert.equal(f.markValues().state, 'hold');
+  assertPhysicalTrace(f, 3000);
+  assert.equal(f.markValues().state, 'idle');
+  assert.equal(f.pendingFrames(), 0);
+  f.mark.dispatch('click', {pointerType: 'touch'}); f.advance(1700);
+  const partial = f.markValues(); f.mark.dispatch('click', {pointerType: 'touch'});
+  assert.equal(f.markValues().state, 'closing');
+  assert.equal(f.markValues().left, partial.left);
+  assertPhysicalTrace(f, 3000);
+  assert.equal(f.markValues().state, 'idle');
+});
+
+test('reduced motion stays static on hover/touch and stops an in-flight sequence', () => {
+  const f = startMark({reduced: true}); enterMark(f);
+  f.mark.dispatch('click', {pointerType: 'touch'}); f.advance(20000);
+  assert.deepEqual(f.markValues(), {state: 'idle', valve: 0, left: 0, right: 0, pipe: 1, flow: 0});
+  assert.equal(f.pendingFrames(), 0);
+  f.media.change(false); f.advance(1700);
+  assert.ok(f.markValues().left > 0);
+  f.media.change(true);
+  assert.equal(f.markValues().state, 'idle');
+  assert.equal(f.markValues().left, 0);
+  assert.equal(f.pendingFrames(), 0);
 });
