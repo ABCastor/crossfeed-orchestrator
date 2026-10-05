@@ -148,10 +148,10 @@ h1{font:600 32px/1.12 var(--read);letter-spacing:-.012em;margin:17px 0 .55rem}  
 .sig .ast .key{fill:var(--paper);stroke:var(--paper)}
 @media (prefers-reduced-motion:reduce){.sig:hover .c-tail,.sig:hover .c-eye{animation:none}}
 
-/* Each choice occupies the same 18px drawing, inside the common toolbar box. */
+/* Theme choices use the shared toolbar drawing size. */
 .theme-toggle{appearance:none;background:none;border:0;cursor:pointer;line-height:0}
 .theme-toggle :is(.t-sun,.t-moon,.t-system){display:none}
-.theme-toggle .t-half{fill:currentColor;stroke:none}
+.theme-toggle :is(.t-half,.t-asterisk){fill:currentColor;stroke:none}
 html[data-theme-choice="light"] .theme-toggle .t-sun,
 html[data-theme-choice="dark"] .theme-toggle .t-moon,
 html[data-theme-choice="system"] .theme-toggle .t-system{display:block}
@@ -190,14 +190,14 @@ html[data-theme-choice="dark"]{color-scheme:dark}
 }
 .quota-reading .stamp{margin:0}
 /* The tabs stand on the rule, independent of the website icon boxes. */
-.bar-tools{--tool-color:light-dark(var(--human),var(--machine));display:flex;align-items:center;flex:none;align-self:flex-end;gap:0;margin:-10px 0 calc(1.15rem * 6.15 / 24 - 22px) 1.1rem;color:var(--tool-color)}
+.bar-tools{--tool-icon-size:17px;--tool-color:light-dark(var(--human),var(--machine));display:flex;align-items:center;flex:none;align-self:flex-end;gap:0;margin:-10px 0 calc(var(--tool-icon-size) * 6.15 / 24 - 22px) 1.1rem;color:var(--tool-color)}
 .find{display:none;position:relative;color:inherit}
 .js .find{display:flex}
 .find-lens{background:none;border:0;color:inherit;cursor:pointer}
 .settings-toggle{appearance:none;border:0;background:none;cursor:pointer;line-height:0}
 .bar-tools :is(.find-lens,.theme-toggle,.settings-toggle){position:relative;box-sizing:border-box;padding:0;width:24.4px;min-width:24.4px;height:44px;align-items:center;justify-content:center;border-radius:2px;color:inherit}
 .js .bar-tools .theme-toggle,.bar-tools .find-lens,.bar-tools .settings-toggle{display:flex}
-.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle) svg{display:block;width:1.15rem;height:1.15rem;translate:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle) svg{display:block;width:var(--tool-icon-size);height:var(--tool-icon-size);translate:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .bar-tools :is(.find-lens,.theme-toggle,.settings-toggle)::after{content:none}
 .bar-tools :is(.find-lens,.theme-toggle,.settings-toggle):is(:hover,:focus-visible,[aria-expanded="true"]){color:var(--tool-color)}
 @media(any-pointer:coarse){.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle){width:44px;min-width:44px}}

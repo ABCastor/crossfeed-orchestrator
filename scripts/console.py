@@ -350,14 +350,8 @@ TAB_ICON = "data:image/svg+xml," + urllib.parse.quote((ASSETS / "tab-icon.svg").
 THEME_TOGGLE = (ASSETS / "theme-toggle.html").read_text(encoding="utf-8")
 
 
-LENS = (
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round">'
-    '<circle cx="10" cy="10" r="7" stroke-width="1.6"/>'
-    '<path d="M15.2 15.2 21 21" stroke-width="1.6"/></g></svg>'
-)
-SETTINGS_ICON = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path '
-                 'd="M9.7 3.7h4.6l.6 2.4 2.1 1.2 2.4-.6 2.3 4-1.8 1.8v2.4l1.8 1.8-2.3 4-2.4-.6-2.1 1.2-.6 2.4H9.7l-.6-2.4L7 20.1l-2.4.6-2.3-4 1.8-1.8v-2.4l-1.8-1.8 2.3-4 2.4.6 2.1-1.2.6-2.4Z" '
-                 'transform="translate(1.2 -.33) scale(.9)" stroke-width="1.7777778"/><circle cx="12" cy="12" r="3"/></svg>')
+LENS = (ASSETS / "castor-tool-search.svg").read_text(encoding="utf-8")
+SETTINGS_ICON = (ASSETS / "castor-tool-settings.svg").read_text(encoding="utf-8")
 CHEVRON = '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9.5 5 5 5-5"/></svg>'
 # Drawn in the lens's stroke, so every icon on the page is one family.
 OUT = ('<svg class="out" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h8.5V15M17.2 6.8 7 17"/></svg>')

@@ -1,4 +1,4 @@
-<h1><img src="docs/readme-header.svg" width="112" height="72" align="absmiddle" alt=""> Crossfeed Orchestrator</h1>
+<h1><img src="docs/readme-header.svg" width="112" height="72" align="absmiddle" alt=""> <img src="docs/crossfeed-orchestrator-title.svg" width="354" align="absmiddle" alt="Crossfeed Orchestrator*"></h1>
 
 Crossfeed Orchestrator routes AI coding work to the right provider and model across your subscriptions, then supervises each worker.
 
