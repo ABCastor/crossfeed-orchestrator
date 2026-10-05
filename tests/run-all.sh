@@ -70,8 +70,8 @@ for suite in "${SUITES[@]}"; do
     results+=( "PASS  $name" )
   else
     printf '   FAIL  %-28s %3ds  exit %s\n' "$name" "$elapsed" "$rc"
-    printf '   ---- last 15 lines ----\n'
-    tail -15 "$log" | sed 's/^/   /'
+    printf '   ---- failed suite output ----\n'
+    sed 's/^/   /' "$log"
     results+=( "FAIL  $name (exit $rc)" )
     failed=$((failed + 1))
   fi
