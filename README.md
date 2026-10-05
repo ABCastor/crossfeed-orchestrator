@@ -31,6 +31,8 @@ Crossfeed runs on its own with [Claude Code](https://docs.anthropic.com/en/docs/
 
 Optionally, add [Crossfeed Chat](https://github.com/Anneo22/crossfeed-chat) to use your ChatGPT chats as a read-only agent lane. Its paired Chrome extension wakes sleeping workers; [setup and relay limits](docs/CHATGPT.md).
 
+Set `chatgpt_gateway.pi_coding` to `true` to add Pi coding routes with local tools for current High and Extra High workers. These share the ChatGPT account and model switches. Pi's `provider-default` evidence stays separate from plain Chat requests, and its receipts leave the underlying model unconfirmed.
+
 `python3 scripts/fleetctl.py serve-api` exposes admitted read-only lanes to OpenAI-compatible clients; [API setup](docs/LANES-API.md).
 
 ## Give it work
@@ -53,9 +55,9 @@ For parallel jobs, use `scripts/fanout.sh tasks.jsonl --parallel 3`. Give write-
 
 ## Evidence and limits
 
-**The selector has not yet been proven better than simpler routing policies on hard tasks.** A re-tuned private benchmark round is in progress as of 4 October 2026. The [benchmark harness](bench/README.md) lets you measure your own tasks.
+**The selector has not yet been proven better than simpler routing policies on hard tasks.** On 5 October 2026, synthetic coding tests passed 12/12 for Sol High, 9/11 for ChatGPT High through Pi and 9/10 for ChatGPT Extra High through Pi. Only 23/36 ChatGPT cells were measured, none of its nine calibration cells ran, and its underlying model identity is unconfirmed. Sol High remains the default; admitted Pi relay workers can provide fallback capacity under quota pressure. The [benchmark harness](bench/README.md) lets you measure your own tasks.
 
-The Copilot adapter is a single read-only Auto observer. Antigravity requires write mode because its wrapper has no proven read-only boundary. Paid caps use recorded estimates and a run can overshoot, so use provider-side limits too. ChatGPT chat lanes are read-only and separate from Codex quota.
+The Copilot adapter is a single read-only Auto observer. Antigravity requires write mode because its wrapper has no proven read-only boundary. Paid caps use recorded estimates and a run can overshoot, so use provider-side limits too. Plain ChatGPT lanes are read-only; the optional Pi coding routes use local tools. Both draw from ChatGPT account quota, separate from Codex quota.
 
 ```bash
 bash tests/run-all.sh

@@ -110,6 +110,22 @@ class EvidenceTests(unittest.TestCase):
             updated = cell(evidence.build_evidence(overlay(), catalog(), records, READ_ON))["q"]["coding-agent"]["mean"]
             self.assertGreater(updated, baseline) if passed else self.assertLess(updated, baseline)
 
+    def test_verified_evidence_limits_and_completion_latency_survive_refresh(self):
+        flags = ['coverage_incomplete', 'calibration_unmeasured', 'model_identity_unconfirmed',
+                 'synthetic_coding_only', 'model_harness_specific']
+        record = {'run_id': 'limited-proof', 'model': 'synthetic-model', 'effort': 'high',
+                  'family': 'coding-agent', 'completion_time_s': 340.8,
+                  'outcome': {'mechanically_verified': True, 'passed': True},
+                  'evidence_flags': flags + ['untrusted-payload', {'invalid': 'flag'}]}
+        row = cell(evidence.build_evidence(overlay(), {}, [record], READ_ON))
+        self.assertTrue(set(flags) <= set(row['flags']))
+        self.assertNotIn('untrusted-payload', row['flags'])
+        self.assertEqual(row['latency_s'], 340.8)
+        self.assertIn('latency_completion_measured', row['flags'])
+        record.pop('outcome')
+        row = cell(evidence.build_evidence(overlay(), {}, [record], READ_ON))
+        self.assertTrue(set(flags).isdisjoint(row['flags']))
+
     def test_ambiguous_variants_never_become_a_measured_point(self):
         data = catalog()
         original = data["artificial_analysis"]["synthetic-model"]["levels"]["high"]

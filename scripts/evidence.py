@@ -225,7 +225,14 @@ def _observations(overlay, records):
                 counts = outcomes.setdefault((model, level, family), {"passes": 0, "trials": 0})
                 counts["trials"] += 1
                 counts["passes"] += int(verdicts.pop())
-        bucket = telemetry.setdefault(cell, {"in": [], "out": [], "latency": [], "own_cost": {}})
+        bucket = telemetry.setdefault(cell, {"in": [], "out": [], "latency": [], "completion_latency": [],
+                                             "evidence_flags": set(), "own_cost": {}})
+        for record in proofs:
+            flags = record.get("evidence_flags")
+            if isinstance(flags, list):
+                bucket["evidence_flags"].update(flag for flag in flags if isinstance(flag, str) and flag in {
+                    "coverage_incomplete", "calibration_unmeasured", "model_identity_unconfirmed",
+                    "synthetic_coding_only", "model_harness_specific"})
         pool = first("pool") or first("quota_pool") or lane.get("quota_pool")
         cost = next((r.get("own_cost") for r in ordered if isinstance(r.get("own_cost"), dict)), {})
         if pool:
@@ -248,6 +255,9 @@ def _observations(overlay, records):
         first_answer = next((value for r in ordered if (value := _first_number(r, "ttfa_s", "time_to_first_answer_s")) is not None), None)
         if first_answer is not None:
             bucket["latency"].append(first_answer)
+        completion = next((value for r in ordered if (value := _first_number(r, "completion_time_s")) is not None), None)
+        if completion is not None and completion >= 0:
+            bucket["completion_latency"].append(completion)
     return outcomes, telemetry
 
 
@@ -471,7 +481,10 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
             else:
                 price[direction] = _number(((catalog.get("go_models") or {}).get(model, {}).get("cost") or {}).get("input" if direction == "in" else "output"))
         flags.append("price_api_equivalent_estimated" if all(v is not None for v in price.values()) else "price_unknown")
-        latency = measured.get("latency") or []
+        latency = measured.get("latency") or measured.get("completion_latency") or []
+        if not measured.get("latency") and measured.get("completion_latency"):
+            flags.append("latency_completion_measured")
+        flags.extend(measured.get("evidence_flags") or [])
         external_latency = [_first_number(v, "ttfa_s", "median_time_to_first_answer_token") for v in variants]
         external_latency = [v for v in external_latency if v is not None]
         flags.append("latency_measured" if latency else "latency_external" if external_latency else "latency_estimated")

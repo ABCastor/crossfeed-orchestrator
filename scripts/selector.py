@@ -137,13 +137,13 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "AGY has no proven read-only boundary"
         elif modality not in lane.get("capabilities", {}).get("input", ["text"]):
             why = f"modality {modality}"
-        elif harness == "chatgpt-chat" and role not in lane.get("roles", []):
+        elif (harness == "chatgpt-chat" or lane.get("chatgpt_pi")) and role not in lane.get("roles", []):
             why = "role not declared for configured ChatGPT lane"
         elif harness == "chatgpt-chat" and not lane.get("worker_label"):
             why = "ChatGPT lane has no saved worker label"
         elif harness == "chatgpt-chat" and fleet.chatgpt_pro.blocked(roster, runtime, lane):
             why = fleet.chatgpt_pro.blocked(roster, runtime, lane)
-        elif harness == "chatgpt-chat" and (lane.get("gateway_status", {}).get("quota_blocked")
+        elif lane.get("gateway_service") and (lane.get("gateway_status", {}).get("quota_blocked")
                                             or lane.get("gateway_status", {}).get("rate_limited")):
             why = "worker quota paused"
         if why:

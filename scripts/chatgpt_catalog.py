@@ -92,7 +92,7 @@ def _expand(roster, state_dir, *, persist=False):
             continue
         label = row.get("worker_label")
         lane_id = gateway.get("lane_prefix", "") + label if gateway.get("lane_prefix") else selector
-        if any(lane.get("lane_id") == lane_id for lane in result.get("lanes", [])):
+        if any(lane.get("lane_id") == lane_id for lane in result.get("lanes", []) + generated):
             raise ValueError("gateway catalog lane collides with a configured lane")
         # Every valid saved label can wake in a fresh chat, even before its
         # first contact. Removed labels cannot inherit cached admission.
@@ -117,6 +117,24 @@ def _expand(roster, state_dir, *, persist=False):
             "recheck": "Every saved model and gateway status read",
             "evidence": {"status": "unmeasured", "source": "Gateway /v1/models saved settings; underlying model unconfirmed",
                          "read_on": iso()[:10]}}
+        # Pi's local tools are a different measured route from a plain chat.
+        # Its provider-default cell never borrows native-chat level evidence.
+        if gateway.get("pi_coding") is True and active and not row["older"] and level in {"high", "xhigh"}:
+            try:
+                from run_identity import FAMILY_BY_ROLE
+            except ImportError:
+                from scripts.run_identity import FAMILY_BY_ROLE
+            pi_lane_id = lane_id + ":pi"
+            if any(item.get("lane_id") == pi_lane_id for item in result.get("lanes", []) + generated):
+                raise ValueError("Pi gateway lane collides with a configured lane")
+            pi_lane = copy.deepcopy(lane)
+            pi_lane.update(lane_id=pi_lane_id, harness="pi", provider="crossfeed-chat",
+                           selector="crossfeed-chat/" + selector, chatgpt_pi=True,
+                           roles=[role for role, family in FAMILY_BY_ROLE.items() if family == "coding-agent"],
+                           allowed_modes=["read-only", "write"],
+                           transport={**lane["transport"], "api": "openai-completions"})
+            generated.append(pi_lane)
+            result["effort"][lane_id]["levels"]["pi"] = ["provider-default"]
     result.setdefault("lanes", []).extend(generated)
     # A family slot ranks current gateway lanes without copying model names into
     # the static roster. Unavailable history stays visible but never ranked.
@@ -136,7 +154,7 @@ def gateway_wake_status(status):
     """Summarize the gateway's wake authority without echoing error payloads."""
     try:
         limits, wakes = status["wake_limits"], status["wakes"]
-        count, cap, cooldown = limits["attempts"], limits["daily_cap"], limits["cooldown_until"]
+        count, cap, cooldown = limits["attempts"], limits.get("daily_cap", 0), limits["cooldown_until"]
         enabled = status["extension_enabled"]
         if (type(count) is not int or count < 0 or type(cap) is not int or cap < 0
                 or type(cooldown) not in (int, float) or type(enabled) is not bool
@@ -144,10 +162,20 @@ def gateway_wake_status(status):
             raise ValueError()
         failed = sum(row["state"] in {"failed", "expired"} for row in wakes)
         pending = sum(row["state"] in {"queued", "issued", "claimed"} for row in wakes)
+        daily = f"{count}/{cap} attempts today" if cap else f"{count} attempts today, no daily cap"
+        hourly, hourly_blocked = "", False
+        if "hourly_cap" in limits or "hourly_attempts" in limits:
+            hour_count, hour_cap = limits["hourly_attempts"], limits["hourly_cap"]
+            if (type(hour_count) is not int or hour_count < 0
+                    or type(hour_cap) is not int or hour_cap < 0):
+                raise ValueError()
+            hourly = f", {hour_count}/{hour_cap} attempts in last hour"
+            hourly_blocked = hour_count >= hour_cap
         paused = cooldown > time.time() * 1000
         return (f"Crossfeed Chat wake: extension {'paired' if enabled else 'unpaired'}, "
-                f"{count}/{cap} attempts in last 24 h, cooldown {'active' if paused else 'inactive'}, "
-                f"{failed} failed/expired, {pending} pending", not enabled or count >= cap or paused or failed > 0)
+                f"{daily}{hourly}, cooldown {'active' if paused else 'inactive'}, "
+                f"{failed} failed/expired, {pending} pending",
+                not enabled or (cap > 0 and count >= cap) or hourly_blocked or paused or failed > 0)
     except (KeyError, TypeError, ValueError):
         return "Crossfeed Chat wake: unavailable", True
 

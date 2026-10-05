@@ -229,7 +229,6 @@ class CatalogTests(unittest.TestCase):
                        {'wakes': [{'state': 'failed', 'error': self.key}]},
                        {'wakes': [{'state': 'expired'}]},
                        {'wake_limits': {'attempts': 60, 'daily_cap': 60, 'cooldown_until': 0}},
-                       {'wake_limits': {'attempts': 0, 'daily_cap': 0, 'cooldown_until': 0}},
                        {'wake_limits': {'attempts': 1, 'daily_cap': 60, 'cooldown_until': (time.time() + 60) * 1000}},
                        {'wake_limits': None}):
             with self.subTest(change=change):
@@ -239,6 +238,58 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn(self.key, line)
                 self.assertIn('owner action: check Crossfeed Chat', line)
         self.assertTrue(catalog.doctor(self.gateway, {'chatgpt:saved-medium': 'sleeping'})[1])
+
+    def test_optional_daily_cap_through_overlay_catalog_lease_and_doctor(self):
+        for cap in (0, None):
+            with self.subTest(daily_cap=cap):
+                limits = {'attempts': 100, 'hourly_attempts': 11, 'hourly_cap': 12, 'cooldown_until': 0}
+                if cap is None:
+                    self.template.pop('wake_daily_cap', None)
+                else:
+                    self.template['wake_daily_cap'] = cap
+                    limits['daily_cap'] = cap
+                self.status.update(extension_enabled=True, wakes=[], wake_limits=limits)
+                self.overlay.write_text(json.dumps(self.roster))
+                with patch.object(catalog, 'request', side_effect=self.gateway_request):
+                    result = fleetctl.read_overlay(self.overlay, self.root / 'state')
+                lane = self.generated(result)['chatgpt:saved-medium']
+                self.assertEqual(lane.get('wake_daily_cap'), cap)
+                self.assertEqual(lane['admission_status'], 'active')
+                token = fleetctl.acquire_lease(self.root / 'state', result, lane['lane_id'], 60)
+                fleetctl.release_lease(self.root / 'state', token)
+                line, failed = catalog.doctor(self.gateway, result['chatgpt_catalog']['states'],
+                                              result['chatgpt_catalog']['wake'])
+                self.assertFalse(failed)
+                self.assertIn('100 attempts today, no daily cap', line)
+                self.assertIn('11/12 attempts in last hour', line)
+                self.assertIn('owner action: none', line)
+                self.assertNotIn(self.key, line)
+
+    def test_hourly_cap_still_blocks_when_daily_cap_is_disabled(self):
+        for daily in ({'daily_cap': 0}, {}):
+            for hourly in ({'hourly_attempts': 12, 'hourly_cap': 12},
+                           {'hourly_attempts': 0, 'hourly_cap': 0}):
+                with self.subTest(daily=daily, hourly=hourly):
+                    status = dict(extension_enabled=True, wakes=[], wake_limits={
+                        'attempts': 100, 'cooldown_until': 0, **daily, **hourly})
+                    line, failed = catalog.gateway_wake_status(status)
+                    self.assertTrue(failed)
+                    self.assertIn('no daily cap', line)
+                    self.assertIn('attempts in last hour', line)
+
+    def test_malformed_daily_and_hourly_limits_are_unavailable(self):
+        limits = {'attempts': 1, 'daily_cap': 0, 'hourly_attempts': 1, 'hourly_cap': 12,
+                  'cooldown_until': 0}
+        for field in ('daily_cap', 'hourly_attempts', 'hourly_cap'):
+            for value in (None, True, -1, 1.5, '12'):
+                with self.subTest(field=field, value=value):
+                    status = dict(extension_enabled=True, wakes=[], wake_limits=dict(limits, **{field: value}))
+                    self.assertEqual(catalog.gateway_wake_status(status), ('Crossfeed Chat wake: unavailable', True))
+        for field in ('hourly_attempts', 'hourly_cap'):
+            partial = dict(limits)
+            del partial[field]
+            self.assertEqual(catalog.gateway_wake_status(dict(extension_enabled=True, wakes=[], wake_limits=partial)),
+                             ('Crossfeed Chat wake: unavailable', True))
 
     def test_plain_runner_admission_error_does_not_dispatch(self):
         self.roster['chatgpt_gateway'] = None

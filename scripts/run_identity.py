@@ -258,7 +258,7 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
 
 
 def begin(wrapper, requested, selected, lane, role, effort=None, selection=None, family=None):
-    data = roster(discover=wrapper == "chatgpt-chat")
+    data = roster(discover=wrapper in {"chatgpt-chat", "pi"})
     if wrapper == "codex" and (not selected or not requested):
         config = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
         try:
@@ -391,7 +391,7 @@ def worker_notice(record):
 
 
 def receipt(record):
-    actual = record.get("actual_model")
+    actual = record.get("actual_model") if not record.get("provider_identity_unconfirmed") else None
     ran = f"ran on {actual} (provider reported)" if actual else (
         f"selected {record.get('selected_model') or 'unknown'}; underlying model unconfirmed")
     fallback = record.get("pro_fallback")
@@ -426,8 +426,12 @@ def finish(path, events, returncode, last, schema, database=None, result_file=No
             returncode = 8
             record["deliverable_error"] = "invalid JSON result"
     record["actual_model"] = observed_model(record["harness"], events, database)
+    if record.get("provider_identity_unconfirmed"):
+        # The relay echoes a configured routing label, not a backend identity.
+        record["provider_reported_selector"] = record["actual_model"]
+        record["actual_model"] = None
     record["identity_source"] = ("provider" if record["actual_model"] else
-                                 "unconfirmed" if record["harness"] == "chatgpt-chat" else "selection-only")
+                                 "unconfirmed" if record["harness"] == "chatgpt-chat" or record.get("provider_identity_unconfirmed") else "selection-only")
     record.update(ended_at=now(), returncode=returncode,
                   status="ok" if returncode == 0 else "error")
     if returncode in {124, 125}:

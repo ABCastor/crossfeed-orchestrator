@@ -248,6 +248,7 @@ config = json.loads((agent/'models.json').read_text())['providers']['lab']
 assert config['apiKey'] == '${CROSSFEED_PROVIDER_KEY}'
 assert config['baseUrl'] == 'https://example.com/v1'
 assert config['api'] == 'openai-completions'
+assert config['models'][0]['compat'] == {'sendSessionAffinityHeaders': True, 'sessionAffinityFormat': 'openai'}
 assert args[args.index('--thinking')+1] == 'off'
 assert args[args.index('--provider')+1] == 'lab'
 assert args[args.index('--model')+1] == 'test-model'

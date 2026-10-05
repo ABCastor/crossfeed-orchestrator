@@ -328,8 +328,23 @@ def supervise(args, command, env, events_file, key, interrupted):
 def run(args, interrupted):
     lane, model, provider = lane_for(args)
     configured = json.loads(roster_call("lane-json", lane))
-    custom = configured.get("provider_source") and configured.get("transport", {}).get("api") == "openai-completions"
-    if custom:
+    relay = configured.get("chatgpt_pi") is True and configured.get("gateway_service")
+    custom = relay or configured.get("provider_source") and configured.get("transport", {}).get("api") == "openai-completions"
+    if relay:
+        if args.effort_role and args.effort_role not in configured.get("roles", []):
+            raise Rejected(3, "role not declared for configured Pi ChatGPT lane")
+        try:
+            from chatgpt_transport import settings, canonical_selector, Rejected as RelayRejected
+            selector = model.split("/", 1)[1]
+            if (provider != "crossfeed-chat" or canonical_selector(selector) != configured.get("worker_label")
+                    or configured.get("worker_level") not in {"high", "xhigh"}
+                    or configured.get("worker_row", "").casefold() != "latest"):
+                raise Rejected(3, "Pi relay requires a current High or Extra High saved worker")
+            base, key = settings(configured)
+            variable = "CROSSFEED_PROVIDER_KEY"
+        except RelayRejected as error:
+            raise Rejected(error.code, error.message) from None
+    elif custom:
         try:
             from providers import resolve_key, api_base, ProviderError
             base = api_base(configured["transport"]["api_base"], "openai-compatible")
@@ -348,7 +363,7 @@ def run(args, interrupted):
         if not (HERE / dependency).is_file():
             raise Rejected(127, dependency + " is required")
     args.custom_api = bool(custom)
-    args.custom_pricing = configured.get("api_pricing") if custom else None
+    args.custom_pricing = configured.get("api_pricing") if custom and not relay else None
     if args.custom_pricing is not None:
         if (not isinstance(args.custom_pricing, dict)
                 or any(type(args.custom_pricing.get(field)) not in (int, float)
@@ -372,6 +387,7 @@ def run(args, interrupted):
             (agent / "models.json").write_text(json.dumps({"providers": {provider: {
                 "baseUrl": base, "api": "openai-completions", "apiKey": "${" + variable + "}" if key else "local-no-key",
                 "models": [{"id": model.split("/", 1)[1], "reasoning": False, "input": ["text"],
+                            "compat": {"sendSessionAffinityHeaders": True, "sessionAffinityFormat": "openai"},
                             **({"cost": {field: args.custom_pricing[field] for field in ("input", "output", "cacheRead", "cacheWrite")}}
                                if args.custom_pricing else {})}]
             }}}))
@@ -401,6 +417,10 @@ def run(args, interrupted):
                 record["effort_shape"] = "none"
                 record["usage_source"] = ("pi-native-tokens; OpenRouter catalog pricing estimate"
                                           if args.custom_pricing else "pi-native-tokens; API pricing unknown")
+                if relay:
+                    record.update(worker_label=configured["worker_label"], worker_level=configured["worker_level"],
+                                  provider_identity_unconfirmed=True,
+                                  usage_source="pi-native-tokens; subscription-relay usage unpriced")
             identity.write_text(json.dumps(record) + "\n")
             if interrupted:
                 raise Rejected(128 + interrupted[0], "external signal received before Pi launch")
