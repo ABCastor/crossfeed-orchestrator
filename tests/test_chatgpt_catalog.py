@@ -72,6 +72,16 @@ class CatalogTests(unittest.TestCase):
                          ('verified', 'active', 'sleeping'))
         self.assertIsNotNone(lane['verified_at'])
 
+    def test_media_worker_has_its_own_name_in_agent_brief(self):
+        self.models['data'].append({'object': 'model', 'id': 'chatgpt:media-unattended',
+                                   'saved': True, 'row': 'Latest', 'level': 1})
+        roster = self.expand()
+        self.assertEqual(roster['model_cards']['chatgpt:media-unattended']['name'],
+                         'ChatGPT media · Images and video · Unattended')
+        brief = fleetctl.render_brief(fleetctl.fleet_overview(roster, {}, self.root))
+        self.assertIn('ChatGPT media · Images and video · Unattended (sleeping)', brief)
+        self.assertEqual(brief.count('Latest / medium (sleeping)'), 1)
+
     def test_replica_capacity_refreshes_from_live_catalog_over_cached_counts(self):
         for count in (3, 2, 1):
             self.models['data'][0]['replicas'] = count

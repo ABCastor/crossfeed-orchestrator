@@ -109,7 +109,8 @@ def _expand(roster, state_dir, *, persist=False):
                     gateway_status={key: observed[key] for key in ("quota_blocked", "rate_limited", "quota_until") if key in observed})
         generated.append(lane)
         result.setdefault("model_cards", {})[lane_id] = {**result.get("model_cards", {}).get(lane_id, {}),
-            "pool": template.get("quota_pool", "chatgpt-work"), "name": row["name"],
+            "pool": template.get("quota_pool", "chatgpt-work"),
+            "name": "ChatGPT media · Images and video · Unattended" if selector == "chatgpt:media-unattended" else row["name"],
             "lineage": "openai", "status": "older" if row.get("older") else "current", "best_for": "Read-only text through the Chat picker"}
         level = row["worker_level"]
         result.setdefault("effort", {})[lane_id] = {"levels": {"chatgpt-chat": [level]}, "default": level, "knee": level,

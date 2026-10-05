@@ -48,6 +48,7 @@ if mode in ('stall','descendant','leader-exit'):
  if mode=='leader-exit':
   m=message(); emit({'type':'message_end','message':m}); emit({'type':'agent_end','messages':[m]}); sys.exit(0)
  time.sleep(60)
+if mode == 'silent-finish': time.sleep(2.2)
 if mode == 'alive':
  for _ in range(8): emit({'type':'message_update','assistantMessageEvent':{'type':'thinking_delta','delta':'thinking'}}); time.sleep(.25)
 if mode == 'secret':
@@ -234,6 +235,13 @@ class PiTests(unittest.TestCase):
     def test_missing_roster_dependency(self):
         result=self.run_pi(env={'FAKE_ROSTER_DEP':'1'})
         self.assertEqual(result.returncode,127,result.stderr)
+
+    def test_default_silence_reports_without_killing(self):
+        result = self.run_pi(mode='silent-finish', env={'CROSSFEED_TEST_SILENCE_INTERVAL_S':'1'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('silent for ', result.stderr)
+        self.assertNotIn('LIMIT FIRED', result.stderr)
+        self.assertEqual(result.stdout, 'PONG\n')
 
     def test_watchdog_idle_and_wall(self):
         for flag,code in (('--idle',125),('--wall',124)):

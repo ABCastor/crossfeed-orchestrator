@@ -63,7 +63,7 @@ def arguments():
     mode.add_argument("--read-only", action="store_true")
     mode.add_argument("--write", action="store_true")
     parser.add_argument("--modality", default="text")
-    parser.add_argument("--idle", "--idle-timeout", type=seconds, default=2400)
+    parser.add_argument("--idle", "--idle-timeout", type=seconds, default=0)
     parser.add_argument("--wall", "--timeout", type=seconds, default=0)
     parser.add_argument("--kill-after", type=seconds, default=30)
     parser.add_argument("--events", type=Path)
@@ -269,6 +269,8 @@ def supervise(args, command, env, events_file, key, interrupted):
             os.set_blocking(stream.fileno(), False)
             poller.register(stream, selectors.EVENT_READ, label)
         started = activity = tick = time.monotonic()
+        reported_silence = 0
+        silence_interval = max(1, int(os.environ.get("CROSSFEED_TEST_SILENCE_INTERVAL_S", "600")))
         pending = {"stdout": b"", "stderr": b""}
         while poller.get_map() or child.poll() is None or signal_group(child, 0):
             now = time.monotonic()
@@ -278,6 +280,12 @@ def supervise(args, command, env, events_file, key, interrupted):
                 terminate_group(child, args.kill_after)
                 terminated = True
                 raise Rejected(reason, "Pi process group terminated")
+            idle_for = now - activity
+            if idle_for < reported_silence:
+                reported_silence = 0
+            if idle_for - reported_silence >= silence_interval:
+                diagnostic(f"silent for {int(idle_for // 60)} min ({int(idle_for)}s); still running")
+                reported_silence = idle_for
             if now - tick >= 10:
                 events_file.write(json.dumps({"type": "crossfeed.liveness", "elapsed_s": round(now - started, 1), "idle_s": round(now - activity, 1)}) + "\n")
                 events_file.flush()

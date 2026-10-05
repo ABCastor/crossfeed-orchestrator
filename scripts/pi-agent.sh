@@ -4,6 +4,11 @@
 #   --dir DIR --effort low|medium|high|xhigh|max --mode ro|rw
 #   --idle S --wall S --kill-after S --events FILE --last FILE
 # Python owns the idle-timeout watchdog, process group and lease, not this launcher.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 command -v python3 >/dev/null || { echo 'pi-agent: python3 is required' >&2; exit 127; }
 exec python3 "$(cd "${BASH_SOURCE[0]%/*}" && pwd)/pi_runner.py" "$@"
+
+}
+main "$@"; exit $?

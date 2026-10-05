@@ -222,9 +222,17 @@ def spend_down_horizon_s(window: dict[str, Any]) -> int:
 
 
 def window_surplus(window: dict[str, Any]) -> dict[str, Any]:
+    """Forecast unused allowance without treating critical actual usage as spare."""
+    verdict = _window_surplus_forecast(window)
+    if _state_for_used(float(window.get("used_percent", 0))) == "CRITICAL":
+        verdict.update(surplus=False, constrained_by="actual_usage")
+    return verdict
+
+
+def _window_surplus_forecast(window: dict[str, Any]) -> dict[str, Any]:
     """Will this window still hold unspent allowance when it resets?
 
-    Returns `{"expiring": bool, "basis": str, ...}`. `expiring` true means the
+    Returns `{"surplus": bool, "basis": str, ...}`. `surplus` true means the
     allowance is about to be destroyed, so it should be spent rather than saved.
 
     Three bases, best evidence first:
@@ -380,7 +388,8 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
     level = pool_level(runtime, pool)
     if level not in {"low", "off"} and state not in {"CONSERVE", "CRITICAL", "EXHAUSTED"}:
         return None
-    windows = evidence.get("windows") or {}
+    windows = {name: window for name, window in (evidence.get("windows") or {}).items()
+               if name in evidence.get("applicable_windows", evidence.get("windows") or {})}
     name, window = max(windows.items(), key=lambda item: item[1]["used_percent"],
                        default=(None, {}))
     return {"pool": pool, "level": level, "state": state,
@@ -461,9 +470,86 @@ def pool_has_no_known_limit(roster: dict[str, Any] | None, pool: str) -> bool:
     return isinstance(plan, dict) and plan.get("limit") == "none-known"
 
 
+def quota_window_applies(roster: dict[str, Any] | None, pool: str, name: str,
+                         window: dict[str, Any], model_key: str | None = None) -> bool:
+    """General windows bind every model; model-only limits bind their family.
+
+    A pool summary excludes model-only limits. They remain in the reported
+    readings and are included when routing or admitting the matching model.
+    """
+    roster = roster or {}
+    def words(text: str) -> set[str]:
+        return set(re.findall(r"[a-z][a-z0-9]*", text.lower()))
+    noise = words(pool) | {
+        "weekly", "week", "monthly", "month", "daily", "day", "session", "hour", "hours",
+        "primary", "secondary", "tertiary", "rolling", "quota", "summary", "window", "limit",
+        "only", "scoped", "and", "or", "model", "models", "h", "d", "m",
+    }
+    pool_terms = words(str(roster.get("quota_pools", {}).get(pool, {}).get("label") or pool)) - noise
+    models = {
+        *roster.get("model_cards", {}), *roster.get("effort", {}),
+        *choosable_models(roster, pool),
+    }
+    model_words = set().union(*(words(key) for key in models)) - noise
+    text = name + " " + str(window.get("label") or "")
+    scope = words(text)
+    terms = scope - noise
+    scoped = bool(terms and terms != pool_terms and (
+        scope & {"only", "scoped"} or terms & model_words))
+    if not scoped:
+        return True
+    if model_key is None:
+        return False
+    alternatives = re.split(r"\b(?:and|or)\b", str(window.get("label") or ""), flags=re.I)
+    if len(alternatives) == 1:
+        alternatives = re.split(r"\b(?:and|or)\b", name.replace("_", " "), flags=re.I)
+    if len(alternatives) > 1:
+        return any(quota_window_applies(roster, pool, "scoped", {"label": part + " only"}, model_key)
+                   for part in alternatives)
+    # A complete model identity is more specific than a family label. Retain
+    # version numbers and normalize separators so GPT-6.1-Sol and GPT 6.1 Sol
+    # agree without matching Astra through "gpt", or Sonnet 5 through Sonnet 5.5.
+    def tokens(value: str) -> list[str]:
+        return re.findall(r"[a-z]+|\d+", value.lower())
+    def contains(haystack: list[str], needle: list[str]) -> bool:
+        return any(haystack[i:i + len(needle)] == needle
+                   for i in range(len(haystack) - len(needle) + 1))
+    scope_tokens = tokens(text)
+    model_tokens = {key: tokens(key) for key in models}
+    # Numeric versions are constraints even when the roster has never seen
+    # them. Do not let an unknown GPT 6.2 Sol become the whole Sol family.
+    identity_tokens = {part for parts in model_tokens.values() for part in parts if not part.isdigit()} - noise
+    model_version = [part for part in tokens(model_key) if part.isdigit()]
+    for source in (name, str(window.get("label") or "")):
+        parts = tokens(source)
+        for i, part in enumerate(parts):
+            if part not in identity_tokens:
+                continue
+            version = []
+            for value in parts[i + 1:]:
+                if not value.isdigit():
+                    break
+                version.append(value)
+            if version and version != model_version:
+                return False
+    exact = {key: parts for key, parts in model_tokens.items() if contains(scope_tokens, parts)}
+    if not exact:
+        # Sources also label a version without repeating the provider, e.g.
+        # "Sonnet 5.5 only". Keep its numeric specificity before family matching.
+        exact = {key: parts[1:] for key, parts in model_tokens.items()
+                 if parts and parts[0] in noise and any(part.isdigit() for part in parts[1:])
+                 and contains(scope_tokens, parts[1:])}
+    if exact:
+        most_specific = {key for key, parts in exact.items() if not any(
+            len(other) > len(parts) and contains(other, parts) for other in exact.values())}
+        return model_key in most_specific
+    family_terms = terms & model_words or terms
+    return family_terms <= (words(model_key) - noise)
+
+
 def current_pool_state(
     runtime: dict[str, Any], pool: str, now: dt.datetime | None = None,
-    *, roster: dict[str, Any] | None = None,
+    *, roster: dict[str, Any] | None = None, model_key: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     now = now or utc_now()
     # The operator's hand setting beats every measurement: "off" saves a pool they want kept,
@@ -507,13 +593,15 @@ def current_pool_state(
         enriched = dict(window)
         enriched["seconds_to_reset"] = max(0, int((reset - now).total_seconds()))
         active_windows[name] = enriched
+    applicable_windows = {name: window for name, window in active_windows.items()
+                          if quota_window_applies(roster, pool, name, window, model_key)}
     confidence = "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     # A console-observed 100% window stays exhausted until its console-stated
     # reset passes, even when the snapshot itself has gone stale: staleness must
     # never fail open into a pool the console last reported as full.
     exhausted_windows = {
         name: window
-        for name, window in active_windows.items()
+        for name, window in applicable_windows.items()
         if int(window["used_percent"]) >= 100
     }
     if exhausted_windows:
@@ -525,21 +613,28 @@ def current_pool_state(
             "observed_at": snapshot["observed_at"],
             "age_seconds": age_s,
             "bottleneck_used_percent": max(
-                int(window["used_percent"]) for window in active_windows.values()
+                int(window["used_percent"]) for window in applicable_windows.values()
             ),
             "limit_names": sorted(exhausted_windows),
             "until": until,
             "windows": active_windows,
+            "applicable_windows": sorted(applicable_windows),
+            "spend_down": [],
         }
-    if not active_windows or age_s > 3600:
+    if not applicable_windows or age_s > 3600:
         return "UNKNOWN", {
             "source": "opencode-console-dashboard",
-            "confidence": "stale",
+            "confidence": "stale" if age_s > 3600 else confidence,
             "observed_at": snapshot["observed_at"],
             "age_seconds": age_s,
+            # Fresh model-only readings still belong on the console even when
+            # they cannot establish the pool's general quota state.
+            "windows": active_windows if age_s <= 3600 else {},
+            "applicable_windows": sorted(applicable_windows),
+            "spend_down": [],
         }
 
-    max_used = max(int(window["used_percent"]) for window in active_windows.values())
+    max_used = max(int(window["used_percent"]) for window in applicable_windows.values())
     # Every window here is already below 100%: the exhausted branch returned
     # above, and a spent window is not use-it-or-lose-it, it is simply gone.
     #
@@ -555,6 +650,8 @@ def current_pool_state(
     for name, window in active_windows.items():
         verdict = window_surplus(window)
         window["surplus"] = verdict
+        if name not in applicable_windows:
+            continue
         if verdict["surplus"]:
             non_binding[name] = window
             if window["seconds_to_reset"] <= spend_down_horizon_s(window):
@@ -562,11 +659,15 @@ def current_pool_state(
     binding_used = max(
         (
             int(window["used_percent"])
-            for name, window in active_windows.items()
+            for name, window in applicable_windows.items()
             if name not in non_binding
         ),
         default=0,
     )
+    # Unused allowance in one window cannot be spent freely through a second
+    # critical limit. Keep its forecast, but suppress actionable spare advice.
+    if _state_for_used(binding_used) == "CRITICAL":
+        expiring.clear()
     return _state_for_used(max_used), {
         "source": "opencode-console-dashboard",
         "confidence": confidence,
@@ -581,6 +682,7 @@ def current_pool_state(
         "non_binding": sorted(non_binding),
         "spend_down": sorted(expiring),
         "windows": active_windows,
+        "applicable_windows": sorted(applicable_windows),
     }
 
 
@@ -2614,8 +2716,25 @@ def choose_lane(
         # A one-shot keeps the measured band: stepping a low pool down to its cheap
         # lists would take the big model it asked for off the table.
         band = level_band(pool_level(runtime, pool), band)
-    candidates = role_policy.get(band) or role_policy.get("quality_first", [])
+    candidates = list(role_policy.get(band) or role_policy.get("quality_first", []))
     lanes = lane_map(roster)
+    # A model-only limit can tighten an otherwise healthy pool. Its band's
+    # alternatives may live in a disjoint list, so append them before the
+    # existing toggle/admission checks. Keep unrelated quality candidates first.
+    discovered_bands = {band}
+    for lane_id in candidates:
+        lane = lanes.get(lane_id, {})
+        if lane.get("quota_pool", pool) != pool or not lane.get("model_key"):
+            continue
+        model_state, model_evidence = current_pool_state(runtime, pool, roster=roster,
+                                                          model_key=lane["model_key"])
+        model_band = task_band(model_state, model_evidence)
+        if not one_shot:
+            model_band = level_band(pool_level(runtime, pool), model_band)
+        if model_band not in discovered_bands:
+            discovered_bands.add(model_band)
+            alternatives = role_policy.get(model_band) or role_policy.get("quality_first", [])
+            candidates.extend(key for key in alternatives if key not in candidates)
     pro_fallbacks = {}
     expanded = []
     pro_pools = set()
@@ -2642,8 +2761,8 @@ def choose_lane(
         and lanes.get(key, {}).get("harness") == "chatgpt-chat"
         and lanes.get(key, {}).get("worker_level") not in {"xhigh", "high"})]
     candidates = order_for_levels(candidates, lanes, runtime, one_shot)
-    for pool in pro_pools:
-        slots = [index for index, key in enumerate(candidates) if lanes.get(key, {}).get("quota_pool") == pool]
+    for pro_pool in pro_pools:
+        slots = [index for index, key in enumerate(candidates) if lanes.get(key, {}).get("quota_pool") == pro_pool]
         ordered = sorted((candidates[index] for index in slots), key=lambda key: lanes[key].get("worker_level") != "xhigh")
         for index, key in zip(slots, ordered):
             candidates[index] = key
@@ -2699,15 +2818,24 @@ def choose_lane(
             rejected.append(f"{lane_id}: modality {modality}")
             continue
         lane_pool = lane.get("quota_pool", pool)
-        if lane_pool == pool:
-            lane_state, lane_evidence = state, evidence
-        else:
-            lane_state, lane_evidence = current_pool_state(runtime, lane_pool, roster=roster)
+        lane_state, lane_evidence = current_pool_state(runtime, lane_pool, roster=roster,
+                                                       model_key=lane["model_key"])
         if lane_state == "EXHAUSTED":
             # Routing must never hand back a lane acquire_lease would refuse.
             why = "switched off" if lane_evidence.get("source") == "switched-off" else "exhausted"
             rejected.append(f"{lane_id}: pool {lane_pool} {why}")
             continue
+        lane_band = band
+        if lane_pool == pool:
+            lane_band = task_band(lane_state, lane_evidence)
+            if not one_shot:
+                lane_band = level_band(pool_level(runtime, pool), lane_band)
+            if lane_band != band:
+                admitted = role_policy.get(lane_band) or role_policy.get("quality_first", [])
+                admitted, _ = apply_model_toggles(admitted, roster, runtime)
+                if lane_id not in admitted:
+                    rejected.append(f"{lane_id}: outside {lane_band.upper()} role allowlist")
+                    continue
         if lane_free_slots(runtime, lane, lane_state, lane_evidence) <= 0:
             # A busy lane must not block the task: fall through to the next
             # ranked candidate rather than fail.  Quality still leads, but a
@@ -2717,12 +2845,12 @@ def choose_lane(
         result = dict(lane)
         if lane_id in pro_fallbacks:
             result["pro_fallback"] = pro_fallbacks[lane_id]
-        effort = resolve_effort(roster, lane["model_key"], role, lane["harness"], band=band)
+        effort = resolve_effort(roster, lane["model_key"], role, lane["harness"], band=lane_band)
         result["effort"] = effort["effort"]
         result["effort_reason"] = effort["reason"]
         result["routing"] = {
             "role": role,
-            "band": band,
+            "band": lane_band,
             "pool": lane_pool,
             "pool_state": lane_state,
             "pool_evidence": lane_evidence,
@@ -2977,7 +3105,8 @@ def acquire_lease(
                 f"{lane['model_key']} on)"
             )
         active = [lease for lease in runtime["leases"] if lease["lane_id"] == lane_id]
-        pool_state, pool_evidence = current_pool_state(runtime, lane["quota_pool"], roster=roster)
+        pool_state, pool_evidence = current_pool_state(runtime, lane["quota_pool"], roster=roster,
+                                                      model_key=lane["model_key"])
         if pool_state == "EXHAUSTED":
             if pool_evidence.get("source") == "switched-off":
                 raise FleetError(
@@ -4352,10 +4481,12 @@ def fleet_overview(
             continue
         state, evidence = current_pool_state(measured_runtime, pool, now, roster=roster)
         windows = evidence.get("windows") or {}
+        applicable = {name: window for name, window in windows.items()
+                      if name in evidence.get("applicable_windows", windows)}
         quota = None
-        if windows:
+        if applicable:
             name, window = max(
-                windows.items(),
+                applicable.items(),
                 key=lambda item: (int(item[1]["used_percent"]), -int(item[1].get("seconds_to_reset", 0))),
             )
             quota = {
@@ -4376,6 +4507,9 @@ def fleet_overview(
             "state": state,
             "until": evidence.get("until") if state == "EXHAUSTED" else None,
             "quota": quota,
+            "binding_used_percent": evidence.get("binding_used_percent"),
+            "routing_state": evidence.get("routing_state", state),
+            "applicable_windows": evidence.get("applicable_windows", []),
             # A reading that exists but is too old to route on: said as such, never as "none".
             "stale_age_s": evidence.get("age_seconds") if snapshot and not quota and state == "UNKNOWN" else None,
             "measured": has_source,
@@ -5457,7 +5591,8 @@ def main() -> int:
             # their own pool. The hand-set spend level changes both paths alike.
             harness = resolved["harness"]
             pool = harness if harness in DIRECT_POOLS else ROUTING_POOL
-            state, evidence = current_pool_state(runtime, pool, roster=roster)
+            state, evidence = current_pool_state(runtime, pool, roster=roster,
+                                                  model_key=resolved["model_key"])
             band = level_band(pool_level(runtime, pool), task_band(state, evidence))
             resolved = resolve_effort(roster, args.model, args.role, harness, args.level, band=band, stand_in=args.stand_in)
             if args.json:

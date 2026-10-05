@@ -15,11 +15,13 @@
 # no slot is taken and nothing is sent.
 #
 # --timeout has no default: absent means no wall-clock limit.
-# --idle-timeout defaults to 2400 seconds; --kill-after defaults to 30 seconds.
+# --idle-timeout defaults to 0 (opt-in killing only); --kill-after defaults to 30 seconds.
 # Prints the agent's final message to stdout. Diagnostics go to stderr.
 # Exit codes: 0 success; 1 supervision setup failure; 2 usage or bad workdir;
 # 4 empty output; 124 wall-clock kill; 125 idle kill; 127 claude missing;
 # every other Claude exit code is passed through.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 if [ "$("$(dirname "$0")/fleetctl.py" switch claude 2>/dev/null)" = off ]; then
   echo "claude-agent: the claude pool is switched off by hand (fleetctl.py switch claude auto)" >&2; exit 5
@@ -28,7 +30,7 @@ fi
 DIR="$PWD"; PROMPT=""; PROMPT_FILE=""; MODEL="opus"; EFFORT=""; ROLE="default"
 PERMISSION_MODE="acceptEdits"; TOOLS="default"
 TIMEOUT=""
-IDLE_TIMEOUT="2400"
+IDLE_TIMEOUT="0"
 KILL_AFTER="30"
 LAST=""
 DRY_RUN=0
@@ -365,6 +367,8 @@ _terminate_group() {
 # The watchdog is stopped with SIGKILL, never TERM: a TERM that lands while bash is still forking
 # the watchdog makes bash 5 run the wrapper's EXIT trap in it, deleting this run's files.
 _watchdog() {
+  local silence_interval="${CROSSFEED_TEST_SILENCE_INTERVAL_S:-600}" reported_silence=0
+  [[ "$silence_interval" =~ ^[1-9][0-9]*$ ]] || silence_interval=600
   local started last_activity now elapsed idle_for
   local last_output current_output last_cpu current_cpu
 
@@ -395,10 +399,13 @@ _watchdog() {
     last_cpu="$current_cpu"
 
     idle_for=$((now - last_activity))
-    # --idle-timeout 0 DISABLES idle supervision. Without this, 0 meant "kill the instant nothing
-    # has changed", so anyone trying to turn supervision off got instant kills instead. Keeping the
-    # off-switch honest matters: it is the one lever for anyone who would rather risk an unbounded
-    # hang than any false kill, and a reviewer argued exactly that position.
+    # Reporting never changes the child-output/CPU progress clock.
+    if [ "$idle_for" -lt "$reported_silence" ]; then reported_silence=0; fi
+    if [ "$((idle_for - reported_silence))" -ge "$silence_interval" ]; then
+      echo "claude-agent: silent for $((idle_for / 60)) min (${idle_for}s); still running" >&2
+      reported_silence="$idle_for"
+    fi
+    # Only an explicit positive --idle-timeout opts into termination.
     if [ "$IDLE_TIMEOUT" -gt 0 ] && [ "$idle_for" -ge "$IDLE_TIMEOUT" ]; then
       printf 'idle\n' >"$KILL_STATE"
       _print_kill_message "IDLE" "$elapsed" "no output or CPU progress for ${idle_for}s; configured --idle-timeout ${IDLE_TIMEOUT}s"
@@ -535,3 +542,6 @@ if [ -n "$LAST" ]; then
   printf '%s\n' "$answer" >"$LAST.part.$$" && mv -f "$LAST.part.$$" "$LAST"
 fi
 exit 0
+
+}
+main "$@"; exit $?

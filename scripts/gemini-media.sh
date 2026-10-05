@@ -4,6 +4,8 @@
 # The local ledger is intentionally conservative. It reserves the complete
 # model output allowance before generateContent and retains that reservation on
 # an ambiguous failure, rather than risking an uncapped retry.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 DEFAULT_MODEL="gemini-flash-lite-latest"   # alias: auto-tracks Google's newest flash-lite (policy: always track newest)
@@ -429,3 +431,6 @@ except Exception as exc:
 finally:
     best_effort_delete(uploaded_name)
 PY
+
+}
+main "$@"; exit $?

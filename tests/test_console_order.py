@@ -1,13 +1,14 @@
 """Display ordering and its protected runtime POST, using the real HTTP handler without sockets."""
 import copy
 import html
+from pathlib import Path
 import json
 import re
 import unittest
 import urllib.parse
 
 from tests import test_console_updates as transport
-from tests.test_console import console, fleetctl
+from tests.test_console import console, fleetctl, base_overlay
 
 
 class OrderHTTPTests(transport.ConsoleMemoryTests):
@@ -128,6 +129,44 @@ class OrderCriteriaTests(unittest.TestCase):
         fallback = console.display_order(self.overview, self.saved)
         self.assertEqual(fallback['ranks']['models']['a']['quality'], ['x', 'y', 'z'])
 
+class LifecycleOrderTests(unittest.TestCase):
+    def test_chat_picker_levels_are_quality_ordered_even_with_sparse_evidence(self):
+        keys = ['high', 'instant', 'medium', 'pro', 'xhigh']
+        overview = {'pools': [{'pool': 'chat', 'label': 'Chat',
+                    'options': [{'model': key, 'current': True} for key in keys]}],
+                    'models': [{'model': key, 'lanes': [{'harness': 'chatgpt-chat', 'worker_level': key}]}
+                               for key in keys]}
+        sparse = {'rows': [{'model_key': 'instant', 'q': {'review': {'mean': .9}}}]}
+        order = console.display_order(overview, evidence=sparse)
+        expected = ['pro', 'xhigh', 'high', 'medium', 'instant']
+        self.assertEqual(order['ranks']['models']['chat']['quality'], expected)
+        self.assertEqual(order['sort']['models']['chat'], 'quality')
+        self.assertEqual(order['models']['chat'], expected)
 
-if __name__ == '__main__':
+    def test_every_provider_keeps_older_section_under_every_sort_and_custom_order(self):
+        roster = base_overlay()
+        overview = fleetctl.fleet_overview(roster, {}, Path('/tmp'))
+        by_key = {m['model']: m for m in overview['models']}
+        count = 0
+        for criterion in console.MODEL_SORTS:
+            saved = {'pools': [], 'models': {}, 'sort': {'pools': 'name', 'models': {}}}
+            for pool in overview['pools']:
+                saved['models'][pool['pool']] = [o['model'] for o in reversed(pool.get('options', []))]
+                saved['sort']['models'][pool['pool']] = criterion
+            order = console.display_order(overview, saved)
+            for pool in overview['pools']:
+                older = [o for o in pool.get('options', []) if not o['current']]
+                if not older:
+                    continue
+                count += 1
+                markup = console._picker(pool, by_key, 'test', order)
+                section = re.search(r'<details class="older">(.*)</ul></details>', markup, re.S)
+                self.assertIsNotNone(section, (pool['pool'], criterion))
+                for option in older:
+                    self.assertIn(f'data-model="{option["model"]}"', section.group(1))
+                    self.assertNotIn(f'data-model="{option["model"]}"', markup[:section.start()])
+        self.assertGreater(count, 4)
+
+
+if __name__ == "__main__":
     unittest.main()

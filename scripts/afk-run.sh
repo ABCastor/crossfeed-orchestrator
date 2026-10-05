@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # afk-run.sh — bounded sequential AFK controller.  Proof exit status, never a
 # model's self-report, is the only success condition.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -182,3 +184,6 @@ done
 if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then echo "AFK STOP: attempt budget exhausted" >&2
 else echo "AFK STOP: allowed routes exhausted" >&2; fi
 exit 3
+
+}
+main "$@"; exit $?

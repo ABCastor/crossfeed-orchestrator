@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Prepare the human-carried GPT Pro review bundle.
 # a named, dated bundle with a PROMPT.md plus only the evidence the reviewer needs.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 usage() {
@@ -160,3 +162,6 @@ else
   (cd "$BUNDLE_DIR" && zip -qr "$ARCHIVE_ABS" . -x "$(basename "$ARCHIVE")")
 fi
 printf '%s\n' "$ARCHIVE"
+
+}
+main "$@"; exit $?

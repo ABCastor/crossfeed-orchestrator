@@ -19,18 +19,20 @@
 #
 # Without --timeout, the selected lane's roster timeout remains the deliberate hard
 # budget. The quota lease is padded through the complete TERM-to-KILL window so it
-# cannot expire while its child group is still alive. Idle timeout defaults to 2400
-# seconds and kill-after defaults to 30 seconds.
+# cannot expire while its child group is still alive. Idle timeout defaults to 0
+# (opt-in killing only) and kill-after defaults to 30 seconds.
 # Exit codes: 0 success; 2 usage; 3 modality rejection; 4 lease/event JSON failure;
 # 5 session error; 6 no successful terminal step; 7 empty output; 8 telemetry failure;
 # 124 wall-clock kill; 125 idle kill; 127 missing dependency.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="$PWD"; PROMPT=""; PROMPT_FILE=""; MODEL=""; MODEL_KEY=""; LANE=""
 ROLE="default"; ROLE_SET=0; MODALITY="text"; VARIANT=""; MODE="read-only"; CONTEXT="lean"
 EFFORT_ROLE=""
-TIMEOUT=""; IDLE_TIMEOUT="2400"; KILL_AFTER="30"; ROSTER_TIMEOUT=""
+TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"; ROSTER_TIMEOUT=""
 EVENTS=""; LAST=""; FILES=(); FILE_COUNT=0; WEB_SEARCH=0; DIRECT=0; INJECT_FILES=()
 
 _usage_error() {
@@ -573,6 +575,8 @@ _terminate_group() {
 # The watchdog is stopped with SIGKILL, never TERM: a TERM that lands while bash is still forking
 # the watchdog makes bash 5 run the wrapper's EXIT trap in it, deleting this run's files.
 _watchdog() {
+  local silence_interval="${CROSSFEED_TEST_SILENCE_INTERVAL_S:-600}" reported_silence=0
+  [[ "$silence_interval" =~ ^[1-9][0-9]*$ ]] || silence_interval=600
   local started last_activity now elapsed idle_for
   local last_output current_output last_cpu current_cpu
 
@@ -607,10 +611,13 @@ _watchdog() {
     last_cpu="$current_cpu"
 
     idle_for=$((now - last_activity))
-    # --idle-timeout 0 DISABLES idle supervision. Without this, 0 meant "kill the instant nothing
-    # has changed", so anyone trying to turn supervision off got instant kills instead. Keeping the
-    # off-switch honest matters: it is the one lever for anyone who would rather risk an unbounded
-    # hang than any false kill, and a reviewer argued exactly that position.
+    # Reporting never changes the child-output/CPU progress clock.
+    if [ "$idle_for" -lt "$reported_silence" ]; then reported_silence=0; fi
+    if [ "$((idle_for - reported_silence))" -ge "$silence_interval" ]; then
+      echo "opencode-agent: silent for $((idle_for / 60)) min (${idle_for}s); still running" >&2
+      reported_silence="$idle_for"
+    fi
+    # Only an explicit positive --idle-timeout opts into termination.
     if [ "$IDLE_TIMEOUT" -gt 0 ] && [ "$idle_for" -ge "$IDLE_TIMEOUT" ]; then
       printf 'idle\n' >"$KILL_STATE"
       _print_kill_message "IDLE" "$elapsed" "no output or CPU progress for ${idle_for}s; configured --idle-timeout ${IDLE_TIMEOUT}s"
@@ -740,3 +747,6 @@ if [ "$telemetry_failed" = "1" ]; then
   echo "opencode-agent: exiting 8 — telemetry was not recorded; spend is unaccounted (deliverable still written to --last)" >&2
   exit 8
 fi
+
+}
+main "$@"; exit $?

@@ -18,6 +18,8 @@
 # 4 exists because 1 was being used for both "some tasks failed" and "no task ever started", and
 # those send the caller to opposite places: 1 means read summary.tsv, 4 means there is no
 # summary.tsv to read. That collision is what made a refusal look like a half-finished run.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 EXIT_REFUSED=4
 
@@ -605,3 +607,6 @@ skipped_count="$(awk -F '\t' '$1 == "SKIPPED" {n++} END {print n+0}' "$OUT/summa
 echo "fanout: summary succeeded=$succeeded_count warnings=$warning_count failed=$failed_count killed_wall_clock=$wall_count killed_idle_watchdog=$idle_count skipped=$skipped_count -> $OUT" >&2
 incomplete_count=$((failed_count + wall_count + idle_count + skipped_count))
 [ "$incomplete_count" -eq 0 ] || exit 1
+
+}
+main "$@"; exit $?

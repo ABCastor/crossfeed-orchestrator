@@ -22,19 +22,18 @@
 #
 #   MODE = read-only | workspace-write (default) | danger-full-access
 #   --timeout has no default: absent means no wall-clock limit.
-#   --idle-timeout defaults to 2400 seconds; --kill-after defaults to 30 seconds.
+#   --idle-timeout defaults to 0 (opt-in killing only); --kill-after defaults to 30 seconds.
 #
-# Why 2400 and not a round guess: measured over 134 real non-interactive `codex exec` runs on this
-# machine, the median longest silent gap was 63s, p95 was 306s, and the worst was 1074s. 600s would
-# have killed one healthy run in 134; 1200s killed none but left only 12% headroom, which an
-# adversarial review judged too thin to bet healthy work on, so the default is double the worst
-# observed gap. Liveness is (group output grew) OR (CPU summed across the WHOLE process group grew),
-# so a busy descendant under a quiet leader counts as alive. Pass --idle-timeout 0 to disable idle
-# supervision entirely if you would rather risk an unbounded hang than any false kill.
+# Silence can be healthy server-side reasoning. Default supervision reports silence every
+# ten minutes; only an explicit --idle-timeout opts into killing a silent process group.
+# Output growth or process-group CPU progress resets the silence diagnostic.
+# Owner 2026-10-04: no wasted work.
 #
 # Prints the agent's FINAL message to stdout. Diagnostics go to stderr.
 # Exit codes: 0 success; 2 usage; 4 exited 0 with a blank deliverable; 124 wall-clock kill; 125 idle kill;
 # 127 codex binary missing; every other codex exit code is passed through.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 if [ "$("$(dirname "$0")/fleetctl.py" switch codex 2>/dev/null)" = off ]; then
   echo "codex-agent: the codex pool is switched off by hand (fleetctl.py switch codex auto)" >&2; exit 5
@@ -45,7 +44,7 @@ fi
 # for throwaway work pass --dir ~/.codex/scratch - never bare ~ (it clutters home).
 # Convention + why: references/usage.md section 3, "Codex writes INTO its working folder".
 DIR="$PWD"; PROMPT=""; PROMPT_FILE=""; SANDBOX="workspace-write"; MODEL=""; SCHEMA=""
-TIMEOUT=""; IDLE_TIMEOUT="2400"; KILL_AFTER="30"
+TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"
 EVENTS=""; LAST=""; REASONING=""; ROLE="default"; LOG=""; DRY_RUN=0
 
 _usage_error() {
@@ -435,6 +434,8 @@ _terminate_group() {
 # The watchdog is stopped with SIGKILL, never TERM: a TERM that lands while bash is still forking
 # the watchdog makes bash 5 run the wrapper's EXIT trap in it, deleting this run's files.
 _watchdog() {
+  local silence_interval="${CROSSFEED_TEST_SILENCE_INTERVAL_S:-600}" reported_silence=0
+  [[ "$silence_interval" =~ ^[1-9][0-9]*$ ]] || silence_interval=600
   local started last_activity now elapsed idle_for
   local last_output current_output last_cpu current_cpu
 
@@ -465,10 +466,13 @@ _watchdog() {
     last_cpu="$current_cpu"
 
     idle_for=$((now - last_activity))
-    # --idle-timeout 0 DISABLES idle supervision. Without this, 0 meant "kill the instant nothing
-    # has changed", so anyone trying to turn supervision off got instant kills instead. Keeping the
-    # off-switch honest matters: it is the one lever for anyone who would rather risk an unbounded
-    # hang than any false kill, and a reviewer argued exactly that position.
+    # Reporting never changes the child-output/CPU progress clock.
+    if [ "$idle_for" -lt "$reported_silence" ]; then reported_silence=0; fi
+    if [ "$((idle_for - reported_silence))" -ge "$silence_interval" ]; then
+      echo "codex-agent: silent for $((idle_for / 60)) min (${idle_for}s); still running" >&2
+      reported_silence="$idle_for"
+    fi
+    # Only an explicit positive --idle-timeout opts into termination.
     if [ "$IDLE_TIMEOUT" -gt 0 ] && [ "$idle_for" -ge "$IDLE_TIMEOUT" ]; then
       printf 'idle\n' >"$KILL_STATE"
       _print_kill_message "IDLE" "$elapsed" "no output or CPU progress for ${idle_for}s; configured --idle-timeout ${IDLE_TIMEOUT}s"
@@ -612,3 +616,6 @@ cp "$RUN_LAST" "$LAST.part.$$" && mv -f "$LAST.part.$$" "$LAST"
 # The final agent message is the deliverable.
 [ -n "$SCHEMA" ] || cat "$LAST"
 exit 0
+
+}
+main "$@"; exit $?

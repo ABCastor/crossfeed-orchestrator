@@ -13,7 +13,7 @@
 #                       [--timeout S] [--idle-timeout S] [--kill-after S] [--last <file>]
 #
 #   --timeout has no default: absent means no wall-clock limit.
-#   --idle-timeout defaults to 2400 seconds; --kill-after defaults to 30 seconds.
+#   --idle-timeout defaults to 0 (opt-in killing only); --kill-after defaults to 30 seconds.
 #
 # Without a lane/model-key/model, --model-key is required (there is no auto-routing yet:
 # no OpenRouter lane is in any routing.roles list, so fleetctl route --harness openrouter
@@ -37,11 +37,13 @@
 # Exit codes: 0 success; 2 usage; 3 lane rejected by roster or key missing; 4 lease failure;
 # 5 model failed the live free-only gate; 6 API/network error; 7 empty output;
 # 124 wall-clock kill; 125 idle-watchdog kill; 127 missing dep.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROMPT=""; PROMPT_FILE=""; MODEL=""; MODEL_KEY=""; LANE=""; LAST=""
-TIMEOUT=""; IDLE_TIMEOUT="2400"; KILL_AFTER="30"
+TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"
 
 _usage_error() {
   echo "openrouter-agent: $1" >&2
@@ -180,10 +182,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The lease must outlive the call, and with no wall clock the only bound left is the idle
-# watchdog, so that is what the TTL is sized against. Reading TIMEOUT into an unrelated
-# lease variable is not a wall-clock default; it is the lease borrowing whichever bound applies.
-lease_ttl=$(( ${TIMEOUT:-$IDLE_TIMEOUT} + 60 ))
+# With diagnostic-only idle supervision, borrow the existing uncapped CLI lease
+# horizon rather than expiring this lane after sixty seconds.
+lease_budget="${TIMEOUT:-$IDLE_TIMEOUT}"
+[ "$lease_budget" -gt 0 ] || lease_budget=86400
+lease_ttl=$((lease_budget + 60))
 acquire_err="$(mktemp)"
 if ! lease_token="$("$HERE/fleetctl.py" acquire --lane "$LANE" --ttl "$lease_ttl" 2>"$acquire_err")"; then
   cat "$acquire_err" >&2; rm -f "$acquire_err"
@@ -273,6 +276,8 @@ _terminate_group() {
 # The watchdog is stopped with SIGKILL, never TERM: a TERM that lands while bash is still forking
 # the watchdog makes bash 5 run the wrapper's EXIT trap in it, deleting this run's files.
 _watchdog() {
+  local silence_interval="${CROSSFEED_TEST_SILENCE_INTERVAL_S:-600}" reported_silence=0
+  [[ "$silence_interval" =~ ^[1-9][0-9]*$ ]] || silence_interval=600
   local started last_activity now elapsed idle_for last_output current_output
 
   started="$(_now)"
@@ -299,9 +304,13 @@ _watchdog() {
     last_output="$current_output"
 
     idle_for=$((now - last_activity))
-    # --idle-timeout 0 DISABLES idle supervision, the one lever for anyone who would rather risk
-    # an unbounded hang than any false kill. Without this branch, 0 would mean "kill the instant
-    # nothing has changed", so the off-switch would produce instant kills instead.
+    # Reporting never changes the child-output/CPU progress clock.
+    if [ "$idle_for" -lt "$reported_silence" ]; then reported_silence=0; fi
+    if [ "$((idle_for - reported_silence))" -ge "$silence_interval" ]; then
+      echo "openrouter-agent: silent for $((idle_for / 60)) min (${idle_for}s); still running" >&2
+      reported_silence="$idle_for"
+    fi
+    # Only an explicit positive --idle-timeout opts into termination.
     if [ "$IDLE_TIMEOUT" -gt 0 ] && [ "$idle_for" -ge "$IDLE_TIMEOUT" ]; then
       printf 'idle\n' >"$KILL_STATE"
       _print_kill_message "IDLE" "$elapsed" "no HTTP stream progress for ${idle_for}s; configured --idle-timeout ${IDLE_TIMEOUT}s"
@@ -703,3 +712,6 @@ fi
 
 cat "$RUN_LAST"
 exit 0
+
+}
+main "$@"; exit $?

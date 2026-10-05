@@ -149,6 +149,18 @@ class Console:
         overview['console_order'] = display_order(overview, runtime.get('console_order'), roster, evidence)
         return overview
 
+    def set_pro_allowance(self, pool: str, allowance: str) -> None:
+        if not re.fullmatch(r"[0-9]{1,6}", allowance):
+            raise ValueError("invalid allowance")
+        discovered = fleetctl.read_overlay(self.overlay_path, self.state_dir)
+        if not any(fleetctl.chatgpt_pro.is_pro(lane) and lane.get("quota_pool") == pool
+                   for lane in discovered.get("lanes", [])):
+            raise ValueError("not a Pro pool")
+        with providers.edit_overlay(self.overlay_path) as roster:
+            if pool not in roster.get("quota_pools", {}):
+                raise ValueError("not a Pro pool")
+            roster["quota_pools"][pool]["pro_weekly_allowance"] = int(allowance)
+
     def set_order(self, order: Any) -> None:
         validate_order(order)
         with fleetctl.locked_runtime(self.state_dir) as runtime:
@@ -256,6 +268,7 @@ def display_order(overview: dict[str, Any], saved: Any = None, roster: dict[str,
     by_model = {model['model']: model for model in overview['models']}
     rows = (evidence or {}).get('rows') or []
     models = {}
+    defaults = {}
     for pool, item in by_pool.items():
         current = [option['model'] for option in item.get('options') or []]
         models[pool] = _append_order(saved['models'].get(pool, []), current)
@@ -278,12 +291,26 @@ def display_order(overview: dict[str, Any], saved: Any = None, roster: dict[str,
         def measured(key, values, descending=False):
             value = values[key]
             return value is None, (-value if descending else value) if value is not None else 0
+        def quality_rank(key):
+            model = by_model.get(key) or {}
+            levels = [lane.get('worker_level') for lane in model.get('lanes') or []
+                      if lane.get('harness') == 'chatgpt-chat']
+            level_order = {'pro': 0, 'xhigh': 1, 'high': 2, 'medium': 3, 'instant': 4}
+            # Saved picker levels are distinct quality tiers, even when one has no samples yet.
+            if levels:
+                return (0, min(level_order.get(level, 5) for level in levels), 0)
+            return (1, *measured(key, qualities, True),
+                    (model.get('card') or {}).get('order', float('inf')))
+        quality_order = sorted(current, key=quality_rank)
+        if not saved['models'].get(pool):
+            models[pool] = quality_order[:]
+        defaults[pool] = 'your' if saved['models'].get(pool) else 'quality'
         ranks['models'][pool] = {'your': models[pool],
-            'quality': sorted(current, key=lambda key: measured(key, qualities, True)),
+            'quality': quality_order,
             'cheapest': sorted(current, key=lambda key: measured(key, prices)),
             'name': sorted(current, key=lambda key: _name(by_model.get(key), key).casefold())}
     sorts = {'pools': saved['sort']['pools'],
-             'models': {pool: saved['sort']['models'].get(pool, 'your') for pool in by_pool}}
+             'models': {pool: saved['sort']['models'].get(pool, defaults[pool]) for pool in by_pool}}
     flat = {pool: sorts['models'][pool] != 'your' or models[pool] != [o['model'] for o in item.get('options') or []]
             for pool, item in by_pool.items()}
     return {'pools': pools, 'models': models, 'sort': sorts, 'ranks': ranks, 'flat': flat}
@@ -325,9 +352,12 @@ THEME_TOGGLE = (ASSETS / "theme-toggle.html").read_text(encoding="utf-8")
 
 LENS = (
     '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round">'
-    '<circle cx="10.6" cy="10.6" r="5.4" stroke-width="1.5"/>'
-    '<path d="M14.6 14.6 19.2 19.2" stroke-width="1.6"/></g></svg>'
+    '<circle cx="10" cy="10" r="7" stroke-width="1.5"/>'
+    '<path d="M15.2 15.2 21 21" stroke-width="1.6"/></g></svg>'
 )
+SETTINGS_ICON = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path '
+                 'd="M9.7 3.7h4.6l.6 2.4 2.1 1.2 2.4-.6 2.3 4-1.8 1.8v2.4l1.8 1.8-2.3 4-2.4-.6-2.1 1.2-.6 2.4H9.7l-.6-2.4L7 20.1l-2.4.6-2.3-4 1.8-1.8v-2.4l-1.8-1.8 2.3-4 2.4.6 2.1-1.2.6-2.4Z" '
+                 'transform="translate(1 0) scale(.91)"/><circle cx="12" cy="12" r="3"/></svg>')
 CHEVRON = '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9.5 5 5 5-5"/></svg>'
 # Drawn in the lens's stroke, so every icon on the page is one family.
 OUT = ('<svg class="out" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h8.5V15M17.2 6.8 7 17"/></svg>')
@@ -344,22 +374,26 @@ _BN, _, _BD = PRODUCT_NAME.partition(" ")
 BRAND_WORDS = f'<span class="bn">{html.escape(_BN)}</span> <span class="bd">{html.escape(_BD)}</span>'
 
 
-def _masthead() -> str:
+def _masthead(settings: bool = False) -> str:
     """The Castor product header: everything stands on one line that is exactly the column.
 
     It is fixed to the screen and every part rides up with the page, 1:1, until the air above the
     name is halved; then it holds, the name at its own size (console.css, "v2.8 header").
     """
     name = html.escape(PRODUCT_NAME)
+    provider_current = ' aria-current="page"' if not settings else ""
+    settings_current = ' aria-current="page"' if settings else ""
     return (
         '<header class="mast" data-line><i class="here" aria-hidden="true"></i><span class="brand">'
         f'<a class="product-mark" href="/" aria-label="{name} console">{MARK}</a>'
         f'<a class="compact-brand" href="/">{BRAND_WORDS}<span class="star" aria-hidden="true">*</span></a></span>'
-        '<nav class="nav" aria-label="Main"><a href="/" aria-current="page"><span class="tl" data-t="Providers">Providers</span></a></nav>'
+        f'<nav class="nav" aria-label="Main"><a href="/"{provider_current}><span class="tl" data-t="Providers">Providers</span></a>'
+        '</nav>'
         '<span class="bar-tools"><span class="find">'
         '<button class="find-lens" type="button" aria-label="Search everything  /" title="Search everything  /" '
         'aria-keyshortcuts="/ Meta+K Control+K" aria-expanded="false" aria-controls="find">'
-        f'{LENS}</button></span>{THEME_TOGGLE}</span>'
+        f'{LENS}</button></span>{THEME_TOGGLE}'
+        f'<a class="settings-toggle" href="/settings"{settings_current} aria-label="Settings" title="Settings">{SETTINGS_ICON}</a></span>'
         '<div class="find-panel" id="find" hidden><label for="global-search-input">Search everything</label>'
         '<span class="find-field"><input id="global-search-input" type="search" autocomplete="off" '
         'placeholder="Find a provider or model" aria-controls="search-results" aria-keyshortcuts="Meta+K Control+K">'
@@ -368,7 +402,7 @@ def _masthead() -> str:
     )
 
 
-def shell(title: str, body: str, front: bool = False) -> str:
+def shell(title: str, body: str, front: bool = False, settings: bool = False) -> str:
     """A page. `front` is the console's front page, where the name starts as large as its row allows."""
     fonts = "".join(f'<link rel="preload" href="/static/fonts/{font}" as="font" type="font/woff2" crossorigin>'
                     for font in PRELOAD_FONTS)
@@ -382,8 +416,45 @@ def shell(title: str, body: str, front: bool = False) -> str:
         f'<link rel="stylesheet" href="/static/console.css?v={_asset_version("console.css")}">'
         f'<script src="/static/console.js?v={_asset_version("console.js")}" defer></script>'
         f'<script src="/static/keep.js?v={_asset_version("keep.js")}" defer></script></head>'
-        f'<body><div class="wrap">{_masthead()}<main>{body}</main>{FOOTER}</div></body></html>'
+        f'<body><div class="wrap">{_masthead(settings)}<main>{body}</main>{FOOTER}</div></body></html>'
     )
+
+
+def render_settings(overview: dict[str, Any], token: str) -> str:
+    roster = overview['_brief_context']['roster']
+    cap = "Unavailable, Crossfeed Chat did not report a live cap."
+    template = roster.get('chatgpt_gateway', {}).get('lane_template')
+    if template:
+        try:
+            from chatgpt_transport import request, settings, Rejected
+            base, key = settings(template)
+            limits = request(base, key, '/gateway/status', timeout=1).get('wake_limits', {})
+            hourly = limits.get('hourly_cap')
+            if type(hourly) is int and hourly >= 0:
+                cap = f"{hourly} fresh chats per rolling hour" if hourly else "No hourly cap"
+        except (Rejected, OSError, ValueError, TypeError, AttributeError):
+            pass
+    forms = []
+    for pool, config in roster.get('quota_pools', {}).items():
+        if any(fleetctl.chatgpt_pro.is_pro(lane) and lane.get('quota_pool') == pool for lane in roster.get('lanes', [])):
+            forms.append(f'<form method="post" action="/settings/pro" class="setting-row">'
+                         f'<input type="hidden" name="t" value="{html.escape(token)}">'
+                         f'<input type="hidden" name="pool" value="{html.escape(pool)}">'
+                         f'<label>Pro weekly allowance<input type="number" name="allowance" min="0" max="999999" required '
+                         f'value="{config.get("pro_weekly_allowance", 200)}"></label><button type="submit">Save allowance</button>'
+                         '<p class="quiet">Local estimate over the last seven days, not a published ChatGPT limit. '
+                         'This changes the Pro meter and its fallback threshold. Zero disables Pro by this estimate.</p></form>')
+    return shell('Settings', '<h1>Settings</h1><p class="lede">Preferences and local limits.</p>'
+                 '<section class="settings"><div class="setting-row"><label for="theme-choice">Theme</label>'
+                 '<select id="theme-choice" data-theme-choice><option value="system">System</option>'
+                 '<option value="light">Light</option><option value="dark">Dark</option></select>'
+                 '<p class="quiet">Saved in this browser.</p></div>' + ''.join(forms) +
+                 f'<div class="setting-row"><h2>Fresh ChatGPT chats</h2><p>Hourly cap: {html.escape(cap)}.</p>'
+                 '<p class="quiet">Read the service status for the live cap. Set <code>--wake-hourly-cap</code> '
+                 'in the Crossfeed Chat service launcher and restart that service. This console cannot change it.</p></div>'
+                 '<div class="setting-row"><h2>Provider keys</h2><p>Keys entered here stay in <code>provider-keys/</code> beside your access overlay, '
+                 'or in the secret reference you supplied. Values are never shown here.</p>'
+                 '<a href="/#provider-setup">Add provider</a></div></section>', settings=True)
 
 
 def _ago(seconds: int | None) -> str:
@@ -420,7 +491,7 @@ def _scope_words(scope: str | None, pool: str) -> str | None:
     return _pretty("-".join(parts)) if parts else None
 
 
-def _limit_row(limit: dict[str, Any], pool: str = "") -> str:
+def _limit_row(limit: dict[str, Any], pool: str = "", *, spare_allowed: bool = True) -> str:
     limit = {**limit, "scope": _scope_words(limit.get("scope"), pool)}
     title = html.escape(limit["title"])
     scope = f'<small>{html.escape(limit["scope"])}</small>' if limit.get("scope") else ""
@@ -439,7 +510,7 @@ def _limit_row(limit: dict[str, Any], pool: str = "") -> str:
         when = "not started yet"
     else:
         when = f'resets {html.escape(limit["resets"])}'
-    use = limit.get("spend_down")
+    use = limit.get("spend_down") and spare_allowed and used < 90
     if use:
         when += ' <span class="use">· spare, use it</span>'
     classes = "lim" + (" hot" if hot else "") + (" full" if used >= 100 else "")
@@ -465,7 +536,8 @@ def _gauge(pool: dict[str, Any]) -> str:
         renews = ""
         if pool.get("renews_at"):
             renews = f'<p class="q renews">Plan renews {html.escape(fleetctl.reset_words(pool["renews_at"]))}</p>'
-        return f'{exhausted}<ul class="limits" aria-label="Limits">{"".join(_limit_row(l, pool["pool"]) for l in limits)}</ul>{renews}'
+        spare_allowed = pool.get("routing_state", state) not in {"CRITICAL", "EXHAUSTED"}
+        return f'{exhausted}<ul class="limits" aria-label="Limits">{"".join(_limit_row(l, pool["pool"], spare_allowed=spare_allowed) for l in limits)}</ul>{renews}'
     if pool["plan"].get("limit") == "none-known":
         words = 'Chat usage: no published cap' if pool.get('pro_usage') else 'no known limit'
         return f'<p class="q quiet">{words}</p>'
@@ -616,6 +688,8 @@ def _name(model: dict[str, Any] | None, key: str | None = None) -> str:
         if lane.get("harness") == "chatgpt-chat" and lane.get("worker_row") and lane.get("worker_level"):
             level = {"instant": "Instant", "medium": "Medium", "high": "High",
                      "xhigh": "Extra High", "pro": "Pro"}.get(lane["worker_level"], _pretty(lane["worker_level"]))
+            if lane.get("selector") == "chatgpt:media-unattended" or lane.get("model_key") == "chatgpt:media-unattended" or (model or {}).get("model") == "chatgpt:media-unattended" or key == "chatgpt:media-unattended":
+                return "ChatGPT media · Images and video · Unattended"
             count = lane.get("max_parallel", 1)
             return f"ChatGPT picker: {lane['worker_row']} · Thinking: {level} · Up to {count} {'task' if count == 1 else 'tasks'} at once"
     card = (model or {}).get("card") or {}
@@ -895,7 +969,8 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
         if lane.get("harness") == "chatgpt-chat" and lane.get("worker_row"):
             count = lane.get("max_parallel", 1)
             original = line
-            line = f"{count} saved {'chat' if count == 1 else 'chats'}. Text only."
+            mode = "Media tasks." if key == "chatgpt:media-unattended" else "Text only."
+            line = f"{count} saved {'chat' if count == 1 else 'chats'}. {mode}"
             if older:
                 line += " " + original
             elif lane.get("catalog_state") == "sleeping":
@@ -957,8 +1032,6 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
         listing += (f'<details class="older"><summary>Older models <span class="count">{len(older)}'
                     f'{f" · {on_older} on" if some_off else ""}</span>{active_summary}</summary>{rule}'
                     f'<ul class="opts">{"".join(_option(by_key[o["model"]], pool, o, by_key) for o in older)}</ul></details>')
-    if order and order['flat'][pool['pool']]:
-        listing = f'<ul class="opts">{"".join(_option(by_key[o["model"]], pool, o, by_key) for o in options)}</ul>'
     # One short line at most: the line under "Models" already says what the switches add up to.
     if runnable and pool.get("direct"):
         hint = f"These switches steer Crossfeed's agents. The {label} app on your own screen keeps its own model picker."
@@ -1079,7 +1152,7 @@ def provider_setup(sources: list[dict[str, Any]], token: str) -> str:
                    f'<input type="hidden" name="t" value="{token}">'
                    f'<input type="hidden" name="id" value="{html.escape(source["id"])}">'
                    '<button type="submit">Remove</button></form></li>' for source in sources)
-    return ('<section class="provider-setup" aria-label="Provider setup"><details>'
+    return ('<section class="provider-setup" id="provider-setup" aria-label="Provider setup"><details>'
             '<summary class="provider-open"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">'
             '<path d="M12 5v14M5 12h14"/></svg>Add provider</summary>'
             '<div class="provider-layout"><div class="provider-intro"><h2>Connect a provider</h2>'
@@ -1248,7 +1321,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             if url.path.startswith("/static/"):
                 self._static(url.path[len("/static/"):])
                 return
-            if url.path not in {"/", "/snapshot"}:
+            if url.path not in {"/", "/snapshot", "/settings"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             if not console.signed_in(self.headers):
@@ -1261,7 +1334,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 if url.path == "/snapshot":
                     self._send(200, json.dumps(snapshot_payload(overview)).encode(), "application/json; charset=utf-8")
                     return
-                page = render_page(overview, console.form_token)
+                page = render_settings(overview, console.form_token) if url.path == "/settings" else render_page(overview, console.form_token)
             except (fleetctl.FleetError, OSError, ValueError) as exc:
                 self._refuse(500, "The fleet could not be read", str(exc))
                 return
@@ -1281,7 +1354,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 self._refuse(401, "Signed out", "Open the console from the link it printed when it started.")
                 return
             path = urllib.parse.urlsplit(self.path).path
-            if path not in {"/level", "/preference", "/refresh", "/model", "/order", "/provider/probe", "/provider/add", "/provider/remove"}:
+            if path not in {"/settings/pro", "/level", "/preference", "/refresh", "/model", "/order", "/provider/probe", "/provider/add", "/provider/remove"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             try:
@@ -1319,6 +1392,10 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                                              + '</p><p><a href="/">Back to providers</a></p>'))
                     else:
                         self._redirect('/')
+                    return
+                if path == '/settings/pro':
+                    console.set_pro_allowance(pool, fields.get('allowance', [''])[0])
+                    self._redirect('/settings')
                     return
                 if path == '/order':
                     console.set_order(json.loads(fields.get('order', [''])[0]))

@@ -1705,18 +1705,20 @@ class QuotaPolicyTests(unittest.TestCase):
         self.assertFalse(verdict["surplus"])
         self.assertEqual(verdict["basis"], "observed_pace")
 
-    def test_eta_beyond_the_reset_is_surplus(self):
+    def test_eta_beyond_reset_cannot_make_critical_usage_spare(self):
         verdict = fleetctl.window_surplus(
             {"used_percent": 90, "seconds_to_reset": 600, "eta_seconds": 4000}
         )
-        self.assertTrue(verdict["surplus"])
+        self.assertFalse(verdict["surplus"])
         self.assertEqual(verdict["basis"], "observed_pace")
+        self.assertEqual(verdict["constrained_by"], "actual_usage")
 
     def test_elapsed_window_fallback_only_when_no_rate_is_knowable(self):
         """No window length and no pace: fall back to the crude proxy."""
         verdict = fleetctl.window_surplus({"used_percent": 90, "seconds_to_reset": 600})
         self.assertEqual(verdict["basis"], "elapsed_window")
-        self.assertTrue(verdict["surplus"])
+        self.assertFalse(verdict["surplus"])
+        self.assertEqual(verdict["constrained_by"], "actual_usage")
         far = fleetctl.window_surplus({"used_percent": 90, "seconds_to_reset": 90000})
         self.assertFalse(far["surplus"])
 
@@ -1758,14 +1760,15 @@ class QuotaPolicyTests(unittest.TestCase):
 
     # --- clock_aware -------------------------------------------------------
 
-    def test_expiring_window_stops_gating_under_clock_aware(self):
-        """92% with 20 minutes left on a 5h window: spend it, do not ration it."""
+    def test_critical_actual_usage_still_gates_near_reset(self):
+        """A nearby reset does not replenish the 8% allowance left right now."""
         self._policy("clock_aware")
         runtime = _runtime_with_window(92, 20 * 60)
         state, evidence = fleetctl.current_pool_state(runtime, "claude")
         self.assertEqual(state, "CRITICAL")  # measurement stays honest
-        self.assertEqual(evidence["spend_down"], ["secondary"])
-        self.assertEqual(fleetctl.task_band(state, evidence), "quality_first")
+        self.assertEqual(evidence["spend_down"], [])
+        self.assertEqual(evidence["binding_used_percent"], 92)
+        self.assertEqual(fleetctl.task_band(state, evidence), "critical")
 
     def test_same_percentage_far_from_reset_still_throttles(self):
         """The control: 92% with three days left is real scarcity."""
@@ -1775,8 +1778,8 @@ class QuotaPolicyTests(unittest.TestCase):
         self.assertEqual(evidence["spend_down"], [])
         self.assertEqual(fleetctl.task_band(state, evidence), "critical")
 
-    def test_a_surviving_window_still_binds_while_another_expires(self):
-        """An expiring window must not unlock a pool a second window still limits."""
+    def test_all_critical_actual_windows_bind_even_when_one_resets_soon(self):
+        """The most used applicable window cannot be erased by an expiry forecast."""
         self._policy("clock_aware")
         runtime = _runtime_with_window(95, 10 * 60)
         runtime["quota_snapshots"]["claude"]["windows"]["weekly"] = {
@@ -1785,16 +1788,16 @@ class QuotaPolicyTests(unittest.TestCase):
             "window_minutes": 10080,
         }
         state, evidence = fleetctl.current_pool_state(runtime, "claude")
-        self.assertEqual(evidence["spend_down"], ["secondary"])
-        self.assertEqual(evidence["binding_used_percent"], 80)
-        self.assertEqual(fleetctl.task_band(state, evidence), "conserve")
+        self.assertEqual(evidence["spend_down"], [])
+        self.assertEqual(evidence["binding_used_percent"], 95)
+        self.assertEqual(fleetctl.task_band(state, evidence), "critical")
 
-    def test_frontier_cap_opens_for_an_expiring_window(self):
+    def test_frontier_cap_stays_clamped_for_critical_usage_near_reset(self):
         self._policy("clock_aware")
         runtime = _runtime_with_window(92, 20 * 60)
         state, evidence = fleetctl.current_pool_state(runtime, "claude")
         frontier = {"max_parallel": 3, "quality_tier": "frontier"}
-        self.assertEqual(fleetctl.effective_cap(frontier, state, evidence), 3)
+        self.assertEqual(fleetctl.effective_cap(frontier, state, evidence), 1)
 
     # --- strict reproduces today's behaviour -------------------------------
 
@@ -1882,8 +1885,9 @@ class QuotaPolicyTests(unittest.TestCase):
         pool = out["quota_pools"]["claude"]
         self.assertIn("reset_at", pool["windows"]["secondary"])
         self.assertEqual(pool["bottleneck_used_percent"], 92)
-        self.assertEqual(pool["spend_down"], ["secondary"])
-        self.assertEqual(pool["band"], "quality_first")
+        self.assertEqual(pool["spend_down"], [])
+        self.assertEqual(pool["binding_used_percent"], 92)
+        self.assertEqual(pool["band"], "critical")
 
 
 class EffortTests(unittest.TestCase):

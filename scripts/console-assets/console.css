@@ -213,26 +213,46 @@ html[data-theme-choice="dark"]{color-scheme:dark}
 .hm-h{transform-box:view-box;transform-origin:12px 12px}
 @media(prefers-reduced-motion:no-preference){
   .compact-brand .star,.hm-h{transition:transform .45s var(--ease)}
-  .compact-brand:is(:hover,:focus-visible) .star,.product-mark:is(:hover,:focus-visible) .hm-h{transform:rotate(90deg)}
-  .cf-bar{transition:transform .45s var(--ease) .9s}
-  .cf-flow{transition:stroke-dashoffset .45s var(--ease) .675s}
-  .cf-l,.cf-r{transition:transform .9s var(--ease)}
-  .product-mark:is(:hover,:focus-visible) .cf-bar{transform:rotate(90deg);transition-delay:0s}
-  .product-mark:is(:hover,:focus-visible) .cf-flow{stroke-dashoffset:0;transition-delay:.225s}
-  .product-mark:is(:hover,:focus-visible) .cf-l{transform:translateY(var(--fall));transition-delay:.45s}
-  .product-mark:is(:hover,:focus-visible) .cf-r{transform:translateY(calc(-1 * var(--fall)));transition-delay:.45s}
+  .compact-brand:is(:hover,:focus-visible) .star,.product-mark:hover .hm-h,.product-mark[data-mark-active] .hm-h{transform:rotate(90deg)}
+  .cf-bar{animation:cf-valve 8s linear infinite paused}
+  .cf-flow{animation:cf-pipe 8s linear infinite paused}
+  .cf-l{animation:cf-left 8s linear infinite paused}
+  .cf-r{animation:cf-right 8s linear infinite paused}
+  .product-mark[data-mark-active] :is(.cf-bar,.cf-flow,.cf-l,.cf-r){animation-play-state:running}
+}
+/* Open, travel left to right, equalise, close. Hide stopped fuel before resetting
+   its dash; independent refill/use happens only with the valve closed. */
+@keyframes cf-valve{
+  0%,5%{transform:rotate(0deg)}10%,40%{transform:rotate(90deg)}
+  45%,100%{transform:rotate(0deg)}
+}
+@keyframes cf-pipe{
+  0%,10%{stroke-dashoffset:1;opacity:1}20%,44.99%{stroke-dashoffset:0;opacity:1}
+  45%{stroke-dashoffset:0;opacity:0}45.01%,100%{stroke-dashoffset:1;opacity:0}
+}
+@keyframes cf-left{
+  0%,20%{transform:translateY(0)}40%,55%{transform:translateY(7px)}
+  80%,100%{transform:translateY(0)}
+}
+@keyframes cf-right{
+  0%,20%{transform:translateY(0)}40%,55%{transform:translateY(-7px)}
+  80%,100%{transform:translateY(0)}
 }
 .quota-reading .stamp{margin:0}
 /* The tabs stand on the rule, independent of the website icon boxes. */
-.bar-tools{display:flex;align-items:center;flex:none;align-self:flex-end;margin:-10px 0 calc(1.15rem * 6.15 / 24 - 14.8px) 1.1rem}  /* the drawings' centre 4.7px over the name's baseline, the toggle disc's radius; the last box ends at the line's end */
-.find{display:none;position:relative;color:light-dark(var(--human),var(--machine))}
+.bar-tools{display:flex;align-items:center;flex:none;align-self:flex-end;gap:0;margin:-10px 0 calc(1.15rem * 6.15 / 24 - 22px) 1.1rem;color:var(--machine)}
+.find{display:none;position:relative;color:inherit}
 .js .find{display:flex}
 .find-lens{background:none;border:0;color:inherit;cursor:pointer}
-.find svg{display:block;width:1.15rem;height:1.15rem}
-.bar-tools .find-lens,.bar-tools .theme-toggle{position:relative;padding:0 3px;width:24.4px;min-width:24.4px;height:29.6px;align-items:center;justify-content:center;border-radius:2px}
-.js .bar-tools .theme-toggle,.bar-tools .find-lens{display:flex}
-.bar-tools .theme-toggle svg{translate:none}
-.bar-tools .find-lens::after,.bar-tools .theme-toggle::after{content:"";position:absolute;inset:auto;top:calc(50% - 22px);width:24.4px;height:44px}
+.settings-toggle{appearance:none;border:0;background:none;cursor:pointer;line-height:0}
+.settings-toggle svg{fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle){position:relative;box-sizing:border-box;padding:0;width:24.4px;min-width:24.4px;height:44px;align-items:center;justify-content:center;border-radius:2px;color:inherit}
+.js .bar-tools .theme-toggle,.bar-tools .find-lens,.bar-tools .settings-toggle{display:flex}
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle) svg{display:block;width:1.15rem;height:1.15rem;translate:none}
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle)::after{content:none}
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle):is(:hover,:focus-visible,[aria-current="page"]),
+html:is([data-theme-choice="light"],[data-theme-choice="dark"]) .bar-tools .theme-toggle{color:var(--ink)}
+@media(any-pointer:coarse){.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle){width:44px;min-width:44px}}
 .find-panel{position:absolute;z-index:5;top:calc(100% + var(--line-w));right:0;width:min(25rem,100%);padding:1rem;border:1px solid var(--rule);border-top:0;background:var(--paper);color:var(--ink);max-height:65vh;overflow:auto}  /* inside the bar, so it opens under the line wherever the page is scrolled */
 .find-field{position:relative;display:block}
 .find-panel .find-field input{padding-right:3.2rem}
@@ -430,7 +450,7 @@ details.older{margin-top:.35rem}
 /* A phone's name: what the row holds beside the lens and the toggle (48.8px and 12px of air). The brand's width is
    21.458px (the mark's 10px part) plus 12.532 times the size (the mark's .73em, the .6em gap, the name's 10.3656em,
    measured in Chrome with Literata loaded), each rounded up so the name never crowds the lens. */
-@media (max-width:560px){:root{--nm:min(24px,calc((100vw - var(--sb) - 2rem - 61px - 21.46px) / 12.533))}}
+@media (max-width:560px){:root{--nm:min(24px,calc((100vw - var(--sb) - 2rem - 86px - 21.46px) / 12.533))}}
 
 /* The header's paper and its line are one layer, drawn behind everything in it, so they ride together. */
 .mast::after{content:"";position:absolute;z-index:-1;inset:0 0 calc(-1 * var(--line-w));pointer-events:none;
@@ -449,12 +469,12 @@ h1{margin-top:calc(17px + var(--line-w))}
 @property --hroom{syntax:'<length>';inherits:true;initial-value:0px}
 @property --hbw{syntax:'<length>';inherits:true;initial-value:1px}
 @supports (animation-timeline:scroll()){
-  :root.front{--hroom:calc(min(100vw - var(--sb) - 2.5rem,59.5rem) - 154px);   /* beside the bold tab (63.2px), the lens and the toggle (48.8px after 17.6px), 24px clear */
+  :root.front{--hroom:calc(min(100vw - var(--sb) - 2.5rem,59.5rem) - 179px);   /* beside the bold tab (63.2px), three controls (73.2px after 17.6px), 24px clear */
     --hbw:calc((10px + .73 * var(--nm)) * 1.0119 * var(--logo) * 1.89333 + .6 * var(--nm) + 10.3656 * var(--nm));
     --h0:min(2,max(1,tan(atan2(var(--hroom),var(--hbw)))));
     --hE:calc((10px + .73 * var(--nm)) * 1.0119 * var(--logo) * (var(--h0) - 1))}
-  @media (max-width:760px){:root.front{--hroom:calc(100vw - var(--sb) - 2rem - 154px)}}
-  @media (max-width:680px){:root.front{--hroom:calc(100vw - var(--sb) - 2rem - 61px)}}   /* the tab is left out: the lens and the toggle beside the name, 12px clear */
+  @media (max-width:760px){:root.front{--hroom:calc(100vw - var(--sb) - 2rem - 179px)}}
+  @media (max-width:680px){:root.front{--hroom:calc(100vw - var(--sb) - 2rem - 86px)}}   /* the tab is left out: three controls beside the name, 12px clear */
   @media (prefers-reduced-motion:reduce){:root.front{--h0:1}}   /* no shrink to watch: the name at its size */
 
   html{scroll-padding-top:calc(var(--mast-stuck) + 1rem)}   /* anchors and search jumps land below the held header */
@@ -586,3 +606,19 @@ h1{margin-top:calc(17px + var(--line-w))}
 .pro-note p{margin-top:.35rem}
 
 .pick-line>.k{color:var(--machine-text);text-decoration:underline;text-underline-offset:.15em}
+
+/* Keep a dragged handle anchored without scroll anchoring or touch panning. */
+.pools:has(.ordering){overflow-anchor:none}
+.ordering{user-select:none}
+
+/* Settings keeps the established form type scale. */
+.settings{max-width:42rem;margin-top:1.5rem}
+.setting-row{padding:1.25rem 0;border-bottom:1px solid var(--rule)}
+.setting-row h2{font-size:16px;margin:0 0 .5rem}
+.setting-row label{display:block;font-weight:500}
+.setting-row input,.setting-row select{display:block;max-width:16rem;min-height:44px;margin:.5rem 0;padding:.5rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-strong);font:inherit}
+.setting-row button{min-height:44px;padding:.5rem .8rem;background:var(--surface);color:var(--ink);border:1px solid var(--rule-strong);font:inherit}
+@media(any-pointer:coarse) and (max-width:680px){
+  :root{--nm:min(24px,calc((100vw - var(--sb) - 2rem - 145px - 21.46px) / 12.533))}
+  :root.front{--hroom:calc(100vw - var(--sb) - 2rem - 145px)}
+}

@@ -93,7 +93,7 @@ class El {
   dispatch(type, event = {}) { for (const fn of this.listeners[type] || []) fn({target: this, preventDefault() {}, ...event}); }
   click() { this.dispatch('click'); if (this.attrs.type === 'submit') this.closest('form')?.submit(this); }
   setCustomValidity(message) { this.validationMessage = message; }
-  focus() { this.ownerDocument.activeElement = this; }
+  focus(options) { this.focusOptions = options; this.ownerDocument.activeElement = this; }
   select() { this.focus(); }
   scrollIntoView() { this.scrolled = true; }
   submit(submitter) { this.ownerDocument.dispatch('submit', {target: this, submitter}); }
@@ -432,25 +432,27 @@ test('search finds older models by name or id and opens every fold on the way', 
 
 const modelOrder = f => [...f.pick.querySelectorAll('.opts')[0].children].map(row => row.dataset.model);
 const handleOf = row => row.querySelector('.order-handle');
-test('real keyboard handles move across current/older, wait for Enter, and preserve model states', async () => {
-  const f = start(), handle = handleOf(f.oldOne);
+test('keyboard reorders current models, saves on Enter, and cannot pull older models out of their section', async () => {
+  const f = start(), handle = handleOf(f.sol);
   handle.dispatch('keydown', {key: 'ArrowUp'});
-  assert.deepEqual(modelOrder(f), ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna', 'gpt-6-luna']);
+  assert.deepEqual(modelOrder(f), ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna']);
   assert.equal(f.requests.length, 0);
   assert.equal(f.document.activeElement, handle);
-  assert.match(f.document.querySelector('.save-status').textContent, /moved to 3 of 4/);
-  assert.equal(f.older.hidden, true);
+  assert.match(f.document.querySelector('.save-status').textContent, /moved to 1 of 3/);
+  assert.equal(f.older.hidden, false);
   handle.dispatch('keydown', {key: 'Enter'});
   await flush();
   const sent = JSON.parse(f.requests[0].options.body.get('order'));
-  assert.equal(f.requests[0].url, '/order'); assert.equal(f.requests[0].options.body.get('t'), 'tok');
-  assert.equal(sent.sort.models.codex, 'your');
-  assert.deepEqual(sent.models.codex, modelOrder(f));
+  assert.deepEqual(sent.models.codex, [...modelOrder(f), 'gpt-5.6-luna']);
+  handleOf(f.oldOne).dispatch('keydown', {key: 'ArrowUp'});
+  handleOf(f.oldOne).dispatch('keydown', {key: 'Enter'});
+  await flush();
+  assert.equal(f.oldOne.parentElement, f.older.querySelector('.opts'));
+  assert.equal(f.requests.length, 1);
   sw(f, 'gpt-5.6-luna').click();
-  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All enabled']); // older still excluded
-  sw(f, 'gpt-6-astra').click();
-  f.allOn.click();
-  assert.equal(sw(f, 'gpt-5.6-luna').getAttribute('aria-checked'), 'false'); // switch all on leaves older alone
+  assert.deepEqual(view(f).slice(0, 2), ['now all', 'All enabled']);
+  sw(f, 'gpt-6-astra').click(); f.allOn.click();
+  assert.equal(sw(f, 'gpt-5.6-luna').getAttribute('aria-checked'), 'false');
 });
 
 test('Escape restores criterion and original groups; refresh does not undo a draft', async () => {
@@ -465,7 +467,8 @@ test('Escape restores criterion and original groups; refresh does not undo a dra
   assert.deepEqual(modelOrder(f), draft);
   handle.dispatch('keydown', {key: 'Escape'});
   assert.equal(select.value, 'name');
-  assert.deepEqual(modelOrder(f), [...initial.ranks.models.codex.name]);
+  assert.deepEqual(modelOrder(f), initial.ranks.models.codex.name.filter(key => key !== 'gpt-5.6-luna'));
+  assert.equal(f.oldOne.parentElement, f.older.querySelector('.opts'));
   assert.equal(f.requests.length, 1); // Escape has no POST
   const g = start();
   handleOf(g.oldOne).dispatch('keydown', {key: 'ArrowUp'});
@@ -485,7 +488,7 @@ test('failed order POST restores confirmed order, and pointer cancellation does 
   f.document.elementFromPoint = () => f.luna;
   f.luna.getBoundingClientRect = () => ({top: 0, height: 10});
   handle.dispatch('pointermove', {pointerId: 8, clientX: 0, clientY: 9});
-  assert.deepEqual(modelOrder(f), ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6-luna']);
+  assert.deepEqual(modelOrder(f), ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra']);
   handle.dispatch('pointercancel', {pointerId: 8});
   assert.deepEqual(modelOrder(f), ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna']);
   assert.equal(f.requests.length, 1);
@@ -521,26 +524,25 @@ test('refresh and order confirmation preserve focused controls', async () => {
   assert.equal(f.document.activeElement, handle);
 });
 
-test('touch pointer up commits one global order and lost capture cancels a later drag', async () => {
-  const f = start(), handle = handleOf(f.oldOne);
-  const captures = [];
+test('touch pointer commits a group order and lost capture cancels a later drag', async () => {
+  const f = start(), handle = handleOf(f.sol), captures = [];
   handle.setPointerCapture = pointer => captures.push([pointer, modelOrder(f)]);
   handle.hasPointerCapture = () => true;
   f.document.elementFromPoint = () => f.astra;
   f.astra.getBoundingClientRect = () => ({top: 0, height: 10});
   handle.dispatch('pointerdown', {pointerId: 12, pointerType: 'touch', button: 0});
   handle.dispatch('pointermove', {pointerId: 12, clientX: 0, clientY: 1});
-  assert.deepEqual(captures.at(-1), [12, ['gpt-5.6-luna', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna']]); // renewed after DOM move
-  handle.dispatch('lostpointercapture'); // queued loss from DOM move does not cancel renewed capture
-  handle.dispatch('pointerup', {pointerId: 12});
-  await flush();
+  assert.deepEqual(captures.at(-1), [12, ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna']]);
+  handle.dispatch('lostpointercapture');
+  handle.dispatch('pointerup', {pointerId: 12}); await flush();
   const order = JSON.parse(f.requests[0].options.body.get('order'));
-  assert.deepEqual(order.models.codex, ['gpt-5.6-luna', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna']);
+  assert.deepEqual(order.models.codex, ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna', 'gpt-5.6-luna']);
+  assert.equal(f.oldOne.parentElement, f.older.querySelector('.opts'));
   handle.dispatch('pointerdown', {pointerId: 13, button: 0});
   handle.dispatch('keydown', {key: 'ArrowDown'});
   handle.hasPointerCapture = () => false;
   handle.dispatch('lostpointercapture');
-  assert.deepEqual(modelOrder(f), order.models.codex);
+  assert.deepEqual(modelOrder(f), order.models.codex.slice(0, 3));
   assert.equal(f.requests.length, 1);
 });
 
@@ -555,7 +557,7 @@ test('sort changes animate cards and model rows, cancel interrupted effects, and
   const modelSort = f.pick.querySelector('[data-sort]');
   modelSort.value = 'name'; modelSort.dispatch('change');
   assert.ok(first.every(a => a.cancelled));
-  assert.equal(f.animations.filter(a => a.el.matches('.opt')).length, 4);
+  assert.equal(f.animations.filter(a => a.el.matches('.opt')).length, 2); // two current rows swap; older stays folded
   for (const a of f.animations) {
     assert.equal(a.frames.at(-1).transform, 'none');
     assert.equal(a.options.duration, 220);
@@ -863,4 +865,108 @@ test('provider errors keep the form editable; saving clears the key before reloa
   reply(f.requests[1], {message: 'Saved.'});
   await flush();
   assert.equal(reloads, 1);
+});
+
+
+test('pointer edge scrolling is bounded, follows a stationary pointer, and stops on release or cancel', () => {
+  const callbacks = new Map(), handlers = {}, scrolls = [], locations = [];
+  let next = 0, commits = 0, cancels = 0, captures = 0;
+  const win = {innerHeight: 800, scrollY: 100,
+    requestAnimationFrame(fn) { callbacks.set(++next, fn); return next; },
+    cancelAnimationFrame(id) { callbacks.delete(id); },
+    scrollBy(x, y) { scrolls.push(y); this.scrollY += y; }};
+  const handle = {ownerDocument: {defaultView: win},
+    addEventListener(name, fn) { handlers[name] = fn; },
+    focus(options) { assert.deepEqual(options, {preventScroll: true}); },
+    setPointerCapture() { captures++; }};
+  Crossfeed.wireOrderHandle(handle, {begin() {}, move() {},
+    locate(x, y) { locations.push([x, y]); },
+    commit() { commits++; }, cancel() { cancels++; }});
+  const event = extra => ({pointerId: 1, button: 0, clientX: 100, clientY: 400,
+    preventDefault() {}, ...extra});
+  const tick = () => { const [id, fn] = callbacks.entries().next().value; callbacks.delete(id); fn(); };
+  handlers.pointerdown(event()); tick(); assert.deepEqual(scrolls, []);
+  handlers.pointerdown(event({pointerId: 2, isPrimary: false}));
+  handlers.pointercancel(event({pointerId: 2}));
+  assert.equal(cancels, 0); // an ignored second finger cannot cancel the accepted drag
+  assert.equal(callbacks.size, 1);
+  handlers.pointermove(event({clientY: 10})); tick();
+  assert.ok(scrolls[0] < 0 && scrolls[0] >= -12);
+  assert.deepEqual(locations.at(-1), [100, 10]);
+  assert.equal(captures, 3); // initial capture, pointer movement, then stationary edge scroll
+  handlers.pointermove(event({clientY: 790})); tick();
+  assert.ok(scrolls.at(-1) > 0 && scrolls.at(-1) <= 12);
+  handlers.pointerup(event()); assert.equal(callbacks.size, 0); assert.equal(commits, 1);
+  handlers.pointerdown(event()); handlers.pointercancel(event());
+  assert.equal(callbacks.size, 0); assert.equal(cancels, 1);
+});
+
+test('keyboard and pointer reorder focus never requests page scrolling', () => {
+  const f = start(), handle = handleOf(f.sol);
+  handle.dispatch('keydown', {key: 'ArrowUp'});
+  assert.deepEqual(handle.focusOptions, {preventScroll: true});
+  handle.dispatch('keydown', {key: 'Escape'});
+  handle.dispatch('pointerdown', {pointerId: 22, clientX: 0, clientY: 200, button: 0});
+  assert.deepEqual(handle.focusOptions, {preventScroll: true});
+  handle.dispatch('pointercancel', {pointerId: 22});
+});
+
+
+test('reordering restores scroll with anchoring disabled through deferred layout', () => {
+  const queued = [], nodes = [];
+  const root = {style: {overflowAnchor: 'auto'}, offsetHeight: 1000};
+  const win = {scrollX: 0, scrollY: 905.5, requestAnimationFrame: cb => queued.push(cb),
+    scrollTo(x, y) { this.scrollX = x; this.scrollY = y; }};
+  const motion = Crossfeed.createOrderMotion({documentElement: root, querySelectorAll: () => nodes}, win);
+  motion.change(() => { assert.equal(root.style.overflowAnchor, 'none'); win.scrollY = 378; });
+  assert.equal(win.scrollY, 905.5);
+  assert.equal(root.style.overflowAnchor, 'none');
+  win.scrollY = 378; queued.shift()();
+  assert.equal(win.scrollY, 905.5);
+  assert.equal(root.style.overflowAnchor, 'auto');
+});
+
+function markFixture(env) {
+  env.mark = h('a', {class: 'product-mark', href: '/'});
+  env.markFrames = [{currentTime: 0}];
+  env.mark.getAnimations = () => env.markFrames;
+  env.document.querySelector('header').append(env.mark);
+}
+
+test('mark is still on load, runs on hover, and pauses when hidden or pointer leaves', () => {
+  const f = start({prepare: markFixture});
+  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+  f.mark.dispatch('pointerenter', {pointerType: 'mouse'});
+  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
+  f.document.hidden = true; f.document.dispatch('visibilitychange');
+  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+  f.document.hidden = false; f.document.dispatch('visibilitychange');
+  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
+  f.mark.dispatch('pointerleave', {pointerType: 'mouse'});
+  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+});
+
+test('touch mark tap starts one cycle without navigating; reduced motion stays still', () => {
+  const f = start({prepare: markFixture});
+  f.mark.dispatch('pointerenter', {pointerType: 'touch'});
+  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+  let prevented = false;
+  f.mark.dispatch('click', {pointerType: 'touch', preventDefault() { prevented = true; }});
+  assert.equal(prevented, true);
+  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
+  f.markFrames[0].currentTime = 8000; f.timers.at(-1)();
+  assert.equal(f.mark.hasAttribute('data-mark-active'), false);
+  assert.equal(f.markFrames[0].currentTime, 0);
+  const g = start({prepare: markFixture, reduced: true});
+  g.mark.dispatch('pointerenter', {pointerType: 'mouse'});
+  assert.equal(g.mark.hasAttribute('data-mark-active'), false);
+});
+
+test('touch tap supports browsers whose click omits pointer type', () => {
+  const f = start({prepare: markFixture});
+  f.mark.dispatch('pointerdown', {pointerType: 'touch'});
+  let prevented = false;
+  f.mark.dispatch('click', {preventDefault() { prevented = true; }});
+  assert.equal(prevented, true);
+  assert.equal(f.mark.hasAttribute('data-mark-active'), true);
 });

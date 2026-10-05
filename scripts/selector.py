@@ -149,7 +149,10 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         if why:
             rejected.append(f"{label}: {why}")
             continue
-        state, pool_evidence = states.setdefault(pool, fleet.current_pool_state(runtime, pool, roster=roster))
+        identity = (pool, key)
+        if identity not in states:
+            states[identity] = fleet.current_pool_state(runtime, pool, roster=roster, model_key=key)
+        state, pool_evidence = states[identity]
         band = _band(fleet, roster, runtime, pool, state, pool_evidence)
         if pool == fleet.ROUTING_POOL and band == "critical":
             role_policies = roster.get("routing", {}).get("roles", {})
@@ -224,7 +227,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
 
 def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any,
                 *, model_key: str | None = None) -> dict:
-    """Price the greatest applicable pressure: projection when known, usage otherwise.
+    """Price the greatest applicable pressure, with actual usage flooring forecasts.
 
     Pool summaries exclude model-only windows. Option prices also include windows
     naming that model's family, using the oracle label or its scoped window id.
@@ -236,38 +239,18 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
                 "window_minutes": None, "projected_used_percent_at_reset": None,
                 "projection_unknown": False, "projection_basis": "none-known"}
 
-    def words(text: str) -> set[str]:
-        return set(re.findall(r"[a-z][a-z0-9]*", text.lower()))
-    pool_label = str(roster.get("quota_pools", {}).get(pool, {}).get("label") or pool)
-    noise = words(pool) | {
-        "weekly", "week", "monthly", "month", "daily", "day", "session", "hour", "hours",
-        "primary", "secondary", "tertiary", "rolling", "quota", "summary", "window", "limit",
-        "only", "scoped", "and", "or", "h", "d", "m",
-    }
-    pool_terms = words(pool_label) - noise
-    model_words = set().union(*(words(key) for key in {
-        *roster.get("model_cards", {}), *roster.get("effort", {}),
-        *fleet.choosable_models(roster, pool),
-    })) - noise
-    snapshot = runtime.get("quota_snapshots", {}).get(pool)
-    applicable = {}
-    for name, window in (snapshot or {}).get("windows", {}).items():
-        scope = words(name + " " + str(window.get("label") or ""))
-        terms = scope - noise
-        scoped = bool(terms and terms != pool_terms and (
-            scope & {"only", "scoped"} or terms & model_words))
-        if scoped and (model_key is None or not terms & words(model_key)):
-            continue
-        applicable[name] = window
-    scoped_runtime = runtime
-    if snapshot is not None:
-        scoped_runtime = dict(runtime, quota_snapshots={
-            **runtime["quota_snapshots"], pool: dict(snapshot, windows=applicable),
-        })
-    state, _ = fleet.current_pool_state(runtime, pool, roster=roster)
-    _, evidence = fleet.current_pool_state(fleet._without_levels(scoped_runtime), pool, roster=roster)
-    projected = []
+    state, _ = fleet.current_pool_state(runtime, pool, roster=roster, model_key=model_key)
+    _, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
+                                           roster=roster, model_key=model_key)
+    priced = []
+    target = policy.get("target", DEFAULTS["target"])
+    lambda0 = policy.get("lambda0", DEFAULTS["lambda0"])
+    unknown_price = float(policy.get("lambda_unknown", .5 * lambda0))
+    if not math.isfinite(unknown_price) or unknown_price < 0:
+        raise fleet.FleetError("lambda_unknown must be finite and nonnegative")
     for name, window in evidence.get("windows", {}).items():
+        if name not in evidence.get("applicable_windows", evidence.get("windows", {})):
+            continue
         value = _number(window.get("projected_used_percent_at_reset"))
         if value is None:
             value = _number(window.get("surplus", {}).get("projected_used_percent_at_reset"))
@@ -277,19 +260,22 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
             eta, used, left = (_number(window.get(k)) for k in ("eta_seconds", "used_percent", "seconds_to_reset"))
             if eta is not None and eta > 0 and used is not None and left is not None:
                 value = used + (100 - used) * left / eta
-        projected.append((name, window, value))
-    binding = max(projected, key=lambda row: row[2] if row[2] is not None else (
-        _number(row[1].get("used_percent")) or 0), default=(None, {}, None))
-    name, window, value = binding
-    price = pool_lambda(value, policy.get("target", DEFAULTS["target"]), policy.get("lambda0", DEFAULTS["lambda0"]))
-    if price is None:
-        price = float(policy.get("lambda_unknown", .5 * policy.get("lambda0", DEFAULTS["lambda0"])))
-        if not math.isfinite(price) or price < 0:
-            raise fleet.FleetError("lambda_unknown must be finite and nonnegative")
+        used = _number(window.get("used_percent")) or 0
+        pressure = max(used, value) if value is not None else used
+        price = pool_lambda(pressure, target, lambda0)
+        if value is None:
+            price = max(unknown_price, price)
+        priced.append((name, window, value, pressure, price))
+    # Every applicable window contributes its own forecast/unknown-risk price.
+    # Adding another window must never erase a more restrictive priced limit.
+    binding = max(priced, key=lambda row: (row[4], row[3]),
+                  default=(None, {}, None, None, unknown_price))
+    name, window, value, pressure, price = binding
     return {"lambda": price, "state": state, "binding_window": name,
             "window": window,
             "window_minutes": window.get("window_minutes"),
             "projected_used_percent_at_reset": value,
+            "pressure_percent": pressure,
             "projection_unknown": value is None, "projection_basis": "snapshot_or_window_pace" if value is not None else "unknown"}
 
 

@@ -214,16 +214,19 @@ class FamilyHeaderTests(unittest.TestCase):
             self.assertTrue(1 <= h0 <= 2, (width, h0))
             self.assertAlmostEqual(env["--hbw"], brand_width(env), delta=.01)
             # It fits beside what shares its row, in the real column (an always-on scrollbar takes 15px of 100vw): the
-            # tab, 17.6px, the lens and the toggle and 24px clear on a wide screen; the lens, the toggle and 12px on a
+            # tab, 17.6px, the lens, toggle and gear and 24px clear on a wide screen; the lens, toggle and gear and 12px on a
             # narrow one.
             column = min(width - scrollbar - (32 if width <= 760 else 40), 952)
-            beside = 12 + 48.8 if width <= 680 else 24 + 63.2 + 17.6 + 48.8
+            beside = 12 + 3 * 24.4 if width <= 680 else 24 + 63.2 + 17.6 + 3 * 24.4
             self.assertLessEqual(brand_width(env) * h0 + beside, column + .01, (width, scrollbar))
             # the room above grows with its tallest part, the mark, and the ride with it
             self.assertAlmostEqual(env["--hE"], (10 + .73 * env["--nm"]) * 1.0119 * env["--logo"] * (h0 - 1))
             self.assertAlmostEqual(env["--travel"], 14 + env["--hE"])
-        self.assertAlmostEqual(tokens(1440, True)["--h0"], 2)          # on a 1440 screen, twice
-        self.assertAlmostEqual(tokens(1440, True, 15)["--h0"], 2)      # a scrollbar there takes nothing from the column
+        # Adding the gear consumes one control width, so the name maximises the
+        # remaining room rather than retaining the former two-control scale.
+        for scrollbar in (0, 15):
+            env = tokens(1440, True, scrollbar)
+            self.assertAlmostEqual(env["--h0"], min(2, env["--hroom"] / brand_width(env)), delta=.0001)
         self.assertIn("@media (pointer:fine){:root{--sb:15px}}", V28)
         self.assertEqual(ROOT["--sb"], "0px")                           # a phone's scrollbar floats over the page
         self.assertIn("@media (prefers-reduced-motion:reduce){:root.front{--h0:1}}", HELD)
@@ -238,12 +241,12 @@ class FamilyHeaderTests(unittest.TestCase):
             env = tokens(width, False, scrollbar)
             self.assertLessEqual(env["--nm"], 24)
             column = width - scrollbar - 32
-            # the name, 12px of air, the lens and the toggle (48.8px): the row holds them, at the name's held size
-            self.assertLessEqual(brand_width(env) + 12 + 48.8, column + 1e-9, width)
-        self.assertAlmostEqual(tokens(402, False)["--nm"], (402 - 32 - 61 - 21.46) / 12.533)   # a 402 phone: 22.9px
+            # the name, 12px of air, the lens, toggle and gear (73.2px): the row holds them, at the name's held size
+            self.assertLessEqual(brand_width(env) + 12 + 3 * 24.4, column + 1e-9, width)
+        self.assertAlmostEqual(tokens(402, False)["--nm"], (402 - 32 - 86 - 21.46) / 12.533)   # three controls keep a 402px row within its column
         # the drawings' centre 4.7px over the baseline (the toggle disc's radius), riding the large name's baseline
-        self.assertIn(".bar-tools{display:flex;align-items:center;flex:none;align-self:flex-end;"
-                      "margin:-10px 0 calc(1.15rem * 6.15 / 24 - 14.8px) 1.1rem}", CSS)
+        self.assertIn(".bar-tools{display:flex;align-items:center;flex:none;align-self:flex-end;gap:0;"
+                      "margin:-10px 0 calc(1.15rem * 6.15 / 24 - 22px) 1.1rem;color:var(--machine)}", CSS)
         self.assertIn("@media (max-width:680px){.mast .bar-tools{translate:0 calc(10px * (1 - var(--h0)))}}", HELD)
         self.assertNotIn("bar-name", render())
 

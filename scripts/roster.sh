@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # roster.sh: validate and query the local access overlay.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -303,3 +305,6 @@ case "${1:-}" in
     exit 2
     ;;
 esac
+
+}
+main "$@"; exit $?

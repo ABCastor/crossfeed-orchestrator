@@ -232,13 +232,13 @@ class SelectorTests(unittest.TestCase):
         with self.assertRaisesRegex(fleetctl.FleetError, "CRITICAL|Parallel builder"):
             self.select(runtime, role="builder")
 
-    def test_clock_aware_surplus_softens_critical_role_guard(self):
+    def test_clock_aware_forecast_cannot_erase_critical_role_guard(self):
         self.only(["codex"])
         self.evidence([quality_row("gpt-6-astra", family="coding-agent")])
         runtime = self.snapshot("codex", 96, used=95)
         runtime["quota_snapshots"]["codex"]["windows"]["rolling"]["will_last_to_reset"] = True
-        result = self.select(runtime, role="builder", stakes="irreversible")
-        self.assertEqual(result["choice"]["pool"], "codex")
+        with self.assertRaisesRegex(fleetctl.FleetError, "CRITICAL|Parallel builder"):
+            self.select(runtime, role="builder", stakes="irreversible")
 
     def test_stand_in_ceiling_is_actual_level_ceiling(self):
         options, _ = selector.enumerate_options(self.roster, {"model_toggles": {"codex": ["gpt-6-astra"]}},

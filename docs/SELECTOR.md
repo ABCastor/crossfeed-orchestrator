@@ -58,12 +58,13 @@ Admission checks model switches, retirement, pool-specific older-model retention
 quota_penalty = pool_lambda * task_pool_percent
 quota_penalty = min(quota_penalty, high_cost_cap)           at high stakes
 score = stakes_weight * quality - quota_penalty - mu * latency_seconds
-pool_lambda = 0                                           when projected_usage <= target
-pool_lambda = lambda0 * (projected_usage - target) / (100 - target) otherwise
-pool_lambda = lambda_unknown                              when projection is unavailable
+pressure = max(actual_used, projected_usage)
+pool_lambda = 0                                           when pressure <= target
+pool_lambda = lambda0 * (pressure - target) / (100 - target) otherwise
+pool_lambda = max(lambda_unknown, actual_usage_price)     when projection is unavailable
 ```
 
-Default stakes weights are low 1, normal 2 and high 40. For high stakes, `high_cost_cap` bounds the quota penalty at one score unit by default. Quota cost alone can therefore trade at most 2.5 percentage points of estimated quality; latency still matters. Hard admission gates apply before scoring. Unknown quality receives an uncertainty discount. For exploitation, an unknown cell with the same mean as a measured cell is dominated by it. The binding quota window is the window with the strongest projected pressure; an unknown projection takes precedence because that window could be binding. `lambda_unknown` defaults to half of `lambda0`, and the option is flagged `quota_projection_unknown`.
+Default stakes weights are low 1, normal 2 and high 40. For high stakes, `high_cost_cap` bounds the quota penalty at one score unit by default. Quota cost alone can therefore trade at most 2.5 percentage points of estimated quality; latency still matters. Hard admission gates apply before scoring. Unknown quality receives an uncertainty discount. For exploitation, an unknown cell with the same mean as a measured cell is dominated by it. The binding quota window has the strongest price after considering actual and projected usage. An unknown projection uses `lambda_unknown`, which defaults to half of `lambda0`; actual usage still sets a price floor, and the option is flagged `quota_projection_unknown`. A window at 90% actual usage remains critical even if its forecast predicts unused allowance. Model-only windows apply to the models they name.
 
 Evidence may supply `q_by_stakes.<stakes>.<family>` with the same quality fields as `q.<family>`. Selection uses that stratum when present, otherwise the family estimate. This lets separately validated hard-task outcomes inform high stakes without treating easy-task success as hard-task evidence. The evidence producer must keep fit and held-out results separate.
 

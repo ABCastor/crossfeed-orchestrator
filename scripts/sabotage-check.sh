@@ -8,6 +8,8 @@
 #
 # S1-S6 are the original defect classes. S7-S10 were added after an independent adversarial review
 # found bypasses that the first version of the scanner waved through.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -31,7 +33,7 @@ build_clean() {
   for w in codex claude agy copilot opencode; do
     cat > "$d/scripts/$w-agent.sh" <<'EOF'
 #!/usr/bin/env bash
-TIMEOUT=""; IDLE_TIMEOUT="1200"; KILL_AFTER="30"
+TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"
 _watchdog() { local q="$IDLE_TIMEOUT"; while :; do sleep 5; [ "$q" -le 0 ] && break; done; }
 start_supervision() { _watchdog & WATCHDOG_PID=$!; }
 run() { start_supervision; gtimeout --kill-after "$KILL_AFTER" "$TIMEOUT" real-binary "$@"; }
@@ -56,7 +58,7 @@ finish() { [ "$failed_count" -gt 0 ] && exit 1; exit 0; }
 EOF
   printf '#!/usr/bin/env bash\necho "this profile dispatches nothing directly"\n' > "$d/scripts/swarm.sh"
   printf '#!/usr/bin/env bash\nrun() { gtimeout --kill-after 30 "$t" ./worker.sh; }\n' > "$d/scripts/afk-run.sh"
-  printf '# Skill\n\nDispatch uses an idle watchdog rather than a wall clock (default 1200).\n' > "$d/SKILL.md"
+  printf '# Skill\n\nDispatch uses an idle watchdog rather than a wall clock (default 0).\n' > "$d/SKILL.md"
 }
 
 check() {
@@ -86,7 +88,7 @@ build_clean; sedi 's/ --kill-after "\$KILL_AFTER"//' "$WORK/scripts/codex-agent.
 check "S2 no kill-after" red "no -k/--kill-after"
 
 echo "== S3 remove the idle watchdog entirely"
-build_clean; sedi 's/IDLE_TIMEOUT="1200"; //; s/^_watchdog.*$//; s/^start_supervision.*$//' "$WORK/scripts/codex-agent.sh"
+build_clean; sedi 's/IDLE_TIMEOUT="0"; //; s/^_watchdog.*$//; s/^start_supervision.*$//' "$WORK/scripts/codex-agent.sh"
 check "S3 no watchdog" red "no idle watchdog"
 
 echo "== S4 suppress work on matched text alone"
@@ -98,7 +100,7 @@ build_clean; sedi 's/\[ "\$failed_count" -gt 0 \] && exit 1; //' "$WORK/scripts/
 check "S5 campaign always exits 0" red "exit 0 regardless"
 
 echo "== S6 docs describe the retired contract"
-build_clean; printf '# Skill\n\nSize --timeout to the reasoning tier. 1200.\n' > "$WORK/SKILL.md"
+build_clean; printf '# Skill\n\nSize --timeout to the reasoning tier. 0.\n' > "$WORK/SKILL.md"
 check "S6 docs drift" red "does not document the idle watchdog"
 
 echo "== S7 COMPUTED default (the 'cleaner' rewrite an engineer actually writes)"
@@ -118,7 +120,7 @@ build_clean; printf 'retry() { gtimeout "$TIMEOUT" real-binary --again; }\n' >> 
 check "S9 second bare invocation" red "no -k/--kill-after"
 
 echo "== S10 docs mention the watchdog only to say it was removed"
-build_clean; printf '# Skill\n\nWe removed the idle watchdog in favour of a fixed cap. 1200.\n' > "$WORK/SKILL.md"
+build_clean; printf '# Skill\n\nWe removed the idle watchdog in favour of a fixed cap. 0.\n' > "$WORK/SKILL.md"
 check "S10 negative docs mention" red "does not document the idle watchdog"
 
 echo "== S12 watchdog DEFINED but never launched (review walked through the old check)"
@@ -126,11 +128,11 @@ build_clean; sedi 's/^start_supervision.*$//' "$WORK/scripts/codex-agent.sh"
 check "S12 watchdog never launched" red "never LAUNCHES it"
 
 echo "== S13 one wrapper drifts away from its siblings"
-build_clean; sedi 's/IDLE_TIMEOUT="1200"/IDLE_TIMEOUT="1800"/' "$WORK/scripts/codex-agent.sh"
+build_clean; sedi 's/IDLE_TIMEOUT="0"/IDLE_TIMEOUT="1800"/' "$WORK/scripts/codex-agent.sh"
 check "S13 wrappers disagree" red "disagree on the idle default"
 
 echo "== S13b ALL wrappers move but the doc is left behind (true declared-vs-runtime drift)"
-build_clean; sedi 's/IDLE_TIMEOUT="1200"/IDLE_TIMEOUT="1800"/' "$WORK"/scripts/*-agent.sh
+build_clean; sedi 's/IDLE_TIMEOUT="0"/IDLE_TIMEOUT="1800"/' "$WORK"/scripts/*-agent.sh
 check "S13b doc left behind" red "declared state has drifted"
 
 echo "== S14 the escalation the LIVE wrappers actually use is removed (review 3 proved I2 blind here)"
@@ -266,3 +268,6 @@ echo
 echo "sabotage results: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
 echo "EVERY INVARIANT PROVEN ABLE TO FAIL"
+
+}
+main "$@"; exit $?

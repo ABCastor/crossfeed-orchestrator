@@ -21,6 +21,8 @@
 #   gemini-image.sh --prompt "..." --out ref.png [--ref mine.png ...] [--model ID] [--n 1]
 #
 # --ref may be repeated; with any --ref the call is an EDIT anchored on those images.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 DEFAULT_MODEL="gemini-3-pro-image"        # Nano Banana Pro: reference support + 4K + editing
@@ -152,3 +154,6 @@ print(json.dumps({'written': written, 'model': MODEL, 'refs': len(REFS),
                   'usd_reserved': round(want, 3),
                   'usd_today': round(spend_today(ledger_load()), 3), 'cap': CAP}, indent=1))
 PY
+
+}
+main "$@"; exit $?

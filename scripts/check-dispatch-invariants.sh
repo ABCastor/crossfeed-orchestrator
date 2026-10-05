@@ -14,6 +14,8 @@
 #
 # Usage:  check-dispatch-invariants.sh [SCRIPTS_DIR] [SKILL_MD]
 # Exit:   0 = all hold. 1 = at least one violated. 2 = usage/setup error.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -uo pipefail
 
 # Script-relative defaults: this file scans the directory it ships in. The operating doc sits
@@ -172,6 +174,7 @@ for w in $WRAPPERS; do
         || ! cgrep pi_runner.py -q 'args.idle and now - activity >= args.idle' \
         || ! cgrep pi_runner.py -q 'terminate_group(child, args.kill_after)' \
         || ! cgrep pi_runner.py -q 'while poller.get_map()' \
+        || ! cgrep pi_runner.py -q '"--idle", "--idle-timeout", type=seconds, default=0' \
         || ! cgrep pi_runner.py -q '"--wall", "--timeout", type=seconds, default=0'; then
       fail "$w lost its running Python idle watchdog or added a wall-clock default"
     else
@@ -322,6 +325,8 @@ if [ -f "$SKILL_MD" ]; then
       fail "wrappers disagree on the idle default ($uniq_defaults) - there is supposed to be one contract"
     elif [ -n "$uniq_defaults" ] && ! grep -q "$uniq_defaults" "$SKILL_MD"; then
       fail "SKILL.md never mentions the idle default the code actually uses ($uniq_defaults) - declared state has drifted from runtime state"
+    elif [ -n "$uniq_defaults" ] && [ "$uniq_defaults" != 0 ]; then
+      fail "idle killing must be opt-in (default 0); declared state has drifted from the owner contract"
     else
       pass "SKILL.md documents the idle watchdog and its real default (${uniq_defaults:-n/a})"
     fi
@@ -362,3 +367,6 @@ echo
 if [ "$fails" -eq 0 ]; then echo "ALL DISPATCH INVARIANTS HOLD"; exit 0; fi
 echo "$fails DISPATCH INVARIANT(S) VIOLATED"
 exit 1
+
+}
+main "$@"; exit $?

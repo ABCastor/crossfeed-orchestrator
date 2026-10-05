@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # swarm.sh: launch a curated, read-only multi-model profile from the local access overlay.
+# Parse the complete body before starting, so an in-flight edit cannot change this run.
+main() {
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -175,3 +177,6 @@ if [ "$CONSUMER_OUTCOME_CLASS" != "SUCCEEDED" ]; then
   echo "swarm: downstream outcome=$CONSUMER_OUTCOME_CLASS reason=$CONSUMER_OUTCOME_REASON native_fanout_exit=$fanout_rc mapped_exit=$CONSUMER_BOUNDARY_RC" >&2
 fi
 exit "$CONSUMER_BOUNDARY_RC"
+
+}
+main "$@"; exit $?

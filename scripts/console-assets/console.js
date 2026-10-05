@@ -90,6 +90,7 @@ const Crossfeed = (() => {
     const active = new Map();
     let bounds = new Map();
     let boundsScrollX = 0, boundsScrollY = 0;
+    let anchorFrame = null, anchorOriginal = null;
     function settledRect(node) {
       const rect = bounds.get(node);
       if (!rect) return null;
@@ -102,7 +103,19 @@ const Crossfeed = (() => {
       const nodes = [...doc.querySelectorAll('.pool, .opt')];
       const before = new Map(nodes.map(node => [node, node.getBoundingClientRect?.()]));
       stop();
+      const anchor = doc.documentElement;
+      if (anchorOriginal === null) anchorOriginal = anchor?.style?.overflowAnchor || '';
+      if (anchorFrame !== null) win.cancelAnimationFrame?.(anchorFrame);
+      const scrollX = win.scrollX || 0, scrollY = win.scrollY || 0;
+      if (anchor?.style) anchor.style.overflowAnchor = 'none';
       mutate();
+      void anchor?.offsetHeight;
+      win.scrollTo?.(scrollX, scrollY);
+      anchorFrame = win.requestAnimationFrame?.(() => {
+        win.scrollTo?.(scrollX, scrollY);
+        if (anchor?.style) anchor.style.overflowAnchor = anchorOriginal;
+        anchorOriginal = null; anchorFrame = null;
+      });
       if (preference?.matches) return;
       const after = new Map(nodes.map(node => [node, node.getBoundingClientRect?.()]));
       bounds = after;
@@ -138,36 +151,64 @@ const Crossfeed = (() => {
   }
 
   function wireOrderHandle(handle, actions) {
-    let pointer = null;
+    let pointer = null, frame = null, position = null;
+    const win = handle.ownerDocument?.defaultView;
+    function stopScroll() {
+      if (frame !== null) win?.cancelAnimationFrame?.(frame);
+      frame = null; position = null;
+    }
+    function scrollEdge() {
+      frame = null;
+      if (pointer === null || !position || !win) return;
+      const band = 64, y = position.y, height = win.innerHeight;
+      const velocity = y < band ? -Math.min(12, (band - y) / 5) :
+        y > height - band ? Math.min(12, (y - height + band) / 5) : 0;
+      if (velocity) {
+        const before = win.scrollY;
+        win.scrollBy(0, velocity);
+        if (win.scrollY !== before) {
+          actions.locate(position.x, position.y);
+          // An edge scroll can reorder the captured node without a pointermove event.
+          if (pointer !== null) handle.setPointerCapture?.(pointer);
+        }
+      }
+      if (pointer !== null) frame = win.requestAnimationFrame(scrollEdge);
+    }
     handle.addEventListener('keydown', event => {
       if (!['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) return;
       event.preventDefault();
       if (event.key === 'Escape' || event.key === 'Enter') {
-        const captured = pointer; pointer = null;
+        const captured = pointer; pointer = null; stopScroll();
         if (captured !== null && handle.hasPointerCapture?.(captured)) handle.releasePointerCapture?.(captured);
         if (event.key === 'Escape') actions.cancel(); else actions.commit();
       }
       else { actions.begin(); actions.move(event.key === 'ArrowUp' ? -1 : 1); }
     });
     handle.addEventListener('pointerdown', event => {
-      if (event.button !== undefined && event.button !== 0) return;
+      if (pointer !== null || event.isPrimary === false || (event.button !== undefined && event.button !== 0)) return;
       event.preventDefault();
       actions.begin(); pointer = event.pointerId;
-      handle.focus(); handle.setPointerCapture?.(pointer);
+      position = {x: event.clientX, y: event.clientY};
+      if (win?.requestAnimationFrame) frame = win.requestAnimationFrame(scrollEdge);
+      handle.focus({preventScroll: true}); handle.setPointerCapture?.(pointer);
     });
     handle.addEventListener('pointermove', event => {
       if (pointer === null || pointer !== event.pointerId) return;
-      event.preventDefault(); actions.locate(event.clientX, event.clientY);
+      event.preventDefault(); position = {x: event.clientX, y: event.clientY};
+      actions.locate(event.clientX, event.clientY);
       // A reordered node moves in the DOM; renew capture after the move so touch keeps following it.
       handle.setPointerCapture?.(pointer);
     });
     handle.addEventListener('pointerup', event => {
       if (pointer === null || pointer !== event.pointerId) return;
-      pointer = null; actions.commit();
+      pointer = null; stopScroll(); actions.commit();
     });
-    handle.addEventListener('pointercancel', () => { pointer = null; actions.cancel(); });
+    handle.addEventListener('pointercancel', event => {
+      if (pointer === null || pointer !== event.pointerId) return;
+      pointer = null; stopScroll(); actions.cancel();
+    });
     handle.addEventListener('lostpointercapture', () => {
-      if (pointer !== null && !handle.hasPointerCapture?.(pointer)) { pointer = null; actions.cancel(); }
+      if (pointer !== null && !handle.hasPointerCapture?.(pointer)) { pointer = null; stopScroll(); actions.cancel(); }
     });
   }
 
@@ -177,6 +218,41 @@ const Crossfeed = (() => {
 function boot(document, window) {
   const root = document.documentElement;
   root.classList.add('js');
+  const mark = document.querySelector('.product-mark');
+  if (mark) {
+    let visible = true, hovering = false, touching = false, pointerType, touchTimer;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const active = () => {
+      const playing = visible && !document.hidden && !reduced.matches && (hovering || touching);
+      playing ? mark.setAttribute('data-mark-active', '') : mark.removeAttribute('data-mark-active');
+    };
+    mark.addEventListener('pointerenter', event => {
+      if (event.pointerType !== 'touch') { hovering = true; active(); }
+    });
+    mark.addEventListener('pointerleave', event => {
+      if (event.pointerType !== 'touch') { hovering = false; active(); }
+    });
+    mark.addEventListener('pointerdown', event => { pointerType = event.pointerType; });
+    mark.addEventListener('click', event => {
+      const tapped = (event.pointerType || pointerType) === 'touch';
+      pointerType = undefined;
+      if (!tapped) return;
+      event.preventDefault();
+      window.clearTimeout(touchTimer);
+      touching = !touching;
+      active();
+      if (touching) touchTimer = window.setTimeout(() => {
+        touching = false; active();
+        for (const animation of mark.getAnimations({subtree: true})) animation.currentTime = 0;
+      }, 8000);
+    });
+    if (window.IntersectionObserver) new window.IntersectionObserver(entries => {
+      visible = entries[0].isIntersecting; active();
+    }).observe(mark);
+    document.addEventListener('visibilitychange', active);
+    reduced.addEventListener('change', active);
+    active();
+  }
 
   // ---- light and dark: the icon shows the choice (system, light, dark), never the resolution ----
   const toggle = document.querySelector('[data-theme-toggle]');
@@ -184,13 +260,20 @@ function boot(document, window) {
   let choice = 'system';
   try { choice = window.localStorage.getItem('crossfeed-theme') || choice; } catch (_) {}
   if (!themes.includes(choice)) choice = 'system';
+  const themeSelect = document.querySelector('[data-theme-choice]');
   function theme() {
+    if (themeSelect) themeSelect.value = choice;
     root.dataset.themeChoice = choice;
     if (toggle) {
       toggle.setAttribute('aria-label', `Theme: ${choice}. Switch to ${themes[(themes.indexOf(choice) + 1) % 3]}`);
       toggle.setAttribute('aria-pressed', String(choice === 'dark'));
     }
   }
+  themeSelect?.addEventListener('change', () => {
+    if (!themes.includes(themeSelect.value)) return;
+    choice = themeSelect.value; theme();
+    try { window.localStorage.setItem('crossfeed-theme', choice); } catch (_) {}
+  });
   theme();
   toggle?.addEventListener('click', () => {
     choice = themes[(themes.indexOf(choice) + 1) % 3];
@@ -275,6 +358,10 @@ function boot(document, window) {
   });
   if (window.location.hash) {
     const target = document.getElementById(window.location.hash.slice(1));
+    if (target?.id === 'provider-setup') {
+      const details = target.querySelector('details'); if (details) details.open = true;
+      target.scrollIntoView({block: 'start'});
+    }
     if (target?.matches('[data-search-label]')) reveal(target);
   }
 
@@ -329,11 +416,9 @@ function boot(document, window) {
       for (const [pool, ranking] of Object.entries(order.ranks.models)) {
         const pick = picks.get(pool);
         if (!pick) continue;
-        const flat = order.flat?.[pool];
-        const firstList = pick.querySelector('.opts');
         for (const key of ranking[order.sort.models[pool]]) {
           const row = [...pick.querySelectorAll('.opt')].find(row => row.dataset.model === key);
-          if (row) (flat ? firstList : originalGroups.get(row)).append(row);
+          if (row) originalGroups.get(row).append(row);
         }
         for (const older of pick.querySelectorAll('details.older')) older.hidden = !older.querySelector('.opt');
       }
@@ -459,7 +544,7 @@ function boot(document, window) {
   }
   function cancelOrder() {
     if (!orderDraft) return;
-    order = orderDraft.before; finishDraft(); applyOrder(); say('Order change cancelled.');
+    order = orderDraft.before; applyOrder(); finishDraft(); say('Order change cancelled.');
   }
   for (const select of document.querySelectorAll('[data-sort]')) {
     select.addEventListener('change', () => {
@@ -483,25 +568,20 @@ function boot(document, window) {
     }
     function move(step) {
       if (orderDraft?.handle !== handle) return;
-      if (isModel) {
-        const ranking = order.ranks.models[pool][order.sort.models[pool]];
-        const at = ranking.indexOf(keyOf(row));
-        if (at + step < 0 || at + step >= ranking.length) return;
-      }
-      const siblings = isModel ? order.ranks.models[pool][order.sort.models[pool]].map(key =>
-        [...picks.get(pool).querySelectorAll('.opt')].find(item => item.dataset.model === key)) :
-        [...row.parentElement.children].filter(item => item.matches('.pool'));
+      const siblings = [...row.parentElement.children].filter(item => item.matches(isModel ? '.opt' : '.pool'));
       const at = siblings.indexOf(row), next = Math.max(0, Math.min(siblings.length - 1, at + step));
       if (at === next) return;
       const reordered = [...siblings]; reordered.splice(at, 1); reordered.splice(next, 0, row);
       if (isModel) {
         order.flat ||= {}; order.flat[pool] = true;
-        order.models[pool] = reordered.map(keyOf);
+        const keys = new Set(siblings.map(keyOf));
+        const changed = reordered.map(keyOf);
+        order.models[pool] = order.ranks.models[pool][order.sort.models[pool]].map(key => keys.has(key) ? changed.shift() : key);
         order.ranks.models[pool].your = [...order.models[pool]]; order.sort.models[pool] = 'your';
       } else {
         order.pools = reordered.map(keyOf); order.ranks.pools.your = [...order.pools]; order.sort.pools = 'your';
       }
-      orderDraft.dirty = true; applyOrder(); handle.focus();
+      orderDraft.dirty = true; applyOrder(); handle.focus({preventScroll: true});
       say(`${row.dataset.searchLabel} moved to ${next + 1} of ${siblings.length}. Enter saves; Escape cancels.`);
     }
     Crossfeed.wireOrderHandle(handle, {
@@ -521,11 +601,11 @@ function boot(document, window) {
           orderDraft.pointerX = x; orderDraft.pointerY = y;
           orderDraft.pointerScrollX = scrollX; orderDraft.pointerScrollY = scrollY;
         }
-        const siblings = isModel ? order.ranks.models[pool][order.sort.models[pool]].map(key => [...picks.get(pool).querySelectorAll('.opt')].find(item => item.dataset.model === key)) : [...row.parentElement.children];
+        const siblings = [...row.parentElement.children].filter(item => item.matches(isModel ? '.opt' : '.pool'));
         const target = motion.targetAt(siblings, x, y)?.closest(isModel ? '.opt' : '.pool');
         if (target === row) return;
         clearDrop();
-        if (!target || (isModel ? target.closest('.pool') !== row.closest('.pool') : target.parentElement !== row.parentElement)) return;
+        if (!target || target.parentElement !== row.parentElement) return;
         const direction = siblings.indexOf(target) > siblings.indexOf(row) ? 1 : -1;
         const rect = motion.rect(target);
         if ((direction > 0 && y >= rect.top + rect.height / 2) || (direction < 0 && y <= rect.top + rect.height / 2)) {
