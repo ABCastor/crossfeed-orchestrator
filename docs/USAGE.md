@@ -161,7 +161,7 @@ See the [upstream credit in the README](../README.md#upstream-credit).
 
 On 5 October 2026, synthetic coding tests passed 12/12 for Sol High, 9/11 for ChatGPT High through Pi and 9/10 for ChatGPT Extra High through Pi. Only 23/36 ChatGPT cells were measured, none of its nine calibration cells ran, and its underlying model identity is unconfirmed. Sol High remains the default; admitted Pi relay workers can provide fallback capacity under quota pressure.
 
- The full test suite also passes on Debian 12 with Python 3.9 and 3.13; the real vendor CLIs have not yet been run on Linux (see [Linux setup](LINUX.md)). Some wrappers are shaped by one plan's rules: the Copilot wrapper assumes Copilot's Auto model and a small monthly credit allowance, so it runs one read-only observer at a time.
+ Earlier test suites passed on Debian 12 with Python 3.9 and 3.13; the current expanded suite awaits a fresh Linux run; the real vendor CLIs have not yet been run on Linux (see [Linux setup](LINUX.md)). Some wrappers are shaped by one plan's rules: the Copilot wrapper assumes Copilot's Auto model and a small monthly credit allowance, so it runs one read-only observer at a time.
 
 ## Tests
 
@@ -173,4 +173,4 @@ bash tests/run-all.sh
 
 ## Licence
 
-The code is MIT, see [LICENSE](../LICENSE). The names, the logos, the beaver mascot and the signature artwork are not covered by that licence, and the bundled fonts keep their own (SIL Open Font License); [NOTICE](../NOTICE) has the details.
+The code is Apache 2.0, see [LICENSE](../LICENSE). The names, the logos, the beaver mascot and the signature artwork are not covered by that licence, and the bundled fonts keep their own (SIL Open Font License); [NOTICE](../NOTICE) has the details.

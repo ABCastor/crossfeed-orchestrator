@@ -321,7 +321,7 @@
     },
     "chatgpt-work": {
       "label": "ChatGPT Chat via Crossfeed Chat",
-      "pro_weekly_allowance": 200,
+      "pro_weekly_allowance": 0,
       "quota_refresh": null,
       "quota_source": "No authoritative Chat quota reading; Pro allowance is an owner-set estimate. Do not borrow Codex/Work snapshots.",
       "plan": {

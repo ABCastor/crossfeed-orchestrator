@@ -79,6 +79,7 @@ class Gateway(BaseHTTPRequestHandler):
         self.server.payloads.append(body)
         assert body["model"] in self.server.catalog_ids and body["tool_choice"] == "none"
         assert self.headers["Idempotency-Key"]
+        assert self.headers["X-Crossfeed-Session"] == "orchestrator:" + self.headers["Idempotency-Key"]
         if hasattr(self.server, "keys"):
             self.server.keys.append(self.headers["Idempotency-Key"])
         blocked = getattr(self.server, 'blocked_keys', {}).get(self.headers['Idempotency-Key'])

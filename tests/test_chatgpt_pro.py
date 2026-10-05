@@ -24,6 +24,7 @@ class MeterTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.roster = json.loads((ROOT / "examples/access-overlay.example.json").read_text())
+        self.roster["quota_pools"]["chatgpt-work"]["pro_weekly_allowance"] = 200
         self.template = self.roster["chatgpt_gateway"]["lane_template"]
         self.template["auth"]["key_file"] = str(self.root / "key")
         (self.root / "key").write_text("test-key")
@@ -44,6 +45,13 @@ class MeterTests(unittest.TestCase):
     def answer(self, age=0, **extra):
         return {"harness": "chatgpt-chat", "run_id": str(age), "selector": "chatgpt:latest-pro",
                 "returncode": 0, "ended_at": fleetctl.iso(self.now - dt.timedelta(seconds=age)), **extra}
+
+    def test_unconfigured_allowance_never_invents_headroom(self):
+        self.roster["quota_pools"]["chatgpt-work"].pop("pro_weekly_allowance")
+        self.ledger([self.answer()])
+        meter = pro.usage(self.roster, self.root, "chatgpt-work", now=self.now)
+        self.assertEqual(meter["allowance"], 0)
+        self.assertIsNone(meter["remaining"])
 
     def test_rolling_boundary_failed_requests_and_duplicates(self):
         self.ledger([self.answer(), self.answer(), self.answer(1, returncode=4),
@@ -243,8 +251,14 @@ class ProRunnerTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.env["FLEET_STATE_DIR"] = str(self.work / reason)
                 self.gateway.payloads.clear()
-                self.roster["quota_pools"]["chatgpt-work"]["pro_weekly_allowance"] = 0 if reason == "estimate" else 200
+                self.roster["quota_pools"]["chatgpt-work"]["pro_weekly_allowance"] = 1 if reason == "estimate" else 200
                 state = Path(self.env["FLEET_STATE_DIR"])
+                if reason == "estimate":
+                    state.mkdir()
+                    (state / "runs.jsonl").write_text(json.dumps({
+                        "harness": "chatgpt-chat", "selector": "chatgpt:latest-pro",
+                        "returncode": 0, "ended_at": fleetctl.iso(fleetctl.utc_now()),
+                        "run_id": "synthetic-used-request"}) + "\n")
                 if reason == "off":
                     state.mkdir()
                     (state / "runtime.json").write_text(json.dumps({"model_preferences": {"chatgpt:latest-pro": "off"}}))

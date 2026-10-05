@@ -66,6 +66,14 @@ class AdapterDoctorTests(unittest.TestCase):
             result = fleetctl.doctor_command(overlay, self.root)
         return result, out.getvalue()
 
+    def test_missing_harness_is_a_failing_diagnostic(self):
+        self.whitelist(self.primary, ["kimi-k3"])
+        self.whitelist(self.worker, ["kimi-k3"])
+        with self.version("2.1.280"), patch.object(fleetctl.shutil, "which", return_value=None):
+            result, output = self.doctor()
+        self.assertEqual(result, 1)
+        self.assertIn("MISSING", output)
+
     def test_cli_minimum_sabotage_and_restore_through_doctor(self):
         for version, status in [("2.1.280", 0), ("2.1.221", 1), ("2.1.280", 0)]:
             with self.subTest(version=version), self.version(version):

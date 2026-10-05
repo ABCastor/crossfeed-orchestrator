@@ -101,13 +101,15 @@ def settings(lane):
     return base, key
 
 
-def request(base, key, path, payload=None, timeout=3, progress=None, idempotency_key=None):
+def request(base, key, path, payload=None, timeout=3, progress=None, idempotency_key=None, session_id=None):
     headers = {"Authorization": "Bearer " + key}
     data = json.dumps(payload).encode() if payload is not None else None
     if data is not None:
         headers["Content-Type"] = "application/json"
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
+    if session_id:
+        headers["X-Crossfeed-Session"] = session_id
     req = urllib.request.Request(base + path, data=data, headers=headers)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:

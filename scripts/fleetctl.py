@@ -4032,7 +4032,7 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
               "unmeasured quota pools route at full quality.")
     else:
         print("No problems found.")
-    return 1 if effort_issues or drift_issues or gateway_problem else 0
+    return 1 if problems else 0
 
 
 # --- The overview: levels, plans and quota in one structure -----------------------------

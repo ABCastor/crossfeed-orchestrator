@@ -118,7 +118,8 @@ def http_child(pipe, base, key, payload, idempotency_key):
     try:
         pipe.send(("ready", None))
         answer = request(base, key, "/chat/completions", payload, timeout=86400,
-                         progress=lambda: pipe.send(("bytes", None)), idempotency_key=idempotency_key)
+                         progress=lambda: pipe.send(("bytes", None)), idempotency_key=idempotency_key,
+                         session_id="orchestrator:" + idempotency_key)
         pipe.send(("result", answer))
     except Rejected as error:
         pipe.send(("error", (error.code, error.message, error.pro_spent, error.reset_at)))

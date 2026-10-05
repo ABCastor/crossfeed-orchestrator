@@ -52,7 +52,7 @@ def wake_stamp(receipt):
 def usage(roster, state_dir, pool, *, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     clock = now.timestamp()
-    allowance = roster.get("quota_pools", {}).get(pool, {}).get("pro_weekly_allowance", 200)
+    allowance = roster.get("quota_pools", {}).get(pool, {}).get("pro_weekly_allowance", 0)
     if type(allowance) is not int or allowance < 0:
         raise ValueError("pro_weekly_allowance must be a nonnegative integer")
     lanes = [lane for lane in roster.get("lanes", []) if is_pro(lane) and lane.get("quota_pool") == pool]
@@ -82,8 +82,8 @@ def usage(roster, state_dir, pool, *, now=None):
     total = requests + wakes
     resets = dt.datetime.fromtimestamp(min(timestamps) + WEEK, dt.timezone.utc).isoformat() if timestamps else None
     return {"requests": requests, "wakes": wakes, "used": total, "allowance": allowance,
-            "remaining": max(0, allowance - total), "estimate": True,
-            "spent": total >= allowance, "next_rolloff_at": resets}
+            "remaining": max(0, allowance - total) if allowance else None, "estimate": True,
+            "spent": bool(allowance) and total >= allowance, "next_rolloff_at": resets}
 
 
 def refresh(roster, state_dir, *, now=None):
@@ -188,6 +188,8 @@ def mark_spent(state_dir, lane, *, until=None):
 def text(meter):
     if meter.get("unavailable"):
         return "Pro estimate unavailable; check allowance configuration and local usage ledger"
+    if not meter.get("allowance"):
+        return "Pro allowance unknown; configure your plan allowance to estimate remaining usage"
     return (f"Pro estimate: {meter['used']}/{meter['allowance']} in rolling 7 days "
             f"({meter['requests']} answered requests + {meter['wakes']} observed wakes); "
             f"{meter['remaining']} estimated remaining")

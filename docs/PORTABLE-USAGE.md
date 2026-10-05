@@ -68,4 +68,4 @@ The suite uses synthetic data and fake transports. It does not prove a live prov
 
 ## Licence
 
-The code is [MIT](../LICENSE). The signature artwork and bundled fonts have separate terms in [NOTICE](../NOTICE).
+The code is [Apache 2.0](../LICENSE). The signature artwork and bundled fonts have separate terms in [NOTICE](../NOTICE).

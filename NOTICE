@@ -1,14 +1,16 @@
 Crossfeed Orchestrator
 Copyright (c) 2026 Anneo22
 
-The code in this repository is licensed under the MIT License (see LICENSE).
+The code in this repository is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-The MIT License does not cover the following, which remain all rights reserved:
+The Apache License does not cover the following, which remain all rights reserved:
 - the names "Crossfeed Orchestrator" and "Castor", and their logos and marks
   (scripts/console-assets/crossfeed.svg and the Castor asterisk and orbit);
 - Chip, the beaver mascot (scripts/console-assets/chip.svg and the drawing in
   scripts/console-assets/footer.html);
-- the signature artwork (docs/castor-footer-light.png, docs/castor-footer-dark.png).
+- the signature artwork (docs/castor-footer*.png and docs/castor-footer*.svg),
+  the header mark (docs/readme-header.svg), and the title asterisk
+  (docs/crossfeed-orchestrator-title.svg).
 You may keep them in an unmodified copy or fork of this repository. Remove or
 replace them before you ship a modified version under your own name.
 
@@ -19,3 +21,6 @@ Vendor and product names (Anthropic, Claude, OpenAI, Codex, ChatGPT, Google,
 Gemini, Antigravity, GitHub, Copilot, OpenCode, OpenRouter, CodexBar and others)
 are trademarks of their owners. They are used only to say which tools this
 software works with; no endorsement is implied.
+
+The separately licensed benchmark directory retains the MIT terms in
+bench/LICENSE. Its notices are preserved.

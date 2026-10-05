@@ -4,14 +4,14 @@ Crossfeed Orchestrator routes AI coding work to the right provider and model acr
 
 Your local console controls which models agents may use and how freely they spend each plan. Routing reads those settings before every job.
 
-[![Tests](https://github.com/Anneo22/orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/Anneo22/orchestrator/actions/workflows/tests.yml)
+[![Checks](https://github.com/ABCastor/crossfeed-orchestrator/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/ABCastor/crossfeed-orchestrator/actions/workflows/checks.yml)
 
 ## Install
 
-You need Python 3.9+, bash, [jq](https://jqlang.org) and your chosen vendor CLIs, installed and signed in. No extra Python packages.
+The core runs on macOS and Linux; native Windows is unsupported. You need Python 3.9+, bash, [jq](https://jqlang.org) and your chosen vendor CLIs, installed and signed in. No extra Python packages.
 
 ```bash
-git clone https://github.com/Anneo22/orchestrator ~/crossfeed-orchestrator
+git clone https://github.com/ABCastor/crossfeed-orchestrator ~/crossfeed-orchestrator
 cd ~/crossfeed-orchestrator
 mkdir -p ~/.config/orchestrator
 cp examples/access-overlay.example.json ~/.config/orchestrator/access-overlay.json
@@ -20,6 +20,8 @@ python3 scripts/fleetctl.py console
 ```
 
 The *overlay* is your machine's roster of plans, models and roles. Replace the example settings with your own. Keep only signed-in, tested lanes `verified`; mark the others `unverified`. `doctor` reports setup gaps and exits nonzero until you fix them. Before dispatch, verify the example thinking-level settings and record their evidence dates. [Installation details](docs/USAGE.md#install), [agent skill setup](docs/SKILL-INSTALL.md) and [Linux setup](docs/LINUX.md).
+
+ChatGPT relay integration is optional and follows [Crossfeed Chat’s macOS, Chrome and Node requirements](https://github.com/Anneo22/crossfeed-chat).
 
 ## Give it work
 
@@ -58,7 +60,7 @@ Credit to upstream contributor: Rocco Angelella's [PiLink](https://github.com/ro
 
 ## Licence
 
-The code is [MIT](LICENSE). The artwork and bundled fonts have separate terms in [NOTICE](NOTICE).
+The code is [Apache 2.0](LICENSE). The artwork and bundled fonts have separate terms in [NOTICE](NOTICE).
 
 <p>
   <a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, by Castor, we give a dam"></a>

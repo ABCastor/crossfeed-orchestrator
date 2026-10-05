@@ -10,4 +10,4 @@ The console page ships its own fonts so it looks the same offline. All five are 
 | `crossfeedreadserif.woff2` | Crossfeed Read Serif, from [Source Serif 4](https://github.com/adobe-fonts/source-serif) | Adobe | `OFL-crossfeedreadserif.txt` | subset, and renamed: "Source" is a Reserved Font Name, which the licence keeps for unmodified versions |
 | `randosans-500-sharpie.woff2` | [Rando Sans](https://beaumaher.gumroad.com/l/rando-sans), weight 500 | Beau Maher | `OFL-randosans.txt` | one weight, converted to WOFF2 |
 
-These licences cover the font files only. The rest of the repository is under the MIT licence in `LICENSE`; see `NOTICE` for what neither licence covers.
+These licences cover the font files only. The rest of the repository is under the Apache 2.0 licence in `LICENSE`; see `NOTICE` for what neither licence covers.
