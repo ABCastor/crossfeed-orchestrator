@@ -216,8 +216,10 @@ case "$prompt" in
     printf 'final:%s\n' "$prompt"
     ;;
   orphan-descendant)
+    # forkpty leader exit may send HUP before the child gets scheduled.
+    # Inherit ignored HUP so this fixture survives to exercise supervision.
+    trap '' HUP
     (
-      trap '' HUP
       exec </dev/null >/dev/null 2>&1
       sleep 3
       printf 'done\n' >"${FAKE_DESCENDANT_DONE_FILE:?}"
