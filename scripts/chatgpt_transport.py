@@ -57,6 +57,11 @@ def catalog_models(value):
             raise Rejected(6, "invalid saved worker row or level")
         if type(replicas) is not int or replicas < 1:
             raise Rejected(6, "invalid saved worker replica count")
+        wake_mode = row.get("wake_mode", "configured")
+        if wake_mode not in ("configured", "native"):
+            raise Rejected(6, "invalid saved worker wake mode")
+        if wake_mode == "native":
+            continue  # Fresh-chat defaults cannot attest the configured effort.
         found[selector] = {"id": selector, "name": name + " / " + LEVEL_NAMES[position],
                            "worker_label": label, "worker_level": LEVEL_NAMES[position],
                            "row": name, "position": position, "replicas": replicas,
