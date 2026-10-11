@@ -62,6 +62,4 @@ Credit to upstream contributor: Rocco Angelella's [PiLink](https://github.com/ro
 
 The code is [Apache 2.0](LICENSE). The artwork and bundled fonts have separate terms in [NOTICE](NOTICE).
 
-<p>
-  <a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, by Castor, we give a dam"></a>
-</p>
+<p><a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, Castor, we give a dam"></a></p>
