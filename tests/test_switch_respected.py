@@ -477,6 +477,16 @@ class HookTests(Sandbox):
         self.assertIsNone(self.hook({"tool_name": "Agent", "tool_input": {"description": "x", "prompt": "y"}}))
         self.assertIsNotNone(self.hook({"tool_name": "Task", "tool_input": {"prompt": "y", "model": "opus"}}))
 
+    def test_a_roster_with_a_chat_gateway_is_still_guarded(self):
+        # A live roster carries chatgpt_gateway, so reading it imports chatgpt_catalog beside fleetctl.
+        # Run as a hook, the scripts folder is not on the import path; the guard used to fail open
+        # here and let every switched-off model through.
+        roster = fixture_roster()
+        roster["chatgpt_gateway"] = {}
+        self.write_roster(roster)
+        self.assertIn('Use model "sonnet" instead', self.hook({"tool_name": "Agent", "tool_input": {"model": "opus"}}))
+        self.assertIn("Write --model gpt-6.1-sol", self.bash("codex-agent.sh --model gpt-6-astra --prompt x"))
+
     def test_it_fails_open(self):
         self.overlay.write_text("{ not json")
         self.assertIsNone(self.bash("codex-agent.sh --model gpt-6-astra --prompt x"))

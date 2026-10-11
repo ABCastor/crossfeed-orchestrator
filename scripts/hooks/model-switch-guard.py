@@ -181,8 +181,12 @@ def codex_config_model(args: list[str]) -> str | None:
 # ---- the switches, through fleetctl ------------------------------------------------------------------
 class Switches:
     def __init__(self, env: dict[str, str]):
-        spec = importlib.util.spec_from_file_location(
-            "crossfeed_fleetctl", Path(__file__).resolve().parent.parent / "fleetctl.py")
+        scripts = Path(__file__).resolve().parent.parent
+        # fleetctl imports its siblings (chatgpt_catalog, providers) while reading a live roster;
+        # without this the import fails and the hook fails open for every model.
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        spec = importlib.util.spec_from_file_location("crossfeed_fleetctl", scripts / "fleetctl.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.fleet = module
