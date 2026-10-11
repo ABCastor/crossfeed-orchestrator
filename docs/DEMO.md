@@ -2,7 +2,7 @@
 
 The demo runs the real console with fictional, separately billed subscriptions, including two distinct demo ChatGPT accounts, prices and quota observations. Its overlay and runtime live in a temporary directory, quota refresh is disabled, model pins are removed, and the direct Codex default is fixed for the demo instead of reading your CLI configuration. Three fictional ChatGPT labels, five saved chats and 48 fictional completed requests show the local Pro estimate and its fallback order; their key paths stay inside the temporary directory. It starts no workers and reads no gateway key. Closing the demo process removes its temporary state.
 
-You need the [Gaddi](https://github.com/Anneo22/gaddi) CLI and its connected browser extension. Put `gaddi` on PATH or pass `--gaddi /path/to/gaddi`.
+You need the [Gaddi](https://github.com/ABCastor/gaddi) CLI and its connected browser extension. Put `gaddi` on PATH or pass `--gaddi /path/to/gaddi`.
 
 ```bash
 python3 examples/console-demo.py

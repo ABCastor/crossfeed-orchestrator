@@ -30,7 +30,7 @@ Agents can read [the skill](../skill/SKILL.md) from the checkout; [skill install
 
 Crossfeed runs on its own with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google), [OpenCode](https://opencode.ai), [Copilot CLI](https://github.com/github/copilot-cli) and [OpenRouter](https://openrouter.ai). [Pi](https://github.com/earendil-works/pi) supports admitted API and partner-plan routes.
 
-Optionally, add [Crossfeed Chat](https://github.com/Anneo22/crossfeed-chat) to use your ChatGPT chats as a read-only agent lane. Its paired Chrome extension wakes sleeping workers; [setup and relay limits](CHATGPT.md).
+Optionally, add Crossfeed Chat, currently private, to use your ChatGPT chats as a read-only agent lane. Its paired Chrome extension wakes sleeping workers; [setup and relay limits](CHATGPT.md).
 
 Set `chatgpt_gateway.pi_coding` to `true` to add Pi coding routes with local tools for current High and Extra High workers. These share the ChatGPT account and model switches. Pi's `provider-default` evidence stays separate from plain Chat requests, and its receipts leave the underlying model unconfirmed.
 
