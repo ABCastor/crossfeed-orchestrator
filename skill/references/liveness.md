@@ -2,9 +2,7 @@ Load after a killed or hung run, or before editing a wrapper or dispatch supervi
 
 # Liveness and recovery
 
-The idle watchdog defaults to 2400 seconds. CLI wrappers watch output growth or process-group CPU; streaming HTTP watches arriving bytes, including keepalives and reasoning deltas. The default has margin over 134 historical Codex runs' longest observed gap of 1074 seconds; that sample does not establish every lane's event cadence. Recheck against real transport events when behavior changes.
-
-An idle kill on a lane with thin gap history (agy, Copilot, OpenCode) is a reason to re-measure that lane, not proof the job hung.
+The idle watchdog defaults to 0: silence reports every ten minutes and never kills. A positive explicit `--idle-timeout` opts into killing. CLI wrappers watch output growth or process-group CPU; streaming HTTP watches arriving bytes. Silence and low local CPU can be healthy server-side reasoning, so historical gaps cannot justify a default kill that throws away work.
 
 No outer `timeout` or `gtimeout`. Most agent wrappers have no default wall clock; OpenCode deliberately retains lane `timeout_s` because its lease is not renewed atomically. Use explicit wrapper `--timeout` only when a hard deadline is intended. Native Gemini media has its own documented budget and transport contract, not the agent-wrapper contract.
 

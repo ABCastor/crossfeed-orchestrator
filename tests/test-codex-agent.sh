@@ -291,6 +291,20 @@ test_idle_kill() {
   contains "$case_dir/stderr" 'codex exec resume --last' || { fail "resume command missing"; return 1; }
 }
 
+test_default_silence_reports() {
+  local case_dir="$TEST_ROOT/default-silence" rc
+  mkdir -p "$case_dir"
+  CROSSFEED_TEST_SILENCE_INTERVAL_S=1 FAKE_DATE_STATE="$case_dir/date-state" PATH="$CLOCK_BIN:$BASE_PATH" \
+    /bin/bash "$WRAPPER" --prompt idle-silent --dir "$case_dir/work" \
+    --last "$case_dir/requested-last" --log "$case_dir/requested-log" >"$case_dir/stdout" 2>"$case_dir/stderr"
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "default silence must survive, got rc $rc"; return 1; }
+  contains "$case_dir/stderr" 'silent for ' || { fail "silence diagnostics missing"; return 1; }
+  ! contains "$case_dir/stderr" 'LIMIT FIRED' || { fail "default killed a silent job"; return 1; }
+  [ "$(cat "$case_dir/requested-last")" = 'final:idle-silent' ] || { fail "requested --last lost"; return 1; }
+  [ -f "$case_dir/requested-log" ] || { fail "requested --log lost"; return 1; }
+}
+
 test_no_default_wall_cap() {
   local case_dir="$TEST_ROOT/no-default" rc
   mkdir -p "$case_dir"
@@ -564,6 +578,7 @@ fi
 
 run_test output_liveness test_output_liveness
 run_test idle_kill test_idle_kill
+run_test default_silence_reports test_default_silence_reports
 run_test no_default_wall_cap test_no_default_wall_cap
 run_test wall_clock_kill test_wall_clock_kill
 run_test sigkill_escalation test_sigkill_escalation

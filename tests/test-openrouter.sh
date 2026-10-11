@@ -236,6 +236,9 @@ run reasoning-only
 expect_rc "reasoning tokens with no answer is a blank deliverable" 7
 
 echo "== the lease is sized against the bound that actually applies"
+run ok
+if [ "$(cat "$TEST_ROOT/ttl")" = "86460" ]; then ok "default diagnostic-only run retains its slot beyond the old idle limit"
+else bad "default diagnostic-only lease expired too early: $(cat "$TEST_ROOT/ttl")"; fi
 run ok --idle-timeout 100
 if [ "$(cat "$TEST_ROOT/ttl")" = "160" ]; then ok "uncapped run leases idle+60"
 else bad "expected lease ttl 160, got $(cat "$TEST_ROOT/ttl")"; fi

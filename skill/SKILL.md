@@ -98,7 +98,7 @@ Workers see `--dir`, its `AGENTS.md`/`CLAUDE.md` and prompt; OpenRouter sees onl
 
 ## Liveness
 
-Idle watchdog: 2400 seconds by default, output or process-group CPU; HTTP watches stream bytes. No default wall clock except OpenCode's roster `timeout_s`. Never add outer `timeout`/`gtimeout`; use wrapper `--timeout` for a hard budget.
+Idle watchdog: default 0 (diagnostics only), output or process-group CPU; HTTP watches stream bytes. Silence logs every 10 minutes; a positive explicit `--idle-timeout` opts into killing. No default wall clock except OpenCode's roster `timeout_s`. Never add outer `timeout`/`gtimeout`; use wrapper `--timeout` for a hard budget.
 
 Never detach: no `nohup`, trailing `&`, `disown` or `setsid`. Run foreground inside a harness-tracked tool call (reader file). After 124/125 inspect `git status` and partial reports before relaunching.
 
