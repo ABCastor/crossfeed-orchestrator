@@ -34,7 +34,10 @@ def canonical_selector(value):
     return label
 
 
-def catalog_models(value):
+def catalog_models(value, current_rows=("Latest",)):
+    """Saved workers by selector. A row is current only when the roster names it in
+    chatgpt_gateway.current_rows: picker rows get renamed (Latest became GPT-6)."""
+    current = {str(row).casefold() for row in current_rows}
     if value.get("object") != "list" or not isinstance(value.get("data"), list):
         raise Rejected(6, "invalid gateway catalog")
     found, seen = {}, set()
@@ -65,7 +68,7 @@ def catalog_models(value):
         found[selector] = {"id": selector, "name": name + " / " + LEVEL_NAMES[position],
                            "worker_label": label, "worker_level": LEVEL_NAMES[position],
                            "row": name, "position": position, "replicas": replicas,
-                           "older": name.casefold() != "latest"}
+                           "older": name.casefold() not in current}
     return found
 
 

@@ -68,16 +68,19 @@ def _expand(roster, state_dir, *, persist=False):
     if not isinstance(cached, dict) or not isinstance(cached.get("models", {}), dict):
         raise ValueError()
     previous = cached.get("models", {}) if cached.get("authority") == authority else {}
+    current_rows = gateway.get("current_rows") or ["Latest"]
+    if not isinstance(current_rows, list) or not all(isinstance(row, str) and row.strip() for row in current_rows):
+        raise ValueError()
     # Cached rows are display history, never authority to admit a worker.
     previous = catalog_models({"object": "list", "data": [
         {"object": "model", "id": selector, "saved": True,
          "row": row["row"], "level": row["position"], "replicas": row.get("replicas", 1)}
-        for selector, row in previous.items()]})
+        for selector, row in previous.items()]}, current_rows)
     error, error_code = None, None
     contact, models = {}, {}
     try:
         base, key = settings(template)
-        models = catalog_models(request(base, key, "/models", timeout=1))
+        models = catalog_models(request(base, key, "/models", timeout=1), current_rows)
         status = request(base, key, "/gateway/status", timeout=1)
         contact = contacts(status)
     except Rejected as exc:

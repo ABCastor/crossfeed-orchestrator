@@ -12,7 +12,7 @@ WEEK = 7 * 86400
 
 def is_pro(lane):
     return lane.get("harness") == "chatgpt-chat" and (
-        lane.get("worker_level") == "pro" or lane.get("selector") == "chatgpt:latest-pro")
+        lane.get("worker_level") == "pro" or bool(re.fullmatch(r"chatgpt:[^:]+-pro", str(lane.get("selector") or ""))))
 
 
 def _rows(path):
@@ -130,12 +130,13 @@ def replacements(roster, runtime, lane):
         from fleetctl import model_blocked
     except ImportError:
         from scripts.fleetctl import model_blocked
+    current = {str(row).casefold() for row in (roster.get("chatgpt_gateway") or {}).get("current_rows") or ["Latest"]}
     found = []
     for level in ("xhigh", "high"):
         for item in roster.get("lanes", []):
             if (item.get("harness") == "chatgpt-chat" and item.get("quota_pool") == lane["quota_pool"]
                     and item.get("worker_level") == level
-                    and item.get("worker_row", "Latest").casefold() == "latest"
+                    and str(item.get("worker_row", "Latest")).casefold() in current
                     and item.get("access_status") == "verified" and item.get("admission_status") == "active"
                     and not item.get("gateway_status", {}).get("quota_blocked")
                     and not item.get("gateway_status", {}).get("rate_limited")

@@ -66,6 +66,16 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(roster['model_cards']['chatgpt:saved-medium']['name'], 'Latest / medium')
         self.assertEqual(roster['model_cards']['chatgpt:previous-pro']['status'], 'older')
 
+    def test_current_rows_come_from_the_roster_not_a_hard_coded_latest(self):
+        # ChatGPT's Chat picker replaced its "Latest" row with "GPT-6".
+        self.gateway['current_rows'] = ['GPT-6']
+        self.models['data'][0]['row'] = 'GPT-6'
+        self.models['data'][1]['row'] = 'Latest'
+        roster = self.expand()
+        self.assertEqual(roster['model_cards']['chatgpt:saved-medium']['name'], 'GPT-6 / medium')
+        self.assertEqual(roster['model_cards']['chatgpt:saved-medium']['status'], 'current')
+        self.assertEqual(roster['model_cards']['chatgpt:previous-pro']['status'], 'older')
+
     def test_never_contacted_saved_label_is_admitted_as_sleeping(self):
         lane = self.generated(self.expand())['chatgpt:saved-medium']
         self.assertEqual((lane['access_status'], lane['admission_status'], lane['catalog_state']),

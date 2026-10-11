@@ -100,6 +100,22 @@ class MeterTests(unittest.TestCase):
             self.assertIn("Pro estimate: 2/3 in rolling 7 days", rendered)
             self.assertIn("2 answered requests", rendered)
 
+    def test_pro_falls_back_within_the_current_row_whatever_its_name(self):
+        roster = json.loads((ROOT / "examples/access-overlay.example.json").read_text())
+        roster["chatgpt_gateway"]["current_rows"] = ["GPT-6"]
+        roster["chatgpt_gateway"]["lane_template"]["auth"]["key_file"] = str(self.root / "key")
+        levels = ("instant", "medium", "high", "xhigh", "pro")
+        models = {"object": "list", "data": [
+            {"object": "model", "id": "chatgpt:gpt6-" + level, "saved": True, "row": "GPT-6", "level": number}
+            for number, level in enumerate(levels)]}
+        status = {"workers": [{"label": "gpt6-" + level, "contact": "recent", "polling": True} for level in levels]}
+        with patch.object(catalog, "request", side_effect=lambda b, k, path, **kw: models if path == "/models" else status):
+            roster = catalog.expand(roster, self.root)
+        lanes = fleetctl.lane_map(roster)
+        self.assertTrue(pro.is_pro(lanes["chatgpt:gpt6-pro"]))
+        found = [item["lane_id"] for item in pro.replacements(roster, {}, lanes["chatgpt:gpt6-pro"])]
+        self.assertEqual(found, ["chatgpt:gpt6-xhigh", "chatgpt:gpt6-high"])
+
     def test_quota_pause_estimate_and_switch_route_extra_high_then_high(self):
         ranked = ["chatgpt:latest-pro", "chatgpt:latest-medium", "chatgpt:latest-high"]
         self.roster["routing"]["roles"]["hard-reasoning"] = {band: ranked for band in ("quality_first", "conserve", "critical")}
