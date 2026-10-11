@@ -156,7 +156,26 @@ def preflight_budget(deadline):
             signal.setitimer(signal.ITIMER_REAL, restored, previous_timer[1])
 
 
-def supervise(args, base, key, payload, events, interrupted, idempotency_key, lane=None):
+def cancel_gateway(base, key, idempotency_key):
+    """Best effort cancellation, bounded even if response headers trickle in."""
+    try:
+        with preflight_budget(time.monotonic() + 3):
+            status = request(base, key, "/jobs/cancel",
+                             {"idempotency_key": idempotency_key, "session": "orchestrator:" + idempotency_key},
+                             timeout=3, status_only=True)
+    except Exception:
+        status = None
+    if status == 200:
+        print("chatgpt-agent: gateway job cancelled", file=sys.stderr)
+    elif status == 409:
+        print("chatgpt-agent: gateway job already finished", file=sys.stderr)
+    elif status != 404:
+        print("chatgpt-agent: WARNING gateway cancel failed; the job may stay queued (crossfeed-chat cancel <job-id>)",
+              file=sys.stderr)
+    return status
+
+
+def supervise(args, base, key, payload, events, interrupted, idempotency_key, lane=None, on_started=None):
     deadline = getattr(args, "wall_deadline", None)
     if deadline is not None and time.monotonic() >= deadline:
         raise Rejected(124, "wall timeout during preflight")
@@ -164,6 +183,8 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
     receiver, sender = context.Pipe(duplex=False)
     child = context.Process(target=http_child, args=(sender, base, key, payload, idempotency_key))
     child.start()
+    if on_started:
+        on_started()
     sender.close()
     started = progress = time.monotonic()
     reported_silence = 0
@@ -235,8 +256,8 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
             elif not child.is_alive():
                 raise Rejected(6, "HTTP child exited without terminal result")
     finally:
-        # Keyed jobs stay available for an explicit identical-payload retry.
-        # Killing this HTTP caller does not cancel remote ChatGPT generation.
+        # Timeouts leave keyed jobs available for an explicit identical-payload retry.
+        # On explicit cancellation, run_turn also cancels the gateway job after cleanup.
         child.join(.1)
         if child.is_alive():
             try:
@@ -349,6 +370,7 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
         time.sleep(.1)
     release_turn()
     status, output, begun = 5, None, False
+    http_started = []
     with tempfile.TemporaryDirectory(prefix="chatgpt-agent.") as scratch:
         identity = Path(scratch) / "identity.json"
         events = args.events or Path(scratch) / "events.jsonl"
@@ -385,7 +407,8 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
             payload = {"model": lane["selector"], "messages": [{"role": "user", "content":
                        run_identity.worker_notice(record) + args.prompt}], "tool_choice": "none", "stream": False}
             with events.open("w") as handle:
-                output, receipt = supervise(args, base, key, payload, handle, interrupted, record["idempotency_key"], lane)
+                output, receipt = supervise(args, base, key, payload, handle, interrupted, record["idempotency_key"], lane,
+                                            on_started=lambda: http_started.append(True))
             if isinstance(receipt, dict):
                 # Retain observations without copying arbitrary gateway text.
                 clean = {}
@@ -411,6 +434,13 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
                 chatgpt_pro.mark_spent(run_identity.state_dir(), lane, until=error.reset_at or chatgpt_pro.reset_at(error.message))
                 args.pro_downgraded = True
             status = error.code
+            if interrupted and status in {129, 130, 143} and http_started:
+                if cancel_gateway(base, key, record["idempotency_key"]) in {200, 409}:
+                    record["cancellation_scope"] = "gateway-job"
+                    try:
+                        identity.write_text(json.dumps(record))
+                    except OSError:
+                        print("chatgpt-agent: receipt persistence failed", file=sys.stderr)
             print("chatgpt-agent: " + error.message, file=sys.stderr)
         except (OSError, ValueError):
             print("chatgpt-agent: run or artifact persistence failed", file=sys.stderr)

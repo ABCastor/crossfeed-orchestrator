@@ -72,6 +72,8 @@ Launch the worker in its own process group and track that group's identity. Decl
 
 On a wall timeout, idle timeout or external cancellation, cancel the native session if available. ACP sends `session/cancel` first. Send TERM to the whole process group, wait the configured grace period, then send KILL to every surviving member. Keep supervising after the leader exits if descendants remain. Preserve partial events and the failed-run receipt, and report the original timeout or cancellation outcome.
 
+The ChatGPT relay cancels its keyed gateway job only on explicit external cancellation, with one best effort request bounded to three seconds. Wall and idle timeouts preserve the job for an explicit identical-payload retry with the same key. See [ChatGPT cancellation and retry](CHATGPT.md).
+
 ## Events, receipts and usage
 
 The events file carries native events. Pi redacts the selected credential and adds `crossfeed.liveness` ticks. The shared helper writes a prompt-free `crossfeed-model-run/v1` record to the run ledger and, when `--last` is supplied, to `<last>.crossfeed.json`. The record includes requested and selected identities, the native selector, `actual_model`, `identity_source`, run and lane IDs, quota pool, effort, timestamps and return code. Once receipt initialization succeeds, a failed run gets a fresh sidecar even when an older result file remains on disk. A preflight refusal starts no run and leaves any previous sidecar untouched.

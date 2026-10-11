@@ -109,7 +109,8 @@ def settings(lane):
     return base, key
 
 
-def request(base, key, path, payload=None, timeout=3, progress=None, idempotency_key=None, session_id=None):
+def request(base, key, path, payload=None, timeout=3, progress=None, idempotency_key=None, session_id=None,
+            status_only=False):
     headers = {"Authorization": "Bearer " + key}
     data = json.dumps(payload).encode() if payload is not None else None
     if data is not None:
@@ -122,6 +123,8 @@ def request(base, key, path, payload=None, timeout=3, progress=None, idempotency
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
         with opener.open(req, timeout=timeout) as response:
+            if status_only:
+                return response.status
             chunks, size = [], 0
             while True:
                 chunk = response.read1(65536)
@@ -138,6 +141,9 @@ def request(base, key, path, payload=None, timeout=3, progress=None, idempotency
                 raise ValueError()
             return value
     except urllib.error.HTTPError as error:
+        if status_only:
+            error.close()
+            return error.code
         # Read only to classify a worker's limit/reset; never echo gateway text.
         try:
             from chatgpt_pro import RATE_LIMIT, reset_at

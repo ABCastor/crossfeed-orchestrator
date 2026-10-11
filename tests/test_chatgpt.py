@@ -73,9 +73,20 @@ class Gateway(BaseHTTPRequestHandler):
             'processing_claim': mode == 'busy'} for selector in self.server.catalog_ids]})
 
     def do_POST(self):
-        assert self.path == "/v1/chat/completions"
         assert self.headers["Authorization"] == "Bearer " + KEY
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path == "/v1/jobs/cancel":
+            self.server.cancel_calls.append((body, self.headers["Authorization"]))
+            mode = getattr(self.server, "cancel_mode", 200)
+            if mode == "down":
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            if mode == "hang":
+                time.sleep(5)
+                mode = 200
+            return self.reply(mode, {"error": KEY} if mode != 200 else
+                              {"state": "failed", "error": "caller_cancelled", "was": "queued"})
+        assert self.path == "/v1/chat/completions"
         self.server.payloads.append(body)
         assert body["model"] in self.server.catalog_ids and body["tool_choice"] == "none"
         assert self.headers["Idempotency-Key"]
@@ -160,6 +171,9 @@ def connect(address,timeout=socket._GLOBAL_DEFAULT_TIMEOUT,source_address=None,*
  if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT: peer.settimeout(timeout)
  return peer
 socket.create_connection=connect
+# The HTTP child inherits the iterator at fork. Reserve its connection in the
+# parent so the later gateway cancel uses a fresh socket pair.
+os.register_at_fork(after_in_parent=lambda: next(fds))
 # Canonical admission also reads /models in the quota-lease subprocess.
 # Give each such child fresh connected sockets without changing production code.
 original_popen=subprocess.Popen
@@ -191,6 +205,7 @@ subprocess.Popen=popen
         self.gateway.selector = 'chatgpt:fixture-medium'
         self.gateway.catalog_ids = [self.gateway.selector]
         self.gateway.keys = []
+        self.gateway.cancel_calls = []
         self.roster['lanes'] = []
         self.roster["policy"]["selector"]["allowed_pools_by_role"] = {"default": ["chatgpt-work"]}
         self.overlay = self.work / "overlay.json"
@@ -236,6 +251,7 @@ subprocess.Popen=popen
         self.assertEqual(record["usage_source"], "unavailable")
         self.assertNotIn("tokens", record)
         self.assertIn("underlying model unconfirmed", result.stderr)
+        self.assertEqual(self.gateway.cancel_calls, [])
 
     def configure_catalog(self):
         self.gateway.catalog_ids = [self.gateway.selector]
@@ -335,6 +351,9 @@ subprocess.Popen=popen
             result = self.run_adapter("hang", (flag, "1"))
             self.assertEqual(result.returncode, code, result.stderr)
             self.assertEqual(result.stdout, "")
+            self.assertEqual(self.gateway.cancel_calls, [])
+            self.assertEqual(json.loads((self.work / "last.crossfeed.json").read_text())["cancellation_scope"],
+                             "local-http-only")
 
     def test_mode_effort_and_terms_refusal_before_request(self):
         for extra in [("--mode", "rw"), ("--effort", "xhigh"), ("--modality", "image")]:
@@ -343,6 +362,7 @@ subprocess.Popen=popen
         self.save()
         self.assertEqual(self.run_adapter().returncode, 5)
         self.assertEqual(self.gateway.payloads, [])
+        self.assertEqual(self.gateway.cancel_calls, [])
 
     def hold_lease(self):
         self.lane["max_parallel"] = 1
@@ -628,20 +648,67 @@ subprocess.Popen=popen
         self.assertEqual(self.tickets(), [])
 
     def test_cancellation_records_failure_and_releases_lease(self):
+        self.cancel_waiting(200, "gateway-job", "chatgpt-agent: gateway job cancelled")
+
+    def cancel_waiting(self, mode, scope, message, sig=signal.SIGTERM, second_signal=False):
         self.gateway.mode = "hang"
-        child = subprocess.Popen(self.command(), env=self.env, pass_fds=self.pass_fds,
+        self.gateway.cancel_mode = mode
+        child = subprocess.Popen(self.command('--idempotency-key', 'cancel-test-request'), env=self.env, pass_fds=self.pass_fds,
                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(lambda: child.poll() is None and child.terminate())
         deadline = time.monotonic() + 4
         while not self.gateway.payloads and time.monotonic() < deadline:
             time.sleep(.02)
         self.assertTrue(self.gateway.payloads)
-        child.send_signal(signal.SIGTERM)
+        started = time.monotonic()
+        child.send_signal(sig)
+        if second_signal:
+            self.wait_for(lambda: len(self.gateway.cancel_calls) == 1)
+            child.send_signal(signal.SIGINT)
         out, err = child.communicate(timeout=5)
-        self.assertEqual(child.returncode, 143, err)
+        self.assertLess(time.monotonic() - started, 4.5)
+        self.assertEqual(child.returncode, 128 + sig, err)
         self.assertEqual(out, "")
+        self.assertNotIn(KEY, out + err)
+        self.assertEqual(self.gateway.cancel_calls, [({"idempotency_key": "cancel-test-request",
+                                                     "session": "orchestrator:cancel-test-request"}, "Bearer " + KEY)])
+        if message:
+            self.assertEqual(err.splitlines().count(message), 1)
+        else:
+            self.assertNotIn("chatgpt-agent: gateway job", err)
+            self.assertNotIn("WARNING gateway cancel failed", err)
         self.assertEqual(json.loads((self.work / "state/runtime.json").read_text())["leases"], [])
-        self.assertEqual(json.loads((self.work / "last.crossfeed.json").read_text())["returncode"], 143)
+        receipt = json.loads((self.work / "last.crossfeed.json").read_text())
+        self.assertEqual(receipt["returncode"], 128 + sig)
+        self.assertEqual(receipt["cancellation_scope"], scope)
+        ledger = [json.loads(line) for line in (self.work / "state/runs.jsonl").read_text().splitlines()]
+        self.assertEqual(ledger[-1]["cancellation_scope"], scope)
+
+    def test_cancel_already_finished(self):
+        self.cancel_waiting(409, "gateway-job", "chatgpt-agent: gateway job already finished")
+
+    def test_cancel_not_found_is_silent(self):
+        self.cancel_waiting(404, "local-http-only", None)
+
+    def test_cancel_gateway_down_preserves_exit(self):
+        self.cancel_waiting("down", "local-http-only",
+                            "chatgpt-agent: WARNING gateway cancel failed; the job may stay queued (crossfeed-chat cancel <job-id>)")
+
+    def test_cancel_bad_auth_preserves_exit(self):
+        self.cancel_waiting(401, "local-http-only",
+                            "chatgpt-agent: WARNING gateway cancel failed; the job may stay queued (crossfeed-chat cancel <job-id>)")
+
+    def test_second_signal_during_cancel_is_bounded(self):
+        self.cancel_waiting("hang", "local-http-only",
+                            "chatgpt-agent: WARNING gateway cancel failed; the job may stay queued (crossfeed-chat cancel <job-id>)",
+                            second_signal=True)
+
+    def test_interrupt_and_hangup_cancel_gateway(self):
+        for sig in (signal.SIGINT, signal.SIGHUP):
+            with self.subTest(signal=sig):
+                self.gateway.payloads.clear()
+                self.gateway.cancel_calls.clear()
+                self.cancel_waiting(200, "gateway-job", "chatgpt-agent: gateway job cancelled", sig=sig)
 
     def test_cancellation_during_accounting_warns_and_preserves_completed_result(self):
         state = self.work / "state"
@@ -660,6 +727,7 @@ subprocess.Popen=popen
         self.assertEqual(out, "PONG\n")
         self.assertIn("cancellation arrived during accounting", err)
         self.assertEqual(json.loads((self.work / "last.crossfeed.json").read_text())["returncode"], 0)
+        self.assertEqual(self.gateway.cancel_calls, [])
 
     def test_selector_high_and_irreversible_preserve_saved_label_for_lazy_wake(self):
         state = self.work / "selector-state"
