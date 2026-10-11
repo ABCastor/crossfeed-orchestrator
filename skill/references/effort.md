@@ -11,6 +11,8 @@ The overlay's `effort` block is authoritative for supported controls, per-role l
 | agy-agent.sh | `--effort <level>`, with lane/role selection |
 | opencode-agent.sh | `--variant <level>`, `--effort-role <role>` |
 
+Effort behaves as a ceiling, not a floor: on 2026-07-27 (n=4, one trivial prompt) the same `codex exec` at low, medium, high and xhigh all used 29,630 tokens. A high default is not a per-task tax; its cost lands on hard tasks as latency and usage-limit burn. About 30k tokens of session overhead come before any work, and that is the lever worth attacking.
+
 Resolve with `fleetctl.py effort <model> <role> --harness <harness> --explain`. A supported explicit level wins. An unsupported explicit variant refuses; a console stand-in resolves its own controls and may clamp an override with announced provenance. Missing required controls refuse; unavailable controls are a logged exception, not a silent assumption. Wrappers announce provenance and pin flags rather than relying on app defaults.
 
 Recheck evidence after a family, harness or index change, or its recorded age trigger. Doctor/verbose brief name stale evidence, unsupported levels and knee drift. Model receipts describe resolved effort as well as identity. Never edit an app-owned config to enforce a dispatch override. Claude native Agent cannot pin effort per spawn: use the wrapper when enforcing a level matters.
