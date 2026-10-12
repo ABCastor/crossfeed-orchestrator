@@ -124,6 +124,17 @@ def pi_assistant_messages(event):
 
 def observed_usage(wrapper, events):
     """Keep native Pi usage prompt-free and count each assistant message once."""
+    if wrapper == "openrouter" and events and events.is_file():
+        for line in reversed(events.read_text(errors="replace").splitlines()):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") == "crossfeed.openrouter_usage":
+                usage = event["usage"]
+                return {"tokens": {"input": usage.get("prompt_tokens"), "output": usage.get("completion_tokens")},
+                        "cost": {"estimated_usd": float(usage["cost"]), "source": "openrouter-reported"}}
+        return {}
     if wrapper != "pi" or not events or not events.is_file():
         return {}
     ended, snapshot = [], []

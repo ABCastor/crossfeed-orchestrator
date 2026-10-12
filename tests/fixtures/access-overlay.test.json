@@ -23,7 +23,10 @@
       "codex": "gpt-6.1-sol",
       "claude": "claude-opus-5-5"
     },
-    "codex_mcp_denials": {}
+    "codex_mcp_denials": {},
+    "selector": {
+      "allowed_pools_by_role": {}
+    }
   },
   "telemetry": {
     "runtime_state": "~/.local/state/orchestrator/runtime.json",
@@ -207,6 +210,22 @@
       "billing": "OpenRouter's free tier: zero marginal cost per call, checked live against OpenRouter's own pricing before every request.",
       "quota_refresh": null,
       "quota_source": "none: OpenRouter publishes no percentage for the free tier; the per-call pricing check is the rail."
+    },
+    "openrouter-mimo": {
+      "label": "OpenRouter MiMo",
+      "plan": {
+        "name": "MiMo V2.6 paid opt-in",
+        "billing": "per-token",
+        "currency": "USD"
+      },
+      "billing": "paid",
+      "explicit_only": true,
+      "daily_usd_cap": 5,
+      "daily_window": "calendar-day-local",
+      "cap_owner": "Owner may change daily_usd_cap; provisional $5/day requested in the MiMo lane brief.",
+      "quota_refresh": null,
+      "quota_source": "Live OpenRouter pricing plus locked spend reservations.",
+      "source": "https://openrouter.ai/api/v1/models"
     }
   },
   "model_evidence": {
@@ -277,6 +296,18 @@
       "status": "older",
       "order": 3,
       "best_for": "Still served; Sonnet 5.5 replaced it"
+    },
+    "mimo-v2.6-pro": {
+      "name": "MiMo V2.6 Pro",
+      "lineage": "xiaomi",
+      "status": "current",
+      "pool": "openrouter-mimo"
+    },
+    "mimo-v2.6-flash": {
+      "name": "MiMo V2.6 Flash",
+      "lineage": "xiaomi",
+      "status": "current",
+      "pool": "openrouter-mimo"
     }
   },
   "routing": {
@@ -1251,6 +1282,80 @@
       "notes": "Synthetic test lane.",
       "evidence_confidence": "synthetic",
       "verified_at": null
+    },
+    {
+      "lane_id": "openrouter-mimo-v2.6-pro",
+      "model_key": "mimo-v2.6-pro",
+      "harness": "openrouter",
+      "provider": "openrouter",
+      "selector": "xiaomi/mimo-v2.6-pro",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "strong",
+      "roles": [
+        "hard-reasoning",
+        "long-context"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "openrouter-mimo",
+      "paid_mimo": true,
+      "auth": {
+        "key_ref": "op://4kr2jxlokteecriaokqrdsnixm/OpenRouter API Key - Orchestrator/credential"
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "retries": 0,
+      "timeout_s": null,
+      "notes": "Explicit paid opt-in only. Public/synthetic prompt-contained text; no tools or filesystem. Live catalog and daily reservations checked before each call."
+    },
+    {
+      "lane_id": "openrouter-mimo-v2.6-flash",
+      "model_key": "mimo-v2.6-flash",
+      "harness": "openrouter",
+      "provider": "openrouter",
+      "selector": "xiaomi/mimo-v2.6-flash",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "standard",
+      "roles": [
+        "hard-reasoning",
+        "long-context"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only"
+      ],
+      "quota_pool": "openrouter-mimo",
+      "paid_mimo": true,
+      "auth": {
+        "key_ref": "op://4kr2jxlokteecriaokqrdsnixm/OpenRouter API Key - Orchestrator/credential"
+      },
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "retries": 0,
+      "timeout_s": null,
+      "notes": "Explicit paid opt-in only. Public/synthetic prompt-contained text; no tools or filesystem. Live catalog and daily reservations checked before each call."
     }
   ],
   "catalogue_only": [
@@ -2068,6 +2173,34 @@
       },
       "default": "high",
       "knee": "high",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "mimo-v2.6-pro": {
+      "levels": {
+        "openrouter": []
+      },
+      "default": "service-chosen",
+      "knee": "service-chosen",
+      "by_role": {},
+      "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Synthetic test policy, not deployment evidence",
+        "read_on": "2026-10-02"
+      }
+    },
+    "mimo-v2.6-flash": {
+      "levels": {
+        "openrouter": []
+      },
+      "default": "service-chosen",
+      "knee": "service-chosen",
       "by_role": {},
       "recheck": "New family release, harness level change, AA index version bump, doctor contradiction, or 30 days since read, whichever comes first.",
       "evidence": {

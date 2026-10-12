@@ -88,7 +88,7 @@ def _lineage(roster: dict, option: dict) -> str:
 
 def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | None = None,
                       modality: str = "text", exclude_lineage: str | None = None,
-                      fleet: Any = None) -> tuple[list[dict], list[str]]:
+                      fleet: Any = None, explicit_pools: set[str] | None = None) -> tuple[list[dict], list[str]]:
     """Return admitted actual (pool, harness, model, level) options and refusals."""
     fleet = _fleet(fleet)
     policy = roster.get("policy", {}).get("selector", {})
@@ -117,6 +117,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         why = None
         if not key or not pool or harness not in WRAPPERS:
             why = "missing model/pool or unsupported wrapper"
+        # BR-MIMO-001: paid pools require an explicit allow-list entry.
+        elif (lane.get("paid_mimo") or roster.get("quota_pools", {}).get(pool, {}).get("explicit_only")) and pool not in (explicit_pools or set()):
+            why = "paid pool requires explicit --allow"
         elif allowed is not None and pool not in allowed:
             why = "pool forbidden for role"
         elif lane.get("access_status") != "verified" or lane.get("admission_status") != "active":
@@ -137,6 +140,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "AGY has no proven read-only boundary"
         elif modality not in lane.get("capabilities", {}).get("input", ["text"]):
             why = f"modality {modality}"
+        elif lane.get("paid_mimo") and role not in lane.get("roles", []):
+            why = "paid MiMo requires a prompt-contained reasoning or long-context role"
         elif (harness == "chatgpt-chat" or lane.get("chatgpt_pi")) and role not in lane.get("roles", []):
             why = "role not declared for configured ChatGPT lane"
         elif harness == "chatgpt-chat" and not lane.get("worker_label"):
@@ -166,6 +171,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "run_as": lane.get("model") or lane.get("selector") or key,
                   "mode": mode, "band": band, "pool_state": state,
                   "provider": lane.get("provider")}
+        if lane.get("paid_mimo") is True:
+            option["paid_mimo"] = True
         if lane.get("lane_id"):
             option["lane_id"] = lane["lane_id"]
         if lane.get("worker_label"):
@@ -378,6 +385,8 @@ def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> li
         argv += ["--lane", option["lane_id"], "--model", option["run_as"], "--role", role]
     elif harness in {"opencode", "openrouter"}:
         argv += ["--lane", option["lane_id"]]
+        if harness == "openrouter" and option.get("paid_mimo"):
+            argv += ["--paid-mimo"]
         if harness == "opencode":
             argv += ["--effort-role", role]
     elif harness == "copilot":
@@ -470,8 +479,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     family = family or policy.get("families_by_role", {}).get(role) or FAMILY_BY_ROLE.get(role, "coding-agent")
     if family not in FAMILIES:
         raise fleet.FleetError(f"unknown task family: {family}")
+    allow_list = parse_allow(allow, fleet)
+    explicit_pools = {entry.split(":", 1)[0] for entry in allow_list or []}
     options, rejected = enumerate_options(roster, runtime, role, mode=mode, modality=modality,
-                                          exclude_lineage=exclude_lineage, fleet=fleet)
+                                          exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools)
     if target is not None:
         requested = next((lane for lane in roster.get("lanes", [])
                           if (lane.get("harness"), lane.get("model_key")) == target), {})
@@ -498,7 +509,6 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             else:
                 retained.append(option)
         options = retained
-    allow_list = parse_allow(allow, fleet)
     if allow_list is not None:
         allowed = {_allow_identity(entry) for entry in allow_list}
         retained = []

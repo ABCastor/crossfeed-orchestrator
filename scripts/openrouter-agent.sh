@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# openrouter-agent.sh — run one free-tier OpenRouter chat completion and return its final text.
+# openrouter-agent.sh — free by default; explicit paid MiMo calls have a hard daily cap.
 #
-# FREE-ONLY BY DESIGN: before every call this fetches OpenRouter's live model catalog
+# FREE-ONLY BY DEFAULT (except --paid-mimo on approved MiMo lanes): before every call this fetches OpenRouter's live model catalog
 # (GET /api/v1/models) and refuses to send the request unless every field in that model's
 # `pricing` object is exactly "0" AND its output is pure text. This is the real safety rail,
 # not the roster entry: a temporary free preview (e.g. a stealth model) that starts billing
@@ -10,7 +10,7 @@
 #
 # Usage:
 #   openrouter-agent.sh --prompt "<task>" [--lane ID | --model-key KEY | --model SELECTOR]
-#                       [--timeout S] [--idle-timeout S] [--kill-after S] [--last <file>]
+#                       [--paid-mimo] [--max-tokens N] [--timeout S] [--last <file>]
 #
 #   --timeout has no default: absent means no wall-clock limit.
 #   --idle-timeout defaults to 0 (opt-in killing only); --kill-after defaults to 30 seconds.
@@ -43,7 +43,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROMPT=""; PROMPT_FILE=""; MODEL=""; MODEL_KEY=""; LANE=""; LAST=""
-TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"
+TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"; PAID_MIMO=0; MAX_TOKENS=""
 
 _usage_error() {
   echo "openrouter-agent: $1" >&2
@@ -64,6 +64,8 @@ while [ $# -gt 0 ]; do
     --timeout)      _require_value "$@"; TIMEOUT="$2"; shift 2;;
     --idle-timeout) _require_value "$@"; IDLE_TIMEOUT="$2"; shift 2;;
     --kill-after)   _require_value "$@"; KILL_AFTER="$2"; shift 2;;
+    --paid-mimo)    PAID_MIMO=1; shift;;
+    --max-tokens)   _require_value "$@"; MAX_TOKENS="$2"; shift 2;;
     --last)         _require_value "$@"; LAST="$2"; shift 2;;
     -h|--help)      sed -n '2,39p' "$0"; exit 0;;
     *) _usage_error "unknown arg: $1";;
@@ -127,10 +129,25 @@ lane_json="$("$HERE/roster.sh" lane-json "$LANE")" || {
   exit 2; }
 [ "$(jq -r '.harness' <<<"$lane_json")" = "openrouter" ] || { echo "openrouter-agent: lane $LANE is not an OpenRouter lane" >&2; exit 2; }
 MODEL="$(jq -r '.selector' <<<"$lane_json")"
+# BR-MIMO-001
+PAID_CAP=""
+if [ "$PAID_MIMO" = 1 ]; then
+  case "$MODEL" in xiaomi/mimo-v2.6-pro|xiaomi/mimo-v2.6-flash) ;; *) echo "openrouter-agent: --paid-mimo only permits MiMo V2.6 Pro and Flash" >&2; exit 5;; esac
+  [ "$(jq -r '.quota_pool' <<<"$lane_json")" = openrouter-mimo ] || { echo "openrouter-agent: paid MiMo requires the openrouter-mimo pool" >&2; exit 5; }
+  ROSTER_PATH="${ACCESS_OVERLAY:-${XDG_CONFIG_HOME:-$HOME/.config}/orchestrator/access-overlay.json}"
+  PAID_CAP="$(jq -r '.quota_pools["openrouter-mimo"].daily_usd_cap // 5' "$ROSTER_PATH")"
+fi
+if [ -n "$MAX_TOKENS" ]; then
+  [[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || _usage_error "--max-tokens must be a positive whole number"
+  [ "$PAID_MIMO" = 1 ] || _usage_error "--max-tokens requires --paid-mimo"
+fi
 echo "openrouter-agent: effort service-chosen: the service chooses the level" >&2
 "$HERE/roster.sh" check-lane "$LANE" "read-only"
 
 KEY_REF="$(jq -r '.auth.key_ref // empty' <<<"$lane_json")"
+if [ "$PAID_MIMO" = 1 ]; then
+  case "$KEY_REF" in op://*) ;; *) echo "openrouter-agent: paid MiMo requires a 1Password key reference" >&2; exit 3;; esac
+fi
 if [ -n "$KEY_REF" ]; then
   KEY="$(python3 - "$HERE" "$KEY_REF" <<'PYKEY'
 import sys
@@ -364,6 +381,8 @@ set -m
 OPENROUTER_MODEL="$MODEL" OPENROUTER_KEY="$KEY" OPENROUTER_PROMPT="$PROMPT" \
 OPENROUTER_API_BASE="${OPENROUTER_API_BASE:-https://openrouter.ai/api/v1}" \
 OPENROUTER_TIMEOUT="$TIMEOUT" OPENROUTER_IDLE="$IDLE_TIMEOUT" \
+OPENROUTER_PAID_MIMO="$PAID_MIMO" OPENROUTER_PAID_CAP="$PAID_CAP" \
+OPENROUTER_MAX_TOKENS="$MAX_TOKENS" OPENROUTER_SCRIPT_DIR="$HERE" \
 OPENROUTER_MODEL_EVENTS="$EVENTS" OPENROUTER_OUT="$RUN_LAST" OPENROUTER_PROGRESS="$PROGRESS" \
   python3 - >"$RUNOUT" <<'PY' &
 from __future__ import annotations
@@ -454,7 +473,9 @@ def beat(force: bool = False) -> None:
 # what the roster forbids). Retries are bounded, honour the caller's deadline, and never apply
 # to a 4xx that means the request itself is wrong.
 RETRY_STATUS = {429, 500, 502, 503, 504}
-MAX_ATTEMPTS = 5
+paid_mimo = os.environ["OPENROUTER_PAID_MIMO"] == "1"
+# Paid failures can have billed tokens even before text arrives. Never retry them.
+MAX_ATTEMPTS = 1 if paid_mimo else 5
 
 
 def backoff_or_fail(attempt: int, backoff: float, last: str, code: int) -> float:
@@ -596,7 +617,7 @@ if output_modalities != ["text"]:
 
 pricing = entry.get("pricing") or {}
 non_zero = {k: v for k, v in pricing.items() if str(v) != "0"}
-if non_zero:
+if non_zero and not paid_mimo:
     fail(5, f"model '{model}' is not free right now (non-zero pricing fields: {non_zero}); refusing")
 
 body = {
@@ -605,6 +626,18 @@ body = {
     "stream": True,
     "usage": {"include": True},
 }
+# BR-MIMO-001 / BR-MIMO-002
+budget = None
+if paid_mimo:
+    sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
+    from openrouter_budget import Budget, BudgetError, priced_request
+    from run_identity import state_dir
+    try:
+        body, ceiling = priced_request(entry, body, os.environ["OPENROUTER_MAX_TOKENS"])
+        budget = Budget(state_dir(), os.environ["OPENROUTER_PAID_CAP"])
+        reservation = budget.reserve(model, ceiling)
+    except (BudgetError, OSError, ValueError):
+        fail(5, "paid MiMo pricing/budget admission refused; check the cap and budget ledger")
 text, usage = stream_completion(
     urllib.request.Request(
         f"{API}/chat/completions",
@@ -619,7 +652,15 @@ text, usage = stream_completion(
     )
 )
 
-if usage is None:
+if paid_mimo:
+    try:
+        cost = budget.settle(reservation, (usage or {}).get("cost"))
+    except (BudgetError, OSError, ValueError):
+        fail(6, "paid MiMo usage missing/invalid or exceeded reservation; reservation retained, no retry")
+    with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
+        events.write(json.dumps({"type": "crossfeed.openrouter_usage", "usage": usage}) + "\n")
+    print(f"openrouter-agent: paid MiMo cost USD {cost}", file=sys.stderr, flush=True)
+elif usage is None:
     # The pre-flight catalog gate already refused non-zero pricing, so this is not a billing
     # risk, but it does mean the post-hoc confirmation did not run. Say so rather than implying
     # a check that never happened.
