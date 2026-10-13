@@ -108,6 +108,11 @@ class BridgeTests(unittest.TestCase):
         overlay = {'model_cards': {qualified: {'status': 'current'}}}
         self.assertEqual(to_evidence.model_key(qualified, 'high', overlay), qualified)
 
+    def test_overlay_preserves_dynamic_route_names(self):
+        for model in ('openrouter/auto', 'opencode-go/auto', 'provider:default'):
+            with self.subTest(model=model):
+                self.assertEqual(to_evidence.model_key(model, 'high', {}), model)
+
     def test_live_replay_contract_and_unmeasured_choice(self):
         held = dict(self.row, task=self.heldout, family='review', tier='expert')
         self.write([self.row, held])

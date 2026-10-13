@@ -13,11 +13,13 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bench.split import FAMILY_MAP, iter_split_rows, task_split, task_folder, load_exclusions
 from bench.cost import report_rows
-from scripts.run_identity import canonical_model, evidence_index, registered_model
+from scripts.run_identity import canonical_model, dynamic_selector, evidence_index, registered_model
 
 
 def model_key(model, level=None, overlay=None, as_of=None):
     if overlay is not None:
+        if dynamic_selector(model):
+            return model
         resolved = canonical_model(model, overlay, as_of)
         if resolved != model or registered_model(model, overlay):
             return resolved
