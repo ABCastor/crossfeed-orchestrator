@@ -12,4 +12,4 @@ Keep long analytical writes off this transport until its write-step failure is d
 
 No attachment flag here: advertised model media capability is not a delivered file transport. Use the media reference for audio/video. Prompt for a terse digest when narration is unwanted. Every writable report belongs inside the work root and is written incrementally.
 
-Exits: 3 may mean exhausted quota; 4 empty output; 5 no route/lease/control gate; 124 wall budget; 125 idle kill. Inspect correlated diagnostics and partial writes before retrying. The idle watchdog defaults to 2400 seconds, no default wall clock. Follow the core never-detach and writer-claim rules.
+Exits: 3 may mean exhausted quota; 4 empty output; 5 no route/lease/control gate; 124 wall budget; 125 idle kill. Inspect correlated diagnostics and partial writes before retrying. The idle watchdog defaults to 0 (diagnostics only; a positive `--idle-timeout` opts into killing), no default wall clock. Follow the core never-detach and writer-claim rules.

@@ -8,7 +8,7 @@ Choose automatic `--role` or one explicit `--lane`, `--model-key` or `--model`, 
 
 Each wrapper run has a unique XDG_DATA_HOME and opencode.db, copying only required auth. Success cleans it; failure may keep it and name the path. Raw parallel opencode calls can share the default DB and collide. Use wrapper isolation, not a global concurrency myth.
 
-Automatic routing can skip busy lanes. An explicitly named lane is never silently substituted: it waits for OPENCODE_LANE_WAIT_S (default 900), then refuses. The roster `timeout_s` remains a hard budget without explicit --timeout because leases lack atomic renewal; idle watchdog still defaults to 2400. For work expected to run past the lane's `timeout_s`, pass an explicit `--timeout` or raise the lane's `timeout_s` in the overlay; never add an outer timeout.
+Automatic routing can skip busy lanes. An explicitly named lane is never silently substituted: it waits for OPENCODE_LANE_WAIT_S (default 900), then refuses. The roster `timeout_s` remains a hard budget without explicit --timeout because leases lack atomic renewal, an unresolved mismatch with the no-default-kill rule in [liveness](liveness.md). The idle watchdog defaults to 0 (diagnostics only). For work expected to run past the lane's `timeout_s`, pass an explicit `--timeout` or raise the lane's `timeout_s` in the overlay; never add an outer timeout.
 
 `--direct --lane <lane>` is one deny-all text-only model call with no repository/project context or tools. It rejects writes, attachments, injection, shared context and web search. Fanout does not expose a direct field; use an explicit wrapper call when appropriate.
 

@@ -4,7 +4,7 @@ Load after a killed or hung run, or before editing a wrapper or dispatch supervi
 
 The idle watchdog defaults to 0: silence reports every ten minutes and never kills. A positive explicit `--idle-timeout` opts into killing. CLI wrappers watch output growth or process-group CPU; streaming HTTP watches arriving bytes. Silence and low local CPU can be healthy server-side reasoning, so historical gaps cannot justify a default kill that throws away work.
 
-No outer `timeout` or `gtimeout`. Most agent wrappers have no default wall clock; OpenCode deliberately retains lane `timeout_s` because its lease is not renewed atomically. Use explicit wrapper `--timeout` only when a hard deadline is intended. Native Gemini media has its own documented budget and transport contract, not the agent-wrapper contract.
+No outer `timeout` or `gtimeout`. Most agent wrappers have no default wall clock; OpenCode still applies lane `timeout_s` because its lease is not renewed atomically, an unresolved mismatch with the no-default-kill rule. Report this limit before dispatching work that can exceed it. Use explicit wrapper `--timeout` only when a hard deadline is intended. Native Gemini media has its own documented budget and transport contract, not the agent-wrapper contract.
 
 Supervision sends TERM, then KILL after `--kill-after` (default 30 seconds), to the whole process group. A bare gtimeout can hang on a child that ignores TERM. Exit 124 means wall budget, 125 idle watchdog. Both may leave partial edits. Inspect `git status`, incremental reports and event logs before relaunching.
 
