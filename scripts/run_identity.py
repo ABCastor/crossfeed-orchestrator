@@ -70,13 +70,17 @@ def dynamic_selector(model):
         or model.rsplit('/', 1)[-1].rsplit(':', 1)[-1].lower() in {'auto', 'default', 'unknown', 'service-chosen'})
 
 
+def registered_model(model, roster):
+    return (model in (roster.get('model_cards') or {}) or model in (roster.get('effort') or {})
+            or any(l.get('model_key') == model for l in roster.get('lanes') or []))
+
+
 def canonical_model(model, roster, as_of=None):
     if not isinstance(model, str) or dynamic_selector(model):
         return model
     cards = roster.get('model_cards') or {}
     lanes = roster.get('lanes') or []
-    if (model not in cards and model not in (roster.get('effort') or {})
-            and not any(l.get('model_key') == model for l in lanes)):
+    if not registered_model(model, roster):
         matches = {l['model_key'] for l in lanes
                    if l.get('selector') == model and l.get('model_key')}
         if len(matches) != 1:
@@ -115,8 +119,9 @@ def canonical_model(model, roster, as_of=None):
 def evidence_index(roster, rows):
     """Read legacy caches without adding overlapping posteriors together.
 
-    A canonical row wins over aliases. Otherwise only one distinct alias payload
-    is usable; conflicting caches stay unknown until rebuilt from raw records.
+    A canonical row wins over aliases. Conflicting aliases use the newest read
+    date, then the smallest route key and payload for stable ties. Never sum
+    caches that may contain overlapping trials; flag the chosen row for rebuild.
     """
     grouped = {}
     for row in rows:
@@ -131,6 +136,16 @@ def evidence_index(roster, rows):
                                sort_keys=True): r for r in candidates}
         if len(distinct) == 1:
             result[cell] = candidates[0]
+        elif not exact:
+            def order(row):
+                try:
+                    date = dt.datetime.fromisoformat(str(row.get('read_on')).replace('Z', '+00:00'))
+                    timestamp = date.replace(tzinfo=date.tzinfo or dt.timezone.utc).timestamp()
+                except (ValueError, TypeError, OverflowError):
+                    timestamp = float('-inf')
+                return (-timestamp, row.get('model_key') or row.get('model') or '', json.dumps(row, sort_keys=True))
+            chosen = min(candidates, key=order)
+            result[cell] = dict(chosen, flags=sorted(set(chosen.get('flags', []) + ['alias_cache_conflict'])))
     return result
 
 

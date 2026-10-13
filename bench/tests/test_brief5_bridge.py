@@ -87,6 +87,27 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(to_evidence.model_key('opencode-go/deepseek-v4.1-flash', 'high'), 'deepseek-v4.1-flash')
         self.assertEqual(to_evidence.model_key('gemini-3.8-flash-high', 'high'), 'gemini-3.8-flash')
 
+    def test_overlay_cli_keeps_legacy_normalization_and_release_names(self):
+        for model, expected in [('opencode-go/deepseek-v4.1-flash', 'deepseek-v4.1-flash'),
+                                ('gemini-3.8-flash-high', 'gemini-3.8-flash'),
+                                ('opencode-go/deepseek-v4.1-flash-20261001', 'deepseek-v4.1-flash-20261001')]:
+            with self.subTest(model=model):
+                self.write([dict(self.row, model=model)])
+                levels_in, levels_out = self.root / 'levels.json', self.root / 'out.json'
+                overlay = self.root / 'overlay.json'
+                levels_in.write_text(json.dumps({'rows': []}))
+                overlay.write_text(json.dumps({'model_cards': {expected: {'status': 'current'}}}))
+                self.assertEqual(to_evidence.main([str(self.results), '--split', 'fit', '--levels-in',
+                    str(levels_in), '--levels-out', str(levels_out), '--overlay', str(overlay)]), 0)
+                result = json.loads(levels_out.read_text())
+                self.assertEqual([row['model_key'] for row in result['rows']], [expected])
+                self.assertEqual(result['rows'][0]['own']['coding-agent']['trials'], 1)
+
+    def test_overlay_respects_registered_qualified_keys_before_normalizing(self):
+        qualified = 'vendor/gemini-3.8-flash-high'
+        overlay = {'model_cards': {qualified: {'status': 'current'}}}
+        self.assertEqual(to_evidence.model_key(qualified, 'high', overlay), qualified)
+
     def test_live_replay_contract_and_unmeasured_choice(self):
         held = dict(self.row, task=self.heldout, family='review', tier='expert')
         self.write([self.row, held])

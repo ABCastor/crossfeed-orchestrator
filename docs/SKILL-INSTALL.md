@@ -19,7 +19,7 @@ For another harness, make the same layout in its skills directory and use the co
 
 Keep one installation and point harness links at it. Preserve optional `LIVE-RULES.md` and other operator-owned files byte-for-byte. They hold private policy and stay outside this repository. Do not replace unknown local files or remove legacy links without inspecting them.
 
-Stage changes beside the target, verify reference and script paths, run `bash tests/run-all.sh` with synthetic configuration, and compare source hashes before replacement. Keep a recoverable old tree and read back installed hashes and links afterward. `doctor` checks adapter/version/identity drift; it does not prove installed skill source parity.
+Stage changes under `~/.local/state/orchestrator-install/`, verify reference and script paths, run `bash tests/run-all.sh` with synthetic configuration, and compare source hashes before replacement. Keep the recoverable old tree there too, outside every harness's skills directory, so neither staging nor backups register as duplicate skills. Read back installed hashes and links afterward. `doctor` checks adapter/version/identity drift; it does not prove installed skill source parity.
 
 Quota source behavior is documented in [Quota refresh](QUOTA-REFRESH.md). The optional Claude Code model-switch hook is `scripts/hooks/model-switch-guard.py`, registered as a `PreToolUse` hook for `Bash|Agent|Task`.
 
@@ -35,16 +35,21 @@ export LIVE_ROOT="$HOME/.claude/skills/orchestrator"
 git -C "$SOURCE_ROOT" status --short
 git -C "$SOURCE_ROOT" log -3 --oneline
 test -d "$LIVE_ROOT" && test ! -L "$LIVE_ROOT"
-export STAGE_ROOT="$(mktemp -d "${LIVE_ROOT}.stage.XXXXXX")"
+export INSTALL_STATE_ROOT="$HOME/.local/state/orchestrator-install"
+mkdir -p "$INSTALL_STATE_ROOT"
+export STAGE_ROOT="$(mktemp -d "$INSTALL_STATE_ROOT/orchestrator.stage.XXXXXX")"
+export BACKUP_ROOT="$INSTALL_STATE_ROOT/orchestrator.before-$(date +%Y%m%d-%H%M%S)-$$"
 cp -a "$LIVE_ROOT/." "$STAGE_ROOT/"
 ```
 
-Compare incoming managed files with the live versions before replacement. The previous `INSTALL-SOURCE.json` identifies managed files and their installed hashes. A first upgrade, a locally changed managed file, or an incoming path that collides with an unknown operator file stops staging. For files you have inspected and confirmed are managed code, set `APPROVED_REPLACEMENTS` to a JSON list of their relative installed paths, for example `["scripts/fleetctl.py"]`. Preserve private collisions and resolve their paths before installing; never put them on this list. The copy below uses tracked files only, so local run artifacts never travel from the checkout. It flattens `skill/references` and `skill/readers` into the installation, preserves private `SKILL.md`, and records the complete original tree. Any managed symlink stops staging for inspection.
+Compare incoming managed files with the live versions before replacement. The previous `INSTALL-SOURCE.json` identifies managed files and their installed hashes. A first upgrade, a locally changed managed file, or an incoming path that collides with an unknown operator file stops staging. For files you have inspected and confirmed are managed code, write a JSON file containing a list of relative installed paths, for example `["scripts/fleetctl.py"]`, and set `APPROVED_REPLACEMENTS` to that file's absolute path, such as `$INSTALL_STATE_ROOT/approved-replacements.json`. The variable contains a path, not inline JSON. Preserve private collisions and resolve their paths before installing; never put them on this list. The copy below uses tracked files only, so local run artifacts never travel from the checkout. It flattens `skill/references` and `skill/readers` into the installation, preserves private `SKILL.md`, and records the complete original tree. Any managed symlink stops staging for inspection.
 
 ```bash
 python3 - <<'PY'
 import hashlib, json, os, pathlib, shutil, subprocess
 source, live, stage = (pathlib.Path(os.environ[k]) for k in ('SOURCE_ROOT', 'LIVE_ROOT', 'STAGE_ROOT'))
+assert stage.resolve().parent == pathlib.Path(os.environ['INSTALL_STATE_ROOT']).resolve(), 'Stage must be in install state'
+assert not stage.resolve().is_relative_to(live.parent.resolve()), 'Stage must be outside skills'
 subprocess.run(['git', '-C', str(source), 'diff', '--exit-code', 'HEAD'], check=True)
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -110,8 +115,13 @@ With dispatches still paused, verify source parity and absence of live drift, th
 
 ```bash
 python3 - <<'PY'
-import hashlib, json, os, pathlib, time
+import hashlib, json, os, pathlib
 live, stage = (pathlib.Path(os.environ[k]) for k in ('LIVE_ROOT', 'STAGE_ROOT'))
+state = pathlib.Path(os.environ['INSTALL_STATE_ROOT']).resolve()
+backup = pathlib.Path(os.environ['BACKUP_ROOT'])
+assert stage.resolve().parent == state and backup.resolve().parent == state, 'Install artifacts must be in install state'
+assert not state.is_relative_to(live.parent.resolve()), 'Install state must be outside skills'
+assert live.stat().st_dev == stage.stat().st_dev == state.stat().st_dev, 'Renames require one filesystem'
 manifest = json.loads((stage / 'INSTALL-SOURCE.json').read_text())
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -130,7 +140,6 @@ for name, expected in manifest['accepted_private'].items():
     assert digest(stage / name) == expected, 'Reviewed private policy drift: ' + name
 for name, expected in dict(manifest['before'], **manifest['private']).items():
     assert digest(live / name) == expected, 'Live changed since staging: ' + name
-backup = live.with_name(live.name + '.before-' + time.strftime('%Y%m%d-%H%M%S'))
 assert not backup.exists()
 live.rename(backup)
 try:
@@ -146,4 +155,23 @@ print('Installed revision', manifest['revision'], 'rollback:', backup)
 PY
 ```
 
-Read back the installed private policy, references, readers and any harness links. Record the installed revision, staged suite result, source-hash readback and retained backup in the orchestrator context home, then resume dispatches. On failed acceptance, pause dispatches again and rename the new tree aside before restoring the named backup. Do not delete either tree during this procedure. Rebuilding evidence or admitting newly verified matching sources is a separate step through the existing market refresh and overlay workflow, not an installer side effect.
+Read back the installed private policy, references, readers and any harness links. Record the installed revision, staged suite result, source-hash readback and retained backup in the orchestrator context home, then resume dispatches. On failed acceptance, pause dispatches again and restore the named backup with the same environment:
+
+```bash
+python3 - <<'PY'
+import os, pathlib, uuid
+live, backup, state = (pathlib.Path(os.environ[k]) for k in ('LIVE_ROOT', 'BACKUP_ROOT', 'INSTALL_STATE_ROOT'))
+assert backup.is_dir() and not backup.is_symlink()
+assert backup.resolve().parent == state.resolve() and not state.resolve().is_relative_to(live.parent.resolve())
+aside = state / ('orchestrator.failed-' + uuid.uuid4().hex)
+live.rename(aside)
+try:
+    backup.rename(live)
+except BaseException:
+    aside.rename(live)
+    raise
+print('Restored', live, 'retained failed tree:', aside)
+PY
+```
+
+Do not delete either tree during this procedure. Rebuilding evidence or admitting newly verified matching sources is a separate step through the existing market refresh and overlay workflow, not an installer side effect.

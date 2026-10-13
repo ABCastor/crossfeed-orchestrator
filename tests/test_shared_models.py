@@ -137,10 +137,33 @@ class SharedEvidenceTests(unittest.TestCase):
         self.assertEqual(self.row(self.build([proof('one', 'go-luna')]))['own']['review']['trials'], 0)
 
     def test_provider_drift_does_not_train_the_selected_model(self):
+        # A declared different release is backend drift, not an unmatched name.
+        self.roster['model_cards']['provider/other-release'] = {'status': 'current'}
         result = self.build([proof('one', 'gpt-6-luna', selected_model='gpt-6-luna',
                                    actual_model='provider/other-release', identity_source='provider')])
         self.assertEqual(self.row(result)['own']['review']['trials'], 0)
         self.assertEqual(self.row(result, 'provider/other-release')['own']['review']['trials'], 1)
+
+    def test_unmatched_provider_name_falls_back_with_provenance(self):
+        reported = 'opencode-go/luna-exact-20261001'
+        for fields in [{}, {'actual_model_identity': reported}]:
+            with self.subTest(fields=fields):
+                result = self.build([proof('one', 'go-luna', actual_model=reported,
+                                           identity_source='provider', **fields)])
+                row = self.row(result)
+                self.assertEqual(row['own']['review']['trials'], 1)
+                self.assertEqual(row['provider_reported_models'], [reported])
+                self.assertIn('model_identity_unconfirmed', row['flags'])
+                self.assertFalse(any(r['model_key'] == reported for r in result['rows']))
+
+    def test_registered_snapshots_and_exact_selectors_remain_distinct(self):
+        snapshot = 'opencode-go/luna-exact-20261001'
+        self.roster['model_cards'][snapshot] = {'status': 'current'}
+        result = self.build([proof('one', 'go-luna', actual_model=snapshot, identity_source='provider'),
+                             proof('two', 'go-luna', actual_model='opencode-go/luna-exact',
+                                   identity_source='provider')])
+        self.assertEqual(self.row(result)['own']['review']['trials'], 1)
+        self.assertEqual(self.row(result, snapshot)['own']['review']['trials'], 1)
 
     def test_receipt_preserves_selected_route_and_unconfirmed_provider(self):
         self.roster['lanes'][0].update(lane_id='go-luna', quota_pool='opencode-go', harness='opencode')
@@ -266,6 +289,33 @@ class SharedRoutingTests(unittest.TestCase):
                          'q': {'review': {'mean': mean, 'sd': .01, 'n_sources': 1}}}
                         for alias, mean in [('go-luna', .9), ('third-luna', .1)]])
         self.assertTrue(all(r['q']['unknown'] for r in self.select()['top3']))
+
+    def test_conflicting_dated_alias_caches_choose_newest_without_summing(self):
+        self.roster['model_cards']['third-luna'] = identity_card()
+        rows = [{'model_key': alias, 'level': 'high', 'read_on': date,
+                 'own': {'review': {'trials': trials, 'passes': 1}},
+                 'q': {'review': {'mean': mean, 'sd': .01, 'n_sources': 1}}}
+                for alias, date, trials, mean in [('go-luna', '2026-10-13', 2, .9),
+                                                  ('third-luna', '2026-10-14', 5, .1)]]
+        for candidates in [rows, list(reversed(rows))]:
+            winner = run_identity.evidence_index(self.roster, candidates)['gpt-6-luna', 'high']
+            self.assertEqual(winner['model_key'], 'third-luna')
+            self.assertEqual(winner['own']['review']['trials'], 5)
+            self.assertEqual(winner['q']['review']['mean'], .1)
+            self.assertIn('alias_cache_conflict', winner['flags'])
+        # A canonical cache always wins, even when older than the aliases.
+        canonical = dict(rows[0], model_key='gpt-6-luna', read_on='2026-10-01')
+        self.assertEqual(run_identity.evidence_index(self.roster, rows + [canonical])['gpt-6-luna', 'high'], canonical)
+
+    def test_alias_cache_ties_use_stable_key_without_quality_cherry_picking(self):
+        self.roster['model_cards']['third-luna'] = identity_card()
+        for fields in [{'read_on': '2026-10-13'}, {'model_identity': 'gpt-6-luna'}]:
+            rows = [dict(model_key=alias, level='high', q={'review': {'mean': mean}}, **fields)
+                    for alias, mean in [('third-luna', .99), ('go-luna', .1)]]
+            for candidates in [rows, list(reversed(rows))]:
+                winner = run_identity.evidence_index(self.roster, candidates)['gpt-6-luna', 'high']
+                self.assertEqual(winner['model_key'], 'go-luna')
+                self.assertEqual(winner['q']['review']['mean'], .1)
 
     def test_source_prices_and_latency_are_used_for_their_source_only(self):
         result = self.select()

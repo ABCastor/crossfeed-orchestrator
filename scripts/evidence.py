@@ -17,9 +17,9 @@ from pathlib import Path
 
 FAMILIES = ("coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual")
 try:
-    from run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector
+    from run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
 except ModuleNotFoundError:
-    from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector
+    from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
 
 # This is the single assumptions table. Weights are reliability * independence;
 # each publisher contributes at most one prior-strength budget, not one per metric.
@@ -224,9 +224,16 @@ def _observations(overlay, records):
         dynamic = (first('dynamic_model') or lane.get('dynamic_model') or dynamic_selector(model)
                    or dynamic_selector(first('selector')) or dynamic_selector(lane.get('selector')))
         unconfirmed = first('provider_identity_unconfirmed') or lane.get('provider_identity_unconfirmed')
+        unmatched = False
         if not dynamic and not unconfirmed:
-            model = (first('actual_model_identity') or canonical_model(actual, overlay, first('started_at') or '')
-                     if actual and first('identity_source') == 'provider' else selected)
+            model = selected
+            if actual and first('identity_source') == 'provider':
+                reported = first('actual_model_identity') or canonical_model(actual, overlay, first('started_at') or '')
+                # Unknown native labels are provenance, not invented model cards.
+                # A pinned resolved identity or exact registered release wins.
+                unmatched = reported == actual and not registered_model(actual, overlay)
+                if not unmatched:
+                    model = reported
         cell = (model, level)
         family = first("family") or FAMILY_BY_ROLE.get(first("role"))
         if family in FAMILIES and proofs:
@@ -236,7 +243,12 @@ def _observations(overlay, records):
                 counts["trials"] += 1
                 counts["passes"] += int(verdicts.pop())
         bucket = telemetry.setdefault(cell, {"in": [], "out": [], "latency": [], "completion_latency": [],
-                                             "evidence_flags": set(), "own_cost": {}, "sources": {}})
+                                             "evidence_flags": set(), "own_cost": {}, "sources": {},
+                                             "provider_reported_models": set()})
+        if actual:
+            bucket['provider_reported_models'].add(actual)
+        if unmatched:
+            bucket['evidence_flags'].add('model_identity_unconfirmed')
         for record in proofs:
             flags = record.get("evidence_flags")
             if isinstance(flags, list):
@@ -519,6 +531,7 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
         rows.append({"model_key": model, "model": model, "model_identity": model, "level": level, "q": q,
                      "sources": sources, "own": own, "own_cost": own_cost, "tokens_per_task": tokens,
                      "source_telemetry": source_telemetry,
+                     "provider_reported_models": sorted(measured.get('provider_reported_models', [])),
                      "price_1m": price, "latency_s": statistics.median(latency or external_latency) if latency or external_latency else assumptions["estimates"]["latency_s"],
                      "read_on": read_on, "recheck": effort.get("recheck") or "New release, changed benchmark, or 30 days since read.",
                      "flags": sorted(set(flags))})
