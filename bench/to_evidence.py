@@ -13,9 +13,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bench.split import FAMILY_MAP, iter_split_rows, task_split, task_folder, load_exclusions
 from bench.cost import report_rows
+from scripts.run_identity import canonical_model, evidence_index
 
 
-def model_key(model, level=None):
+def model_key(model, level=None, overlay=None):
+    if overlay is not None:
+        return canonical_model(model, overlay)
     # Grid's Go model is a provider-qualified selector; evidence uses its key.
     key = model.split("/", 1)[-1]
     if key.startswith("gemini-") and level and key.endswith("-" + level):
@@ -73,7 +76,7 @@ def posterior(q, counts, assumptions):
     return result
 
 
-def build_evidence(paths, levels, costs=None):
+def build_evidence(paths, levels, costs=None, overlay=None):
     paths = list(paths)
     excluded = load_exclusions(paths)
     attempted = [dict(row, excluded=True) if task_folder(row["task"]) in excluded else row
@@ -85,7 +88,11 @@ def build_evidence(paths, levels, costs=None):
     for row in rows:
         if type(row.get("pass")) is not bool:
             raise ValueError("fit pass must be boolean")
-        key = (model_key(row["model"], row["level"]), row["level"])
+        model = (row.get('model_identity') or canonical_model(row['model'], overlay, row.get('started_at') or '')
+                 if overlay is not None else model_key(row['model'], row['level']))
+        if overlay is not None and row.get('provider_identity_unconfirmed'):
+            model = row['model']
+        key = (model, row['level'])
         identity = (row["pool"], row["option"])
         if identity in identities and identities[identity] != key:
             raise ValueError("option identity changed")
@@ -111,9 +118,12 @@ def build_evidence(paths, levels, costs=None):
             raise ValueError("conflicting costs for same model/level/pool")
         measured_costs[where] = value
     result = copy.deepcopy(levels)
+    if overlay is not None:
+        result['rows'] = [dict(row, model_key=key[0], model=key[0], model_identity=key[0])
+                          for key, row in evidence_index(overlay, result['rows']).items()]
     available = {(row.get("model_key", row.get("model")), row["level"]) for row in result["rows"]}
     for key in sorted(set(telemetry) - available):
-        result["rows"].append({"model_key": key[0], "model": key[0], "level": key[1],
+        result["rows"].append({"model_key": key[0], "model": key[0], "model_identity": key[0], "level": key[1],
                                "q": {}, "flags": []})
     for row in result["rows"]:
         key = (row.get("model_key", row.get("model")), row["level"])
@@ -131,6 +141,13 @@ def build_evidence(paths, levels, costs=None):
         cells = telemetry[key]
         for field in ("latency_s", "tokens_per_task"):
             row.pop(field, None)
+        source_durations = defaultdict(list)
+        for cell in cells:
+            source = cell['pool'] + '/' + cell['harness'] if cell.get('harness') else cell['pool']
+            if cell.get('duration_s') is not None:
+                source_durations[source].append(cell['duration_s'])
+        row['source_telemetry'] = {source: {'latency_s': statistics.median(values), 'trials': len(values),
+                                         'metric': 'completion_time_s'} for source, values in source_durations.items()}
         durations = [c["duration_s"] for c in cells if c.get("duration_s") is not None]
         row["latency_s"] = statistics.median(durations) if durations else 120.0
         row["tokens_per_task"] = {side: statistics.median(values) if values else
@@ -150,12 +167,14 @@ def main(argv=None):
     parser.add_argument("--levels-in", required=True, type=Path)
     parser.add_argument("--levels-out", required=True, type=Path)
     parser.add_argument("--costs", type=Path)
+    parser.add_argument("--overlay", type=Path, help="Use declared shared model identities; legacy normalization when omitted")
     args = parser.parse_args(argv)
     if args.levels_in.resolve() == args.levels_out.resolve():
         parser.error("levels-out must be a separate copy")
     try:
         result = build_evidence(args.results, json.loads(args.levels_in.read_text()),
-                                json.loads(args.costs.read_text()) if args.costs else None)
+                                json.loads(args.costs.read_text()) if args.costs else None,
+                                json.loads(args.overlay.read_text()) if args.overlay else None)
         args.levels_out.parent.mkdir(parents=True, exist_ok=True)
         args.levels_out.write_text(json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n")
     except (OSError, ValueError, KeyError, TypeError) as exc:

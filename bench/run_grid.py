@@ -304,6 +304,9 @@ def measure(task_info, option, results_dir=None):
     result = dict(task=ident, family=meta["family"], difficulty=meta["difficulty"], seed=meta["seed"],
                   option=option["id"], pool=option["pool"], model=option["model"], level=option["level"],
                   task_digest=fixture_hash, option_digest=option_digest(option))
+    result['started_at'] = datetime.now(timezone.utc).isoformat()
+    if option.get('harness'):
+        result['harness'] = option['harness']
     result.update({key: meta[key] for key in ("template_id", "tier") if key in meta})
     cell_dir = Path(results_dir if results_dir is not None else task.parent / 'results') / 'cells' / (quote(ident, safe='') + '__' + quote(option['id'], safe=''))
     cell_dir.mkdir(parents=True, exist_ok=True)

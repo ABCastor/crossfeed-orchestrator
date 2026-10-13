@@ -21,9 +21,9 @@ import uuid
 from typing import Any
 
 try:
-    from run_identity import FAMILY_BY_ROLE
+    from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
-    from scripts.run_identity import FAMILY_BY_ROLE
+    from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
 
 DEFAULTS = {"target": 90.0, "lambda0": 1.0, "mu": .001, "explore": .1,
@@ -71,12 +71,13 @@ def _band(fleet: Any, roster: dict, runtime: dict, pool: str, state: str, eviden
 
 
 def _lineage(roster: dict, option: dict) -> str:
-    card = roster.get("model_cards", {}).get(option["model_key"], {})
-    entry = roster.get("model_evidence", {}).get(option["model_key"], {})
+    model = option.get("model_identity", option["model_key"])
+    card = roster.get("model_cards", {}).get(model, {})
+    entry = roster.get("model_evidence", {}).get(model, {})
     declared = card.get("lineage") or card.get("vendor") or entry.get("lineage") or entry.get("vendor")
     if declared:
         return str(declared).lower()
-    key = option["model_key"].lower()
+    key = model.lower()
     for prefix, vendor in (("gpt", "openai"), ("o1", "openai"), ("o3", "openai"),
                            ("claude", "anthropic"), ("gemini", "google"),
                            ("kimi", "moonshot"), ("glm", "zai"), ("grok", "xai"),
@@ -105,6 +106,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 card = roster.get("model_cards", {}).get(model, {})
                 candidates.append({"model_key": model, "model": run_as, "harness": pool,
                                    "quota_pool": pool, "direct": True,
+                                   **({"price_1m": card["price_1m"]} if "price_1m" in card else {}),
                                    "capabilities": card.get("capabilities", {"input": ["text"]}),
                                    "allowed_modes": card.get("allowed_modes", ["read-only", "write"]),
                                    "access_status": card.get("access_status", "verified"),
@@ -168,9 +170,12 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 rejected.append(f"{label}: outside CRITICAL role allowlist")
                 continue
         option = {"pool": pool, "harness": harness, "model_key": key, "model": key,
+                  "model_identity": canonical_model(key, roster),
                   "run_as": lane.get("model") or lane.get("selector") or key,
                   "mode": mode, "band": band, "pool_state": state,
                   "provider": lane.get("provider")}
+        if "price_1m" in lane:
+            option["source_price_1m"] = lane["price_1m"]
         if lane.get("paid_mimo") is True:
             option["paid_mimo"] = True
         if lane.get("lane_id"):
@@ -537,7 +542,13 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             prices[option["pool"]] = _pool_price(roster, runtime, option["pool"], policy, fleet)
     path = state_dir / "evidence" / "levels.json"
     evidence = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    rows = {(row.get("model_key") or row.get("model"), row.get("level")): row for row in evidence.get("rows", [])}
+    rows = evidence_index(roster, evidence.get("rows", []))
+    def evidence_for(option):
+        row = rows.get((option["model_identity"], option["level"]), {})
+        if "source_price_1m" in option:
+            price = option["source_price_1m"]
+            return dict(row, price_1m=price if isinstance(price, dict) else {})
+        return row
     scored = []
     weights = dict(DEFAULTS["stakes_weights"], **policy.get("stakes_weights", {}))
     uncertainty_weight = max(1e-9, float(policy.get("uncertainty_weight", DEFAULTS["uncertainty_weight"])))
@@ -547,12 +558,12 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         raise fleet.FleetError("high_cost_cap must be finite and nonnegative")
     pool_costs = {}
     for option in options:
-        usd, _ = _cost(rows.get((option["model_key"], option["level"]), {}), None)
+        usd, _ = _cost(evidence_for(option), None)
         if usd is not None:
             pool_costs.setdefault(option["pool"], []).append(usd)
     medians = {pool: statistics.median(costs) for pool, costs in pool_costs.items()}
     for option in options:
-        row = rows.get((option["model_key"], option["level"]), {})
+        row = evidence_for(option)
         strata = row.get("q_by_stakes", {})
         scoped = strata.get(stakes, {}).get(family)
         if scoped is None and stakes == "irreversible":
@@ -572,6 +583,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         cost, cost_flags = _task_cost(roster, option, row, pool_price, medians.get(option["pool"]))
         price = pool_price["lambda"]
         latency = _number(row.get("latency_by_stakes", {}).get(stakes, row.get("latency_s")))
+        telemetry = row.get("source_telemetry", {})
+        source = telemetry.get(option["pool"] + "/" + option["harness"], telemetry.get(option["pool"], {}))
+        if _number(source.get("latency_s")) is not None:
+            latency = _number(source["latency_s"])
         penalty = price * cost["penalty_percent"]
         if stakes == "high":
             penalty = min(penalty, high_cost_cap)
@@ -591,6 +606,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     scored = [item for item in scored if not (item["q"]["unknown"] and item["q"]["mean"] in measured_means
                                              and not item.get("pro_fallback"))]
     scored.sort(key=lambda item: (-item["score"], -item["quality"], item["q"]["unknown"], item["q"]["sd"],
+                                  (item['cost']['estimated_usd'] if stakes != 'irreversible'
+                                   and 'source_price_1m' in item and item['cost']['estimated_usd'] is not None else math.inf),
                                   item["pool"], item["model_key"], item["level"]))
     if not scored:
         raise fleet.FleetError("no eligible selector option: " + "; ".join(rejected))

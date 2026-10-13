@@ -61,6 +61,79 @@ def roster(*, discover=False):
         return {}
 
 
+DYNAMIC = {'auto', 'default', 'unknown', 'openrouter/free', 'github-copilot-auto',
+           'openrouter-free-router', 'service-chosen'}
+
+
+def dynamic_selector(model):
+    return isinstance(model, str) and (model.lower() in DYNAMIC
+        or model.rsplit('/', 1)[-1].rsplit(':', 1)[-1].lower() in {'auto', 'default', 'unknown', 'service-chosen'})
+
+
+def canonical_model(model, roster, as_of=None):
+    if not isinstance(model, str) or dynamic_selector(model):
+        return model
+    cards = roster.get('model_cards') or {}
+    lanes = roster.get('lanes') or []
+    if (model not in cards and model not in (roster.get('effort') or {})
+            and not any(l.get('model_key') == model for l in lanes)):
+        matches = {l['model_key'] for l in lanes
+                   if l.get('selector') == model and l.get('model_key')}
+        if len(matches) != 1:
+            return model
+        model = matches.pop()
+        if dynamic_selector(model):
+            return model
+    card = cards.get(model) or {}
+    identity = card.get('identity') or {}
+    if not isinstance(identity, dict):
+        return model
+    target = identity.get('model_key')
+    if (not isinstance(target, str) or dynamic_selector(target) or target == model
+            or not isinstance(cards.get(target), dict) or cards[target].get('identity')
+            or not isinstance(identity.get('evidence'), str) or not identity['evidence'].strip()):
+        return model
+    if any(dynamic_selector(l.get('selector')) or l.get('dynamic_model') or l.get('harness') == 'chatgpt-chat'
+           or l.get('chatgpt_pi') or l.get('provider_identity_unconfirmed')
+           for l in lanes if l.get('model_key') in {model, target}):
+        return model
+    try:
+        verified = dt.date.fromisoformat(identity.get('verified_on', ''))
+        if as_of is not None and dt.date.fromisoformat(str(as_of)[:10]) < verified:
+            return model
+    except (TypeError, ValueError):
+        return model
+    def snapshots(key):
+        return {str(value) for value in [cards.get(key, {}).get('served_snapshot')]
+                + [l.get('served_snapshot') for l in lanes if l.get('model_key') == key] if value}
+    source_snapshots, target_snapshots = snapshots(model), snapshots(target)
+    if source_snapshots != target_snapshots or len(source_snapshots) > 1:
+        return model
+    return target
+
+
+def evidence_index(roster, rows):
+    """Read legacy caches without adding overlapping posteriors together.
+
+    A canonical row wins over aliases. Otherwise only one distinct alias payload
+    is usable; conflicting caches stay unknown until rebuilt from raw records.
+    """
+    grouped = {}
+    for row in rows:
+        key = row.get('model_key') or row.get('model')
+        identity = row.get('model_identity') or canonical_model(key, roster, row.get('read_on') or '')
+        grouped.setdefault((identity, row.get('level')), []).append(row)
+    result = {}
+    for cell, candidates in grouped.items():
+        exact = [r for r in candidates if (r.get('model_key') or r.get('model')) == cell[0]]
+        candidates = exact or candidates
+        distinct = {json.dumps({k: v for k, v in r.items() if k not in {'model_key', 'model', 'model_identity'}},
+                               sort_keys=True): r for r in candidates}
+        if len(distinct) == 1:
+            result[cell] = candidates[0]
+    return result
+
+
 def normalize_model_alias(model, roster=None):
     """Resolve declared aliases and provider prefixes without erasing versions."""
     if not isinstance(model, str) or not MODEL_ID.fullmatch(model):
@@ -85,20 +158,20 @@ def normalize_model_alias(model, roster=None):
 
 def dynamic_model_selection(record, roster=None):
     """Auto and service routers intentionally resolve to a different native model."""
-    dynamic = {"auto", "default", "unknown", "openrouter/free", "github-copilot-auto",
-               "openrouter-free-router", "service-chosen"}
-    if record.get("selected_model") in dynamic or record.get("selector") in dynamic:
+    if record.get('dynamic_model') or dynamic_selector(record.get("selected_model")) or dynamic_selector(record.get("selector")):
         return True
     data = roster if roster is not None else globals()["roster"]()
     for lane in data.get("lanes") or []:
-        if lane.get("lane_id") == record.get("lane_id") and lane.get("selector") in dynamic:
+        if lane.get("lane_id") == record.get("lane_id") and (lane.get('dynamic_model') or dynamic_selector(lane.get("selector"))):
             return True
     return False
 
 
 def model_identity_drift(record, roster=None):
     actual, selected = record.get("actual_model"), record.get("selected_model")
+    data = roster if roster is not None else globals()["roster"]()
     return bool(actual and selected and not dynamic_model_selection(record, roster)
+                and canonical_model(actual, data) != canonical_model(selected, data)
                 and normalize_model_alias(actual, roster) != normalize_model_alias(selected, roster))
 
 
@@ -211,7 +284,7 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
                 return value if type(value) in (int, float) and math.isfinite(value) else None
             def option(raw):
                 clean = {}
-                for key in ("pool", "harness", "model_key", "model", "run_as", "level", "effort", "lane_id"):
+                for key in ("pool", "harness", "model_key", "model_identity", "model", "run_as", "level", "effort", "lane_id"):
                     value = identity(raw.get(key))
                     if (value is None and raw.get("harness") == "chatgpt-chat"
                             and key in {"model_key", "model", "run_as", "lane_id"}):
@@ -307,6 +380,7 @@ def begin(wrapper, requested, selected, lane, role, effort=None, selection=None,
             "afk_attempt_id": os.environ.get("AFK_ATTEMPT_ID")}
     record.update(selection_metadata(selection, model=record["selected_model"], lane_id=record["lane_id"],
                                      effort=effort, pool=pool, harness=wrapper, role=role, family=family))
+    record["model_identity"] = canonical_model(record["selected_model"], data)
     return record
 
 
@@ -443,6 +517,7 @@ def finish(path, events, returncode, last, schema, database=None, result_file=No
         record["actual_model"] = None
     record["identity_source"] = ("provider" if record["actual_model"] else
                                  "unconfirmed" if record["harness"] == "chatgpt-chat" or record.get("provider_identity_unconfirmed") else "selection-only")
+    record["actual_model_identity"] = canonical_model(record["actual_model"], roster()) if record["actual_model"] else None
     record.update(ended_at=now(), returncode=returncode,
                   status="ok" if returncode == 0 else "error")
     if returncode in {124, 125}:

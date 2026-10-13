@@ -39,6 +39,14 @@ except ImportError:
     chatgpt_pro = importlib.util.module_from_spec(_pro_spec)
     _pro_spec.loader.exec_module(chatgpt_pro)
 
+try:
+    from run_identity import canonical_model
+except ImportError:
+    _identity_spec = importlib.util.spec_from_file_location("fleet_run_identity", Path(__file__).with_name("run_identity.py"))
+    _identity_module = importlib.util.module_from_spec(_identity_spec)
+    _identity_spec.loader.exec_module(_identity_module)
+    canonical_model = _identity_module.canonical_model
+
 
 def _xdg_config() -> str:
     return os.environ.get("XDG_CONFIG_HOME") or "~/.config"
@@ -1882,8 +1890,10 @@ def pool_switches(roster: dict[str, Any], runtime: dict[str, Any], pool: str) ->
     everywhere, or, in a file with an older single choice, when another model was the one chosen.
     """
     chosen = effective_model_choice(roster, runtime, pool)
-    down = toggled_off(runtime, pool)
-    return {model: model not in down and model_preference(runtime, model) != "off"
+    down = {canonical_model(key, roster) for key in toggled_off(runtime, pool)}
+    global_off = {canonical_model(key, roster) for key, value in (runtime.get("model_preferences") or {}).items()
+                  if value == "off"}
+    return {model: canonical_model(model, roster) not in (down | global_off)
             and (chosen is None or model == chosen)
             and (not model_is_older(roster, pool, model) or bool(older_model_reason(roster, pool, model)))
             for model in choosable_models(roster, pool)}
@@ -1917,12 +1927,17 @@ def _settle(runtime: dict[str, Any], roster: dict[str, Any], pool: str) -> set[s
         down |= {model for model in choosable_models(roster, pool) if model != chosen}
     (runtime.get("model_choices") or {}).pop(pool, None)
     older = runtime.get("model_preferences") or {}
-    for model in [key for key in choosable_models(roster, pool) if older.get(key) == "off"]:
+    global_off = {canonical_model(key, roster) for key, value in older.items() if value == 'off'}
+    for model in [key for key in choosable_models(roster, pool) if canonical_model(key, roster) in global_off]:
         for other in roster.get("quota_pools") or {}:
-            if other != pool and model in choosable_models(roster, other):
-                _store_off(runtime, other, toggled_off(runtime, other) | {model})
+            matching = {key for key in choosable_models(roster, other)
+                        if canonical_model(key, roster) == canonical_model(model, roster)}
+            if other != pool and matching:
+                _store_off(runtime, other, toggled_off(runtime, other) | matching)
         down.add(model)
-        set_model_preference(runtime, model, "normal")
+        for key in list(older):
+            if canonical_model(key, roster) == canonical_model(model, roster):
+                set_model_preference(runtime, key, "normal")
     return down
 
 

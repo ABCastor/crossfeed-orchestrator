@@ -17,9 +17,9 @@ from pathlib import Path
 
 FAMILIES = ("coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual")
 try:
-    from run_identity import FAMILY_BY_ROLE
+    from run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector
 except ModuleNotFoundError:
-    from scripts.run_identity import FAMILY_BY_ROLE
+    from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector
 
 # This is the single assumptions table. Weights are reliability * independence;
 # each publisher contributes at most one prior-strength budget, not one per metric.
@@ -217,6 +217,16 @@ def _observations(overlay, records):
         level = first("effort") or first("level")
         if not model or not level:
             continue
+        selected = first('model_identity') or canonical_model(model, overlay, first('started_at') or '')
+        # A backend drift trains the model that actually ran. Dynamic selectors
+        # and unconfirmed relays retain their separate route evidence.
+        actual = first("actual_model")
+        dynamic = (first('dynamic_model') or lane.get('dynamic_model') or dynamic_selector(model)
+                   or dynamic_selector(first('selector')) or dynamic_selector(lane.get('selector')))
+        unconfirmed = first('provider_identity_unconfirmed') or lane.get('provider_identity_unconfirmed')
+        if not dynamic and not unconfirmed:
+            model = (first('actual_model_identity') or canonical_model(actual, overlay, first('started_at') or '')
+                     if actual and first('identity_source') == 'provider' else selected)
         cell = (model, level)
         family = first("family") or FAMILY_BY_ROLE.get(first("role"))
         if family in FAMILIES and proofs:
@@ -226,7 +236,7 @@ def _observations(overlay, records):
                 counts["trials"] += 1
                 counts["passes"] += int(verdicts.pop())
         bucket = telemetry.setdefault(cell, {"in": [], "out": [], "latency": [], "completion_latency": [],
-                                             "evidence_flags": set(), "own_cost": {}})
+                                             "evidence_flags": set(), "own_cost": {}, "sources": {}})
         for record in proofs:
             flags = record.get("evidence_flags")
             if isinstance(flags, list):
@@ -234,6 +244,7 @@ def _observations(overlay, records):
                     "coverage_incomplete", "calibration_unmeasured", "model_identity_unconfirmed",
                     "synthetic_coding_only", "model_harness_specific"})
         pool = first("pool") or first("quota_pool") or lane.get("quota_pool")
+        harness = first("harness") or lane.get("harness")
         cost = next((r.get("own_cost") for r in ordered if isinstance(r.get("own_cost"), dict)), {})
         if pool:
             # Measured usage only; never feed a selector's estimated cost back
@@ -258,13 +269,20 @@ def _observations(overlay, records):
         completion = next((value for r in ordered if (value := _first_number(r, "completion_time_s")) is not None), None)
         if completion is not None and completion >= 0:
             bucket["completion_latency"].append(completion)
+        if pool and harness:
+            source = bucket['sources'].setdefault(pool + '/' + harness, {'ttfa_s': [], 'completion_time_s': []})
+            for metric, value in [('ttfa_s', first_answer), ('completion_time_s', completion)]:
+                if value is not None:
+                    source[metric].append(value)
     return outcomes, telemetry
 
 
 def _source_rows(model, level, catalog, assumptions, read_on, overlay):
-    aa = (catalog.get("artificial_analysis") or {}).get(model, {})
-    entry = (aa.get("levels") or {}).get(level)
-    raw = aa.get("variants") or (_variants(entry) if entry else _variants(aa))
+    raw = []
+    for key, aa in (catalog.get("artificial_analysis") or {}).items():
+        if canonical_model(key, overlay) == model:
+            entry = (aa.get("levels") or {}).get(level)
+            raw.extend(aa.get("variants") or (_variants(entry) if entry else _variants(aa)))
     variants = current_aa_variants([v for v in raw if v.get("effort", level) == level], overlay, model)
     ambiguous = len(variants) > 1
     rows = []
@@ -274,7 +292,7 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
     arena = catalog.get("lmarena") or {}
     arena_rows = arena if isinstance(arena, list) else arena.get("rows", [])
     for row in arena_rows:
-        if (row.get("model_key") or row.get("model")) == model and (row.get("level") or row.get("effort")) == level:
+        if canonical_model(row.get("model_key") or row.get("model"), overlay) == model and (row.get("level") or row.get("effort")) == level:
             rows.append(("lmarena", row, row))
     sources = []
     for publisher, values, raw in rows:
@@ -340,7 +358,7 @@ def _admitted_cells(overlay):
             continue
         controls = effort.get("levels") or {}
         levels = [v for h, values in controls.items() if harnesses is None or h in harnesses for v in values] if isinstance(controls, dict) else list(controls)
-        cells.update((model, level) for level in levels or [effort.get("default", "provider-default")])
+        cells.update((canonical_model(model, overlay), level) for level in levels or [effort.get("default", "provider-default")])
     return cells
 
 
@@ -422,10 +440,10 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
     for model, effort in (overlay.get("effort") or {}).items():
         levels = effort.get("levels") or {}
         exposed = [v for values in levels.values() for v in values] if isinstance(levels, dict) else list(levels)
-        cells.update((model, level) for level in exposed or [effort.get("default", "provider-default")])
+        cells.update((canonical_model(model, overlay), level) for level in exposed or [effort.get("default", "provider-default")])
     for model, entry in (catalog.get("artificial_analysis") or {}).items():
         if not model.startswith("watchlist:"):
-            cells.update((model, level) for level in (entry.get("levels") or {}))
+            cells.update((canonical_model(model, overlay), level) for level in (entry.get("levels") or {}))
     admitted = _admitted_cells(overlay)
     source_data = {cell: _source_rows(*cell, catalog, assumptions, read_on, overlay) for cell in cells}
     priors = _anchor_priors({cell: data[0] for cell, data in source_data.items()}, admitted, assumptions)
@@ -492,8 +510,15 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
                            "trials": max((len(values) for values in data.values()), default=0)}
                     for pool, data in measured.get("own_cost", {}).items() if any(data.values())}
         effort = (overlay.get("effort") or {}).get(model, {})
-        rows.append({"model_key": model, "model": model, "level": level, "q": q,
+        source_telemetry = {}
+        for source, metrics in measured.get('sources', {}).items():
+            metric = 'ttfa_s' if metrics['ttfa_s'] else 'completion_time_s'
+            values = metrics[metric]
+            if values:
+                source_telemetry[source] = {'latency_s': statistics.median(values), 'trials': len(values), 'metric': metric}
+        rows.append({"model_key": model, "model": model, "model_identity": model, "level": level, "q": q,
                      "sources": sources, "own": own, "own_cost": own_cost, "tokens_per_task": tokens,
+                     "source_telemetry": source_telemetry,
                      "price_1m": price, "latency_s": statistics.median(latency or external_latency) if latency or external_latency else assumptions["estimates"]["latency_s"],
                      "read_on": read_on, "recheck": effort.get("recheck") or "New release, changed benchmark, or 30 days since read.",
                      "flags": sorted(set(flags))})

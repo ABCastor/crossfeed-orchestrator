@@ -32,6 +32,36 @@ Use `--allow FILE_OR_LIST` with either command to restrict selection to measured
 
 ## Quality evidence
 
+### One model across sources
+
+`model_key` remains the route's key for switches, effort controls, allow lists and wrapper arguments. `model_identity` is the shared evidence key. Routes naming the same exact key already share evidence. To join a differently named route, its model card must point to a canonical card with dated evidence:
+
+```json
+{
+  "model_cards": {
+    "exact-model-v2": {"status": "current"},
+    "partner/exact-model-v2": {
+      "status": "current",
+      "identity": {
+        "model_key": "exact-model-v2",
+        "evidence": "Provider catalog or native receipt identifying this exact release",
+        "verified_on": "2026-10-13"
+      }
+    }
+  }
+}
+```
+
+The target must exist and have no further identity mapping. Missing evidence or dates, alias chains, ambiguous selectors, differing or multiple `served_snapshot` declarations, dynamic routes and unconfirmed relays stay separate. Provider prefixes, version suffixes and card display names are never stripped to join evidence. Existing `aliases` and `run_as` remain CLI/receipt compatibility names, not proof for joining quality records. Configure distinct keys for distinct snapshots and dynamic routes; reusing one key asserts they are the same release. This assertion needs provider evidence before admitting a new source. A dated mapping is an operator assertion, not a cryptographic proof of model weights or serving quantisation.
+
+Quality and measured task tokens join by model identity and exact level. Duplicate records linked by run or attempt ID count once. Recorded per-run identities are retained. Without a recorded identity, an alias joins only for a run dated on or after its mapping's `verified_on`; older or undated records stay under their original route key. Per-run dynamic or relay-unconfirmed metadata also prevents joining, even if today's lane is fixed. Qualified Auto selectors and lanes marked `dynamic_model: true` remain separate. A confirmed backend drift trains the reported model instead of the selected one. Auto/service routers and relays with unconfirmed provider identity retain their own evidence. A harness's tools and permissions still constrain which jobs its route can run; a shared score does not prove equal end-to-end agent quality.
+
+Quota windows, measured `own_cost.<pool>`, concurrency, paid opt-in, caps and source switches keep their existing scopes. A canonical global off also applies to proven aliases, including conversion of older global settings into per-source switches. Turning off one source leaves another admitted source available. `source_telemetry.<pool>/<harness>` stores source latency; benchmark imports without harness metadata use a pool key. Selection prefers source latency over pooled estimates, including pooled stakes-specific estimates. Its `metric` identifies time to first answer (`ttfa_s`) or whole-task completion (`completion_time_s`); these measures are not interchangeable. Ledger series are kept separately, and benchmark imports use completion time and a harness key when declared. A lane, or a direct model card, can declare `price_1m: {"in": ..., "out": ...}` in USD per million tokens for that source. This overrides the shared API-equivalent estimate for that option only. Missing or invalid prices stay unknown. Declared source cost breaks exact score ties; irreversible selection keeps ignoring price. Scoring otherwise retains its existing quality, quota-pressure and latency trade-offs.
+
+Identity mappings admit no new routes. Paid MiMo still requires an explicit allow entry naming `openrouter-mimo`, its existing roles, and the wrapper's live price and reservation checks. A Go alias cannot supply that permission or bypass its cap. To compare sources, name each allowed pool and route in the existing allow list. New sources still need their own access verification, effort declaration and capabilities.
+
+Rebuild derived `evidence/levels.json` through the existing market refresh after reviewing mappings. The append-only `runs.jsonl` and raw catalog are preserved. Legacy caches use an exact canonical row when present, otherwise a single consistent alias row dated on or after the mapping. Older or undated alias caches retain their route key and do not train the current shared identity. Conflicting alias caches stay unknown until rebuilt; cached posteriors are never added because their observations may overlap. Fit-only benchmark imports share this resolver when passed `--overlay /path/to/access-overlay.json`; omitting it preserves the historical grid-name normalisation. Held-out results remain excluded.
+
 Artificial Analysis rows map to the most recent `release_date` for each model and level. Dated slugs such as `-0424-high` and `-20260813` are eligible only when `model_cards.<key>.served_snapshot` or the model's lane declares that snapshot. The declaration can be a date token or a snapshot slug. Raw variants remain available for audit. Conflicting rows with the same newest date remain ambiguous.
 
 Each family has one anchor metric declared by `policy.evidence.sources`. The defaults are:

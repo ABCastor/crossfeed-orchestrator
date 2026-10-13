@@ -358,7 +358,7 @@
     }
   },
   "model_cards": {
-    "_about": "Optional plain-language cards for the console's model switches. name, best_for (one line), speed (only when measured), run_as (the id a direct wrapper passes; default the key), aliases, pool (for models with no routing lane), status current|older, order, allowance, hidden. Older models default off without a comparative reason: older_model_reasons maps a pool to {job, advantage: cheaper|faster|better, compared_to: current model key, reason, evidence}. Sourced better_than_successor_at measurements also qualify against a current successor. A card never admits a routing lane.",
+    "_about": "Optional plain-language cards for the console's model switches. name, best_for (one line), speed (only when measured), run_as (the id a direct wrapper passes; default the key), aliases, pool (for models with no routing lane), status current|older, order, allowance, hidden. To share evidence for different route keys, identity: {model_key: canonical card key, evidence: exact-release source, verified_on: YYYY-MM-DD}; no alias chains or differing served_snapshot declarations. CLI aliases do not merge evidence. price_1m on a lane or direct card declares source-specific USD per million input/output tokens. See docs/SELECTOR.md. Older models default off without a comparative reason: older_model_reasons maps a pool to {job, advantage: cheaper|faster|better, compared_to: current model key, reason, evidence}. Sourced better_than_successor_at measurements also qualify against a current successor. A card never admits a routing lane.",
     "gpt-6-astra": {
       "pool": "codex",
       "name": "GPT-6 Astra",
