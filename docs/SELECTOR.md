@@ -84,6 +84,14 @@ LMArena is an optional secondary source for the visual/webdev family only. Confi
 
 Admission checks model switches, retirement, pool-specific older-model retention reasons, refused roles, task mode, input modality, capacity and the CRITICAL quota guard. The Go pool retains its CRITICAL role allowlist. AGY requires write mode because its wrapper has no proven read-only boundary.
 
+### Operator role refusals
+
+Executable role exclusions live in `effort.<model_key>.refuse_roles`, a map from role to refusal reason. Written operator instructions are not parsed by the selector. A `by_role` effort default sets a preferred level; it does not restrict enumeration to that level. `select --role review` defaults to normal stakes. Use `--stakes high` when the task needs the high-stakes quality weighting; a stakes change cannot replace a hard exclusion.
+
+The optional [Haiku policy fragment](../examples/haiku-judgment-policy.json) encodes exclusions for the existing review and judgment roles. Merge only each model's `refuse_roles` entries into that model's existing effort block in your overlay, preserving all other fields and refusal entries. Do not replace the whole overlay or whole effort block with this fragment. Apply entries only to model keys already configured on your machine; it admits no new model. If you add another Haiku route key, copy the refusals to its effort entry too. The file is inert until the operator applies it, and a skill install does not modify the external overlay.
+
+These refusals apply before selector scoring, exploration, allow-list and target filtering, and fallback receipt creation. Explicit selector levels grant no override. Direct wrapper calls have their own effort interface and are outside this selector policy guarantee. Choosing the next eligible model still uses the configured stakes and quota evidence; excluding Haiku does not pin Sonnet or Opus.
+
 ```text
 quota_penalty = pool_lambda * task_pool_percent
 quota_penalty = min(quota_penalty, high_cost_cap)           at high stakes

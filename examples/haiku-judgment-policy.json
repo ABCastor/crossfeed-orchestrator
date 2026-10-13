@@ -1,0 +1,26 @@
+{
+  "effort": {
+    "claude-haiku-5-5": {
+      "refuse_roles": {
+        "review": "Haiku is never used for judgment",
+        "reviewer": "Haiku is never used for judgment",
+        "audit": "Haiku is never used for judgment",
+        "second-opinion": "Haiku is never used for judgment",
+        "audit-retry": "Haiku is never used for judgment",
+        "hard-reasoning": "Haiku is never used for judgment",
+        "judgment": "Haiku is never used for judgment"
+      }
+    },
+    "claude-haiku": {
+      "refuse_roles": {
+        "review": "Haiku is never used for judgment",
+        "reviewer": "Haiku is never used for judgment",
+        "audit": "Haiku is never used for judgment",
+        "second-opinion": "Haiku is never used for judgment",
+        "audit-retry": "Haiku is never used for judgment",
+        "hard-reasoning": "Haiku is never used for judgment",
+        "judgment": "Haiku is never used for judgment"
+      }
+    }
+  }
+}
