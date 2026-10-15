@@ -575,3 +575,15 @@ h1{margin-top:calc(17px + var(--line-w))}
   :root{--nm:min(24px,calc((100vw - var(--sb) - 2rem - 145px - 21.46px) / 12.533))}
   :root.front{--hroom:calc(100vw - var(--sb) - 2rem - 145px)}
 }
+
+/* Benchmark evidence uses the same paper, rules and type in both themes. */
+.benchmark-row{border-top:1px solid var(--rule);padding:1.5rem 0}
+.benchmark-row h2{font:600 1.15rem/1.4 var(--face);overflow-wrap:anywhere;margin:0}
+.benchmark-row h2 small{font-size:.85em;color:var(--quiet)}
+.benchmark-verdict{font:400 1.1rem/1.5 var(--read);max-width:70ch}
+.benchmark-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.4rem 2rem}
+.benchmark-columns h3{font:600 .95rem/1.4 var(--face);margin:0 0 .5rem}
+.benchmark-columns ul{list-style:none;margin:0;padding:0}
+.benchmark-columns li{margin:0 0 .65rem;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.benchmark-columns small{display:block;color:var(--quiet);margin-top:.2rem}
+@media(max-width:600px){.benchmark-columns{grid-template-columns:1fr}.nav{gap:1rem}}

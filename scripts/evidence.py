@@ -241,10 +241,20 @@ def _observations(overlay, records):
             if len(verdicts) == 1:  # Conflicting duplicate proofs are unavailable.
                 counts = outcomes.setdefault((model, level, family), {"passes": 0, "trials": 0})
                 counts["trials"] += 1
-                counts["passes"] += int(verdicts.pop())
-        bucket = telemetry.setdefault(cell, {"in": [], "out": [], "latency": [], "completion_latency": [],
+                passed = verdicts.pop()
+                counts["passes"] += int(passed)
+        bucket = telemetry.setdefault(cell, {"provenance": {}, "in": [], "out": [], "latency": [], "completion_latency": [],
                                              "evidence_flags": set(), "own_cost": {}, "sources": {},
                                              "provider_reported_models": set()})
+        if family in FAMILIES and proofs and len({_mechanical_outcome(r) for r in proofs}) == 1:
+            source = first('evidence_source') or 'runs.jsonl'
+            date = first('started_at')
+            key = (source, date, first('evidence_path'), first('date_basis'))
+            provenance = bucket['provenance'].setdefault(family, {})
+            item = provenance.setdefault(key, {'source': source, 'date': date,
+                'path': first('evidence_path'), 'date_basis': first('date_basis'), 'n': 0, 'passes': 0})
+            item['n'] += 1
+            item['passes'] += int(_mechanical_outcome(proofs[0]))
         if actual:
             bucket['provider_reported_models'].add(actual)
         if unmatched:
@@ -281,8 +291,9 @@ def _observations(overlay, records):
         completion = next((value for r in ordered if (value := _first_number(r, "completion_time_s")) is not None), None)
         if completion is not None and completion >= 0:
             bucket["completion_latency"].append(completion)
-        if pool and harness:
-            source = bucket['sources'].setdefault(pool + '/' + harness, {'ttfa_s': [], 'completion_time_s': []})
+        if pool and (harness or first('evidence_source') == 'bench.fit'):
+            source_key = pool + '/' + harness if harness else pool
+            source = bucket['sources'].setdefault(source_key, {'ttfa_s': [], 'completion_time_s': []})
             for metric, value in [('ttfa_s', first_answer), ('completion_time_s', completion)]:
                 if value is not None:
                     source[metric].append(value)
@@ -439,6 +450,7 @@ def _anchor_priors(sources_by_cell, admitted, assumptions):
     return priors
 
 
+# BR-EVIDENCE-001
 def build_evidence(overlay, catalog, ledger_records, read_on=None):
     """Pure builder: one row per canonical model/level, no IO or live state."""
     read_on = read_on or catalog.get("fetched_at") or dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -530,6 +542,7 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
                 source_telemetry[source] = {'latency_s': statistics.median(values), 'trials': len(values), 'metric': metric}
         rows.append({"model_key": model, "model": model, "model_identity": model, "level": level, "q": q,
                      "sources": sources, "own": own, "own_cost": own_cost, "tokens_per_task": tokens,
+                     "own_provenance": {family: list(items.values()) for family, items in measured.get('provenance', {}).items()},
                      "source_telemetry": source_telemetry,
                      "provider_reported_models": sorted(measured.get('provider_reported_models', [])),
                      "price_1m": price, "latency_s": statistics.median(latency or external_latency) if latency or external_latency else assumptions["estimates"]["latency_s"],
@@ -549,6 +562,15 @@ def write_evidence(state_dir, overlay, catalog):
     except ModuleNotFoundError:
         from scripts.fleetctl import atomic_json
     state_dir = Path(state_dir)
+    try:
+        from fleetctl import ledger_lock
+    except ModuleNotFoundError:
+        from scripts.fleetctl import ledger_lock
+    with ledger_lock(state_dir):
+        return _write_evidence_locked(state_dir, overlay, catalog, atomic_json)
+
+
+def _write_evidence_locked(state_dir, overlay, catalog, atomic_json):
     ledger = state_dir / "runs.jsonl"
     records = []
     if ledger.exists():

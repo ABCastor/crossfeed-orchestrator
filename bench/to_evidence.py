@@ -2,6 +2,8 @@
 """Replace local selector evidence with the PREREG fit half only."""
 import argparse
 import copy
+import datetime as dt
+import hashlib
 from collections import defaultdict
 import json
 import math
@@ -162,6 +164,115 @@ def build_evidence(paths, levels, costs=None, overlay=None):
                        "fit_cells": len(rows), "fit_attempted_cells": len(attempted), "fit_tasks": sorted({row["task"] for row in rows}),
                        "excluded_task_folders": sorted(excluded), "cost_unavailable": costs.get("unavailable")}
     return result
+
+
+# BR-EVIDENCE-001
+def import_records(paths, overlay, measured_on=None):
+    """Translate checked fit cells to the live ledger's mechanical-proof contract.
+
+    Stable IDs make copies/reimports idempotent. Held-out payloads and frozen
+    exclusions never enter quality, latency, tokens or quota cost observations.
+    """
+    paths = [Path(path).expanduser().resolve() for path in paths]
+    if measured_on is not None:
+        dt.date.fromisoformat(measured_on)
+    rows = list(iter_split_rows(paths, "fit"))
+    costs = fit_costs(paths, rows)
+    by_option = {(c['pool'], c['option']): c for c in costs['options']}
+    sources = {}
+    for path in paths:
+        for row in iter_split_rows([path], 'fit'):
+            sources.setdefault((row['task'], row['option']), str(path))
+    records = []
+    for row in rows:
+        if row.get('excluded'):
+            continue
+        if type(row.get('pass')) is not bool:
+            raise ValueError('fit pass must be boolean')
+        date = row.get('started_at') or measured_on
+        if not date:
+            raise ValueError('undated fit cells require --measured-on YYYY-MM-DD')
+        dt.datetime.fromisoformat(date.replace('Z', '+00:00'))
+        model = row.get('model_identity') or model_key(row['model'], row['level'], overlay, date)
+        identity = [row.get(k) for k in ('task', 'option', 'pool', 'model', 'level',
+                                       'task_digest', 'option_digest', 'started_at')]
+        run_id = row.get('run_id') or 'bench:' + hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+        record = dict(run_id=run_id, model_key=row['model'], model_identity=model,
+                      level=row['level'], family=FAMILY_MAP[row['family']], pool=row['pool'],
+                      started_at=date, evidence_source='bench.fit', evidence_path=sources[row['task'], row['option']],
+                      date_basis='started_at' if row.get('started_at') else 'operator',
+                      outcome={'mechanically_verified': True, 'passed': row['pass']},
+                      evidence_flags=['model_harness_specific'])
+        for field in ('harness', 'provider_identity_unconfirmed', 'dynamic_model'):
+            if field in row:
+                record[field] = row[field]
+        for target, field in [('completion_time_s', 'duration_s')]:
+            value = row.get(field)
+            if value is not None:
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                    raise ValueError('invalid fit telemetry: ' + field)
+                record[target] = value
+        record['tokens'] = {}
+        for side in ('in', 'out'):
+            value = row.get('tokens_' + side)
+            if value is not None:
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                    raise ValueError('invalid fit tokens')
+                record['tokens'][side] = value
+        cost = by_option.get((row['pool'], row['option']), {})
+        value = cost.get('percent_binding_window_per_task')
+        if value is not None and cost.get('unmeasured_tasks', 0) == 0:
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError('invalid measured fit cost')
+            record['own_cost'] = {row['pool']: {'percent_per_task': value}}
+        records.append(record)
+    return records
+
+
+# BR-EVIDENCE-001
+def install_evidence(paths, state_dir, overlay, measured_on=None):
+    """Import to the append-only live ledger, then rebuild from cached priors offline."""
+    from scripts import fleetctl, evidence
+    records = import_records(paths, overlay, measured_on)
+    state_dir = Path(state_dir)
+    catalog = fleetctl.load_json(state_dir / 'market' / 'market-catalog.json', {}) or {}
+    levels = fleetctl.load_json(state_dir / 'evidence' / 'levels.json', {}) or {}
+    prior_publishers = {source.get('source') for row in levels.get('rows', [])
+                        for source in row.get('sources', []) + [s for q in row.get('q', {}).values() for s in q.get('sources', [])]
+                        if source.get('source')}
+    if any(not catalog.get(source) for source in prior_publishers):
+        raise ValueError('cached market catalog missing outside sources; refusing to discard existing priors')
+    with fleetctl.ledger_lock(state_dir):
+        ledger = state_dir / 'runs.jsonl'
+        existing = {}
+        if ledger.exists():
+            for line in ledger.read_text().splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and record.get('run_id'):
+                    existing.setdefault(record['run_id'], []).append(record)
+        fresh = []
+        for record in records:
+            prior = existing.get(record['run_id'], [])
+            # Path is provenance, not trial identity: copied inputs count once.
+            comparable = lambda r: {k: v for k, v in r.items() if k != 'evidence_path'}
+            if prior:
+                if not all(comparable(r) == comparable(record) for r in prior):
+                    raise ValueError('conflicting imported trial: ' + record['run_id'])
+            else:
+                fresh.append(record)
+                existing[record['run_id']] = [record]
+        if fresh:
+            # Repair a torn final line boundary without interpreting it as proof.
+            prefix = '\n' if ledger.exists() and ledger.stat().st_size and not ledger.read_bytes().endswith(b'\n') else ''
+            with ledger.open('a') as stream:
+                stream.write(prefix + ''.join(json.dumps(r, sort_keys=True, allow_nan=False) + '\n' for r in fresh))
+    result = evidence.write_evidence(state_dir, overlay, catalog)
+    return {'imported': len(fresh), 'already_present': len(records) - len(fresh),
+            'fit_only': True, 'rows': len(result['rows']),
+            'levels': str(state_dir / 'evidence' / 'levels.json')}
 
 
 def main(argv=None):

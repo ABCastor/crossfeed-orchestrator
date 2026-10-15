@@ -1,0 +1,2 @@
+{"task":"91:fixture-one","option":"fixture-high","pool":"codex","model":"fixture-model","level":"high","family":"implement","pass":false,"duration_s":12,"tokens_in":100,"tokens_out":20,"harness":"codex"}
+{"task":"91:fixture-two","pass":"HELDOUT-POISON","model":{}}

@@ -14,6 +14,25 @@ python3 scripts/fleetctl.py dispatch --role implementation --prompt-file task.tx
 
 Market refresh writes `evidence/levels.json` under `FLEET_STATE_DIR`. Benchmark payloads, measured task costs and selection receipts stay in local state.
 
+## Benchmark evidence and model cards
+
+Open `fleetctl.py console` and choose **Benchmarks** beside Providers. Each model and thinking level shows task-family estimates, outside metrics and their freshness-adjusted weights, local checks with sample counts and dates, source prices, quota pressure, and a short evidence verdict. Both themes use the console's existing styling. Reload the page to read current local state; it makes no provider calls. The tab and JSON export read the same `evidence/levels.json` the selector consumes, plus the current overlay and quota snapshot. Cards describe evidence, not admission: dispatch still applies switches, access rules and caps.
+
+Import checked grid results into the live ledger, then rebuild evidence from the cached market catalog without network access:
+
+```sh
+python3 scripts/fleetctl.py import-bench /private/campaign/results.jsonl --measured-on 2026-10-03
+python3 scripts/fleetctl.py model-cards > /private/model-cards.json
+```
+
+`--measured-on` supplies the measurement date for older rows without `started_at`; it is marked as operator-supplied provenance. New rows use their recorded timestamp. Supply final result files, not progress logs or intermediate attempts. Multiple result paths are accepted. Imports retain source paths locally, reject conflicting copies, and count repeated imports once. An existing matching run ID with a different ledger payload is rejected for review rather than risking double counting.
+
+Only the frozen fit split enters the ledger. Held-out payloads and excluded tasks never train quality, latency or token estimates. Mixed fit/held-out quota batches cannot establish fit-only measured cost. The older `bench/to_evidence.py --split fit --levels-in ... --levels-out ...` interface still builds isolated replay evidence; it does not install live evidence. `import-bench` persists observations in `runs.jsonl`, so later market refreshes retain them. Every checked trial adds one pass or failure to the Beta update; outside priors keep their source weights and small pseudo-sample strength. No other thinking level borrows its results.
+
+`model-cards` prints compact `crossfeed-model-cards/v1` JSON to stdout, including quality and uncertainty by family, ordered family strengths, outside metrics and weights, local counts and provenance, prices, latency and quota costs by source. Strength ordering compares `mean - sd` within a row; these heuristic family estimates are not calibrated probabilities or proof that one model beats another. Unmeasured families are listed in `unmeasured_families`; zero-trial families are omitted from `own`. Missing data stays unknown and estimates carry their basis. The authenticated console also serves the same export at `/model-cards.json`.
+
+**Keep exports private.** Artificial Analysis scores are fetched at runtime into host-local state; its raw numbers must never be committed to a public repository. Tests use invented scores. Other leaderboards used for human roster decisions do not silently become selector inputs.
+
 ## Running a worker
 
 `dispatch` requires `--role`, an existing `--dir`, and exactly one of `--prompt TEXT` or `--prompt-file FILE`. Optional flags are `--stakes low|normal|high|irreversible`, `--family`, `--exclude-lineage`, `--mode read-only|write`, `--last FILE`, `--dry-run` and `--no-refresh`. Stakes default to normal; mode follows the selector's role policy unless you supply it. Use `--exclude-lineage` for an independent review or council seat.

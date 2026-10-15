@@ -1,6 +1,6 @@
 # Routing business rules
 
-Scope: the opt-in paid MiMo lane and the optional Haiku judgment-refusal policy. This ledger claims conformance for the rules listed — it is NOT a claim of repo-wide coverage.
+Scope: the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, and local fit-evidence imports. This ledger claims conformance for the rules listed — it is NOT a claim of repo-wide coverage.
 
 ## BR-MIMO-001 — MiMo paid calls require explicit opt-in [DECIDED · owner instruction supplied as 13 Oct 2026]
 
@@ -26,3 +26,10 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Authority: the supplied R10-SELECT task explicitly requests encoding the existing operator rule, “no Haiku for judgment roles”. This is optional operator policy, not a universal model-quality judgment or an engine default.
 - implemented-by: `examples/haiku-judgment-policy.json:effort.*.refuse_roles`, consumed by the existing `scripts/selector.py:enumerate_options` refusal check.
 - tested-by: `tests/test_selector_judgment_policy.py:JudgmentPolicyTests.test_judgment_roles_exclude_haiku_at_every_stakes_and_in_receipts`, `test_allow_and_target_cannot_readmit_haiku_for_review`, `test_unknown_quality_exploration_cannot_choose_refused_model`, `test_legacy_haiku_is_refused_but_can_still_probe`; controls `test_missing_policy_reproduces_haiku_review` and `test_nonjudgment_reads_keep_haiku_available` observe real selection and receipts.
+
+## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED · supplied Benchmarks brief, 15 Oct 2026]
+
+- RULE: Mechanically checked fit-only benchmark passes and failures enter the selector's local ledger once per trial, retaining source and measurement date. Each trial contributes one Beta observation alongside the existing weighted external prior. Imports preserve other ledger observations and reject conflicting reimports. Held-out and excluded cells never train selector quality or telemetry; mixed fit/held-out quota batches supply no inferred fit cost. Missing measurements remain unknown. Artificial Analysis values remain host-local runtime data and must never be copied into published source files.
+- Authority: the supplied Benchmarks task explicitly requests sample-size weighting, provenance, no silent prior replacement and runtime-only AA numbers; the existing `docs/SELECTOR.md` and frozen `bench/split.py` define the fit/held-out boundary.
+- implemented-by: `bench/to_evidence.py:import_records`, `bench/to_evidence.py:install_evidence`, `scripts/evidence.py:build_evidence`.
+- tested-by: `tests/test_benchmarks.py:BenchmarksTests.test_import_preserves_outside_prior_and_weights_each_trial`, `test_refresh_reimport_and_copies_do_not_lose_or_duplicate_trials`, `test_import_retains_ledger_outcomes_and_no_heldout_cost`, `test_conflicting_import_fails_before_append`, `test_exclusions_and_date_validation`; control: `test_cards_share_evidence_prices_counts_and_unknowns` observes an available publisher prior and priced source using invented fixture data.

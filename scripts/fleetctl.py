@@ -5330,6 +5330,11 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--no-open", action="store_true", help="print the sign-in link instead of opening a browser")
 
     sub.add_parser("dashboard", help="print the authenticated Go console URL")
+    sub.add_parser("model-cards", help="print private live model/level evidence as compact JSON, offline")
+    bench_import = sub.add_parser("import-bench", help="import checked fit-only benchmark results and rebuild evidence offline")
+    bench_import.add_argument("results", nargs="+", type=Path)
+    bench_import.add_argument("--measured-on", help="measurement date for legacy undated cells, YYYY-MM-DD")
+
     return parser
 
 
@@ -5575,6 +5580,20 @@ def main() -> int:
                 overview["lead"] = {"pool": lead, "pressure": lead_pressure(runtime, lead, roster)}
             print(json.dumps(overview, indent=2, sort_keys=True) if args.json else
                   render_brief(overview, verbose=args.verbose, roster=roster, runtime=runtime, lead=lead))
+            return 0
+        if args.command == "import-bench":
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from bench.to_evidence import install_evidence
+            roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
+            print(json.dumps(install_evidence(args.results, state_dir, roster, args.measured_on)))
+            return 0
+        if args.command == "model-cards":
+            try:
+                from .model_cards import read_cards
+            except ImportError:
+                from model_cards import read_cards
+            roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
+            print(json.dumps(read_cards(state_dir, roster, fleet=sys.modules[__name__]), separators=(",", ":"), allow_nan=False))
             return 0
         if args.command == "console":
             return run_console(args.overlay.expanduser(), state_dir, args.port, not args.no_open)

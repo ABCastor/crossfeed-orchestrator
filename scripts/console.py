@@ -368,14 +368,15 @@ _BN, _, _BD = PRODUCT_NAME.partition(" ")
 BRAND_WORDS = f'<span class="bn">{html.escape(_BN)}</span> <span class="bd">{html.escape(_BD)}</span>'
 
 
-def _masthead(settings: bool = False, settings_content: str = "") -> str:
+def _masthead(settings: bool = False, settings_content: str = "", benchmarks: bool = False) -> str:
     """The Castor product header: everything stands on one line that is exactly the column.
 
     It is fixed to the screen and every part rides up with the page, 1:1, until the air above the
     name is halved; then it holds, the name at its own size (console.css, "v2.8 header").
     """
     name = html.escape(PRODUCT_NAME)
-    provider_current = ' aria-current="page"' if not settings else ""
+    provider_current = ' aria-current="page"' if not settings and not benchmarks else ""
+    benchmark_current = ' aria-current="page"' if benchmarks else ''
     settings_current = ' aria-current="page"' if settings else ""
     settings_controls = ' aria-expanded="false" aria-controls="settings-panel"' if settings_content else ""
     return (
@@ -383,7 +384,7 @@ def _masthead(settings: bool = False, settings_content: str = "") -> str:
         f'<a class="product-mark" href="/" aria-label="{name} console">{MARK}</a>'
         f'<a class="compact-brand" href="/">{BRAND_WORDS}<span class="star" aria-hidden="true">*</span></a></span>'
         f'<nav class="nav" aria-label="Main"><a href="/"{provider_current}><span class="tl" data-t="Providers">Providers</span></a>'
-        '</nav>'
+        f'<a href="/benchmarks"{benchmark_current}><span class="tl" data-t="Benchmarks">Benchmarks</span></a></nav>'
         '<span class="bar-tools"><span class="find">'
         '<button class="find-lens" type="button" aria-label="Search everything  /" title="Search everything  /" '
         'aria-keyshortcuts="/ Meta+K Control+K" aria-expanded="false" aria-controls="find">'
@@ -400,7 +401,7 @@ def _masthead(settings: bool = False, settings_content: str = "") -> str:
     )
 
 
-def shell(title: str, body: str, front: bool = False, settings: bool = False, settings_content: str = "") -> str:
+def shell(title: str, body: str, front: bool = False, settings: bool = False, settings_content: str = "", benchmarks: bool = False) -> str:
     """A page. `front` is the console's front page, where the name starts as large as its row allows."""
     fonts = "".join(f'<link rel="preload" href="/static/fonts/{font}" as="font" type="font/woff2" crossorigin>'
                     for font in PRELOAD_FONTS)
@@ -414,7 +415,7 @@ def shell(title: str, body: str, front: bool = False, settings: bool = False, se
         f'<link rel="stylesheet" href="/static/console.css?v={_asset_version("console.css")}">'
         f'<script src="/static/console.js?v={_asset_version("console.js")}" defer></script>'
         f'<script src="/static/keep.js?v={_asset_version("keep.js")}" defer></script></head>'
-        f'<body><div class="wrap">{_masthead(settings, settings_content)}<main>{body}</main>{FOOTER}</div></body></html>'
+        f'<body><div class="wrap">{_masthead(settings, settings_content, benchmarks)}<main>{body}</main>{FOOTER}</div></body></html>'
     )
 
 
@@ -1266,6 +1267,61 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
     return shell("Providers", body, front=True, settings_content=_settings_content(overview, form_token, panel=True))
 
 
+def render_benchmarks(cards: dict[str, Any]) -> str:
+    esc = lambda value: html.escape(str(value))
+    sections = []
+    for card in cards['rows']:
+        quality = ''.join(f'<li>{esc(family)}: {q["mean"]:.0%} ± {q["sd"]:.0%}'
+                          f' <span class="quiet">(prior strength {q.get("prior_strength", 0):.2g})</span></li>'
+                          for family, q in card['quality'].items() if not q.get('unknown', True))
+        outside = ''.join(f'<li>{esc(source["source"])} · {esc(source["metric"])}: '
+                          f'{esc(source.get("value") if source.get("value") is not None else "estimated")} '
+                          f'· weight {source["weight"]:.3g} · {esc(source.get("read_on") or "undated")}</li>'
+                          for source in card['outside'])
+        own = []
+        for family, count in card['own'].items():
+            if not count.get('trials'):
+                continue
+            details = '; '.join(f'{p["source"]}: n={p["n"]}, {p.get("date") or "undated"}'
+                                for p in card['own_provenance'].get(family, []))
+            own.append(f'<li>{esc(family)}: {count["passes"]}/{count["trials"]} '
+                       f'(n={count["trials"]})<small>{esc(details or "Provenance unavailable in this cache; rebuild evidence.")}</small></li>')
+        prices = []
+        for source in card['sources']:
+            price, cost = source['price_1m'], source['cost']
+            money = lambda value: 'unknown' if value is None else f'${value:g}'
+            percent = cost.get('percent')
+            quota = 'unknown' if percent is None else f'{percent:.3g}%/task'
+            latency = source.get('latency') or {}
+            timing = (f'{latency["latency_s"]:.1f}s ({latency["metric"]}, n={latency["trials"]})'
+                      if latency else 'latency unmeasured for this source')
+            prices.append(f'<li>{esc(source["pool"])} / {esc(source["harness"])}: '
+                          f'{money(price.get("in"))} in / {money(price.get("out"))} out per million tokens'
+                          f'<small>API equivalent estimate; quota {quota} ({esc(cost["basis"])}); '
+                          f'pressure price {source["quota_price"]:.3g}'
+                          f'{" (projection unknown)" if source["quota_projection_unknown"] else ""}; {esc(timing)}</small></li>')
+        sections.append(f'<article class="benchmark-row"><h2>{esc(card["model"])} <small>{esc(card["level"])}</small></h2>'
+                        f'<p class="benchmark-verdict">{esc(card["verdict"])}</p><div class="benchmark-columns">'
+                        f'<section><h3>Task families</h3><ul>{quality or "<li>Unmeasured</li>"}</ul></section>'
+                        f'<section><h3>Outside scores</h3><ul>{outside or "<li>No outside scores</li>"}</ul></section>'
+                        f'<section><h3>Our checks</h3><ul>{"".join(own) or "<li>No local trials</li>"}</ul></section>'
+                        f'<section><h3>Cost and quota</h3><ul>{"".join(prices) or "<li>No configured source</li>"}</ul></section>'
+                        '</div></article>')
+    body = ('<h1>Benchmarks</h1><p class="lede">Compare the evidence at each thinking level. '
+            'Outside scores supply weak starting estimates; each checked local task adds one observation.</p>'
+            '<p class="quiet">Family estimates are heuristic, not calibrated success probabilities. '
+            'Strengths compare evidence within a row. Harnesses can change results. '
+            'Fit trials only; held-out evaluations stay separate.</p>'
+            f'<p class="stamp">Evidence read: {esc(cards.get("read_on") or "not built yet")}. Reload to read current local state.</p>'
+            '<p><a href="/model-cards.json" download="model-cards.json">Download private model cards</a>. '
+            'Includes runtime publisher data: keep this export private. '
+            'Outside scores from Artificial Analysis and configured LMArena data.</p>'
+            '<p class="quiet">Quota pressure price is the selector penalty per percentage point of allowance. '
+            'Higher means scarcer quota; it is not a dollar charge.</p>'
+            + (''.join(sections) or '<p>No evidence or thinking levels configured. Import fit results or run a market refresh.</p>'))
+    return shell('Benchmarks', body, benchmarks=True)
+
+
 def message_page(title: str, text: str) -> str:
     return shell(title, f"<h1>{html.escape(title)}</h1><p class=\"lede\">{html.escape(text)}</p>")
 
@@ -1330,7 +1386,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             if url.path.startswith("/static/"):
                 self._static(url.path[len("/static/"):])
                 return
-            if url.path not in {"/", "/snapshot", "/settings"}:
+            if url.path not in {"/", "/snapshot", "/settings", "/benchmarks", "/model-cards.json"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             if not console.signed_in(self.headers):
@@ -1339,6 +1395,18 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                              "The link signs this browser in for as long as the console runs.")
                 return
             try:
+                if url.path in {'/benchmarks', '/model-cards.json'}:
+                    try:
+                        from model_cards import read_cards
+                    except ImportError:
+                        from scripts.model_cards import read_cards
+                    roster = fleetctl.read_overlay(console.overlay_path, console.state_dir, discover=False)
+                    cards = read_cards(console.state_dir, roster, fleet=fleetctl)
+                    if url.path == '/model-cards.json':
+                        self._send(200, json.dumps(cards, separators=(',', ':'), allow_nan=False).encode(), 'application/json; charset=utf-8')
+                    else:
+                        self._html(200, render_benchmarks(cards))
+                    return
                 overview = console.overview()
                 if url.path == "/snapshot":
                     self._send(200, json.dumps(snapshot_payload(overview)).encode(), "application/json; charset=utf-8")

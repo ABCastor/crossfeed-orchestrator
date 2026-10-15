@@ -1,0 +1,101 @@
+"""Private, offline model cards shared by the console and decision-model CLI.
+
+Reads selector evidence, roster prices and quota state on every request. Publisher
+scores remain runtime data. Cards inform judgment, they never authorize a route.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+try:
+    from . import selector
+    from .run_identity import canonical_model, evidence_index
+except ImportError:
+    import selector
+    from run_identity import canonical_model, evidence_index
+
+
+def build_cards(roster, runtime, evidence, *, fleet):
+    rows = evidence_index(roster, evidence.get('rows', []))
+    cells = set(rows)
+    for model, effort in roster.get('effort', {}).items():
+        levels = effort.get('levels') or {}
+        levels = [level for group in levels.values() for level in group] if isinstance(levels, dict) else levels
+        cells.update((canonical_model(model, roster), level) for level in levels or [effort.get('default', 'provider-default')])
+    routes = list(roster.get('lanes', []))
+    for model, card in fleet.model_cards(roster).items():
+        if card.get('pool'):
+            routes.append(dict(card, model_key=model, quota_pool=card['pool'], harness=card['pool']))
+    cards = []
+    policy = roster.get('policy', {}).get('selector', {})
+    for model, level in sorted(cells):
+        row = rows.get((model, level), {})
+        families = row.get('q', {})
+        strengths = sorted((family for family, q in families.items() if not q.get('unknown', True)),
+                           key=lambda family: (-(families[family]['mean'] - families[family]['sd']), family))
+        own = row.get('own', {})
+        trials = sum(c.get('trials', 0) for c in own.values())
+        passes = sum(c.get('passes', 0) for c in own.values())
+        sources = []
+        seen = set()
+        for lane in routes:
+            key = lane.get('model_key')
+            if canonical_model(key, roster) != model:
+                continue
+            harness = lane.get('harness')
+            exposed = roster.get('effort', {}).get(key, {}).get('levels', {})
+            exposed = exposed.get(harness, []) if isinstance(exposed, dict) else exposed
+            if exposed and level not in exposed:
+                continue
+            pool = lane.get('quota_pool')
+            identity = (pool, harness, key)
+            if not pool or identity in seen:
+                continue
+            seen.add(identity)
+            binding = selector._pool_price(roster, runtime, pool, policy, fleet, model_key=key)
+            price = lane.get('price_1m', row.get('price_1m', {}))
+            price = price if isinstance(price, dict) else {}
+            price = {side: value if (value := selector._number(price.get(side))) is not None and value >= 0 else None
+                     for side in ('in', 'out')}
+            priced = dict(row, price_1m=price)
+            option = dict(pool=pool, harness=harness, model_key=key, level=level, run_as=lane.get('run_as', key))
+            cost, flags = selector._task_cost(roster, option, priced, binding, None)
+            telemetry = row.get('source_telemetry', {})
+            latency = telemetry.get(pool + '/' + str(harness), telemetry.get(pool, {}))
+            sources.append({'pool': pool, 'harness': harness, 'model_key': key,
+                            'price_1m': priced.get('price_1m', {}), 'cost': cost,
+                            'quota_price': binding['lambda'], 'binding_window': binding['binding_window'],
+                            'quota_projection_unknown': binding['projection_unknown'],
+                            'latency': latency, 'flags': flags})
+        if strengths:
+            verdict = 'Strongest evidence: ' + ', '.join(strengths[:2]) + '.'
+            verdict += f' Local checks: {passes}/{trials}; compare the same task and harness.' if trials else ' Outside priors only; local performance unmeasured.'
+        else:
+            verdict = 'No measured family evidence at this thinking level.'
+        # Keep policy text once at the top. Repeating a publisher's assumption
+        # and raw source object inside every family wastes decision-model context.
+        quality = {family: {key: q[key] for key in
+                   ('mean', 'sd', 'unknown', 'prior_strength', 'anchor_metric', 'imputed') if key in q}
+                   for family, q in families.items() if not q.get('unknown', True)}
+        outside = [{key: source[key] for key in
+                   ('source', 'metric', 'value', 'weight', 'read_on', 'mapping', 'families') if key in source}
+                   for source in row.get('sources', [])]
+        cards.append({'model': model, 'level': level, 'family_strengths': strengths,
+                      'quality': quality, 'unmeasured_families': sorted(selector.FAMILIES - set(quality)), 'outside': outside, 'own': {f: c for f, c in own.items() if c.get('trials')},
+                      'own_provenance': row.get('own_provenance', {}),
+                      'evidence_counts': {'trials': trials, 'passes': passes,
+                                          'outside_metrics': len(row.get('sources', []))},
+                      'price_1m': row.get('price_1m', {}), 'own_cost': row.get('own_cost', {}),
+                      'latency_s': row.get('latency_s'), 'source_telemetry': row.get('source_telemetry', {}),
+                      'sources': sources, 'read_on': row.get('read_on'),
+                      'flags': [flag for flag in row.get('flags', []) if not flag.startswith('unknown:')], 'verdict': verdict})
+    return {'schema': 'crossfeed-model-cards/v1', 'private': True,
+            'read_on': evidence.get('read_on'),
+            'caution': 'Heuristic priors, not calibrated success probabilities. Check route admission before dispatch. Runtime publisher scores must not be published.',
+            'assumptions': evidence.get('assumptions', {}), 'rows': cards}
+
+
+def read_cards(state_dir, roster, *, fleet):
+    state_dir = Path(state_dir)
+    return build_cards(roster, fleet.load_json(state_dir / 'runtime.json', {}) or {},
+                       fleet.load_json(state_dir / 'evidence/levels.json', {}) or {}, fleet=fleet)

@@ -5,6 +5,7 @@ HANDOFF.md
 .publish-denylist
 
 # Runtime state, never source.
+model-cards.json
 scripts/runs/
 state/
 # sabotage-check.sh's working copies: they exist only while it runs, and an automatic
