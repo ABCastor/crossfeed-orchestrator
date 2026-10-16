@@ -22,6 +22,14 @@ from chatgpt_transport import Rejected, canonical_selector, request, settings
 HERE = Path(__file__).resolve().parent
 
 
+# A job no worker ever claims (wake refused, cap spent, browser closed) otherwise
+# waits for ever and holds its lane; dispatch can only fall back once it fails.
+CLAIM_WAIT_S = 1200
+WAKE_STUCK_S = int(os.environ.get("CROSSFEED_TEST_WAKE_STUCK_S", "90"))
+WATCH_EVERY_S = int(os.environ.get("CROSSFEED_TEST_WATCH_EVERY_S", "15"))
+WAKE_UNAVAILABLE = 75
+
+
 def seconds(value):
     if not value.isdigit():
         raise argparse.ArgumentTypeError("expected a nonnegative whole number of seconds")
@@ -42,6 +50,8 @@ def arguments():
     parser.add_argument("--idle", type=seconds, default=0)
     parser.add_argument("--wall", type=seconds, default=0)
     parser.add_argument("--kill-after", type=seconds, default=2)
+    parser.add_argument("--claim-wait", type=seconds, default=CLAIM_WAIT_S,
+                        help="give up when no worker has claimed the job in this many seconds (0 waits forever)")
     parser.add_argument("--events", type=Path)
     parser.add_argument("--last", type=Path)
     parser.add_argument("--idempotency-key", help="reuse this key and identical prompt/options for an explicit retry")
@@ -175,6 +185,68 @@ def cancel_gateway(base, key, idempotency_key):
     return status
 
 
+def wake_trouble(status, label):
+    """Why a queued job for this saved label cannot get a worker right now, else None.
+
+    Returns (reason, claimed). `claimed` means a worker has taken a job for the label,
+    so the wait is no longer a wake problem.
+    """
+    if not isinstance(status, dict):
+        return None, False
+    jobs = [job for job in status.get("jobs") or [] if isinstance(job, dict) and job.get("label") == label]
+    if any(job.get("state") == "claimed" for job in jobs):
+        return None, True
+    if not any(job.get("state") == "queued" for job in jobs):
+        return None, False
+    wakes = [row for row in status.get("wakes") or []
+             if isinstance(row, dict) and str(row.get("label", "")).split("~", 1)[0] == label]
+    if any(row.get("state") in {"issued", "claimed", "confirmed"} for row in wakes):
+        return None, False
+    failed = [row for row in wakes if row.get("state") == "failed"]
+    if failed:
+        code = failed[-1].get("failure_code")
+        stage = failed[-1].get("failure_stage")
+        return "wake failed (" + (str(code) if isinstance(code, str) and code.isidentifier() else "unknown")\
+            + (" at " + stage if isinstance(stage, str) and stage.isidentifier() else "") + ")", False
+    limits = status.get("wake_limits")
+    if isinstance(limits, dict) and isinstance(limits.get("blocked"), str) and limits["blocked"]:
+        return "wake blocked: " + limits["blocked"][:120], False
+    return None, False
+
+
+def watch_wake(base, key, label, state, now):
+    """One bounded status read; raises Rejected(75) once a wake has been stuck long enough."""
+    try:
+        with preflight_budget(time.monotonic() + 4):
+            status = request(base, key, "/gateway/status", timeout=3)
+    except Rejected:
+        return
+    reason, claimed = wake_trouble(status, label)
+    if claimed:
+        state["claimed"] = True
+    if reason is None or state.get("claimed"):
+        state.pop("since", None)
+        return
+    state.setdefault("since", now)
+    if now - state["since"] >= WAKE_STUCK_S:
+        raise Rejected(WAKE_UNAVAILABLE, "no ChatGPT worker could start: " + reason)
+
+
+def release_session(base, key, idempotency_key):
+    """Ask Crossfeed Chat to dispose of the chats it recorded for this request's own session."""
+    try:
+        with preflight_budget(time.monotonic() + 6):
+            reply = request(base, key, "/sessions/release", {"session": "orchestrator:" + idempotency_key}, timeout=5)
+    except Rejected as error:
+        if error.message != "gateway HTTP 404":
+            print("chatgpt-agent: WARNING conversation cleanup request failed (" + error.message + ")", file=sys.stderr)
+        return None
+    queued = reply.get("queued")
+    if type(queued) is int and queued > 0:
+        print("chatgpt-agent: conversation queued for deletion", file=sys.stderr)
+    return reply
+
+
 def supervise(args, base, key, payload, events, interrupted, idempotency_key, lane=None, on_started=None):
     deadline = getattr(args, "wall_deadline", None)
     if deadline is not None and time.monotonic() >= deadline:
@@ -190,9 +262,18 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
     reported_silence = 0
     silence_interval = max(1, int(os.environ.get("CROSSFEED_TEST_SILENCE_INTERVAL_S", "600")))
     group_ready = False
+    label = lane.get("worker_label") if lane else None
+    watch = {"claimed": False}
+    next_watch = started + WATCH_EVERY_S
     try:
         while True:
             now = time.monotonic()
+            if label and now >= next_watch and not watch["claimed"]:
+                next_watch = now + WATCH_EVERY_S
+                watch_wake(base, key, label, watch, now)
+                if args.claim_wait and not watch["claimed"] and now - started >= args.claim_wait:
+                    raise Rejected(WAKE_UNAVAILABLE, "no ChatGPT worker claimed the job within "
+                                   + (str(args.claim_wait // 60) + " min" if args.claim_wait >= 120 else str(args.claim_wait) + " s"))
             if interrupted:
                 raise Rejected(128 + interrupted[0], "external cancellation")
             if args.wall and now - started >= args.wall:
@@ -434,6 +515,8 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
                 chatgpt_pro.mark_spent(run_identity.state_dir(), lane, until=error.reset_at or chatgpt_pro.reset_at(error.message))
                 args.pro_downgraded = True
             status = error.code
+            if http_started and status == WAKE_UNAVAILABLE:
+                cancel_gateway(base, key, record["idempotency_key"])
             if interrupted and status in {129, 130, 143} and http_started:
                 if cancel_gateway(base, key, record["idempotency_key"]) in {200, 409}:
                     record["cancellation_scope"] = "gateway-job"
@@ -452,6 +535,9 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
                 except (OSError, ValueError):
                     print("chatgpt-agent: receipt persistence failed", file=sys.stderr)
                     status = 5 if status == 0 else status
+            if begun and http_started and status not in {124, 125}:
+                # Receipt first, then tidy: delete only the chats Crossfeed Chat recorded for this request.
+                release_session(base, key, record["idempotency_key"])
             released = subprocess.run([sys.executable, str(HERE / "fleetctl.py"), "release", "--token", token], capture_output=True)
             if released.returncode:
                 print("chatgpt-agent: WARNING lease release failed", file=sys.stderr)

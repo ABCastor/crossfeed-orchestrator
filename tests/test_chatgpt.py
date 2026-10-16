@@ -66,7 +66,8 @@ class Gateway(BaseHTTPRequestHandler):
             return self.reply(401, {"error": KEY})
         if mode == "health-429":
             return self.reply(429, {"error": KEY})
-        self.reply(200, {'workers': [{'label': selector.removeprefix('chatgpt:'),
+        extra = getattr(self.server, 'status_extra', {})
+        self.reply(200, extra | {'workers': [{'label': selector.removeprefix('chatgpt:'),
             'contact': 'never' if mode == 'sleep' else 'stale' if mode == 'stale-active' else 'recent',
             'polling': mode not in {'sleep', 'stale-active'},
             'quota_blocked': selector in getattr(self.server, 'quota_blocked', []),
@@ -86,6 +87,10 @@ class Gateway(BaseHTTPRequestHandler):
                 mode = 200
             return self.reply(mode, {"error": KEY} if mode != 200 else
                               {"state": "failed", "error": "caller_cancelled", "was": "queued"})
+        if self.path == "/v1/sessions/release":
+            work = getattr(self.server, "work", None)
+            self.server.release_calls.append(body | ({"receipt_written": (work / "last.crossfeed.json").exists()} if work else {}))
+            return self.reply(*getattr(self.server, "release_reply", (200, {"released": 1, "queued": 1})))
         assert self.path == "/v1/chat/completions"
         self.server.payloads.append(body)
         assert body["model"] in self.server.catalog_ids and body["tool_choice"] == "none"
@@ -206,6 +211,8 @@ subprocess.Popen=popen
         self.gateway.catalog_ids = [self.gateway.selector]
         self.gateway.keys = []
         self.gateway.cancel_calls = []
+        self.gateway.release_calls = []
+        self.gateway.work = self.work
         self.roster['lanes'] = []
         self.roster["policy"]["selector"]["allowed_pools_by_role"] = {"default": ["chatgpt-work"]}
         self.overlay = self.work / "overlay.json"
@@ -252,6 +259,59 @@ subprocess.Popen=popen
         self.assertNotIn("tokens", record)
         self.assertIn("underlying model unconfirmed", result.stderr)
         self.assertEqual(self.gateway.cancel_calls, [])
+
+    def test_answer_receipt_then_own_session_chat_cleanup(self):
+        result = self.run_adapter()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gateway.release_calls,
+                         [{"session": "orchestrator:" + self.gateway.keys[0], "receipt_written": True}])
+        self.assertIn("conversation queued for deletion", result.stderr)
+
+    def test_cleanup_is_quiet_on_an_older_gateway_and_never_fails_the_answer(self):
+        self.gateway.release_reply = (404, {"error": "not found"})
+        result = self.run_adapter()
+        self.assertEqual((result.returncode, result.stdout), (0, "PONG\n"))
+        self.assertNotIn("cleanup", result.stderr)
+        self.gateway.release_reply = (503, {"error": KEY})
+        result = self.run_adapter()
+        self.assertEqual((result.returncode, result.stdout), (0, "PONG\n"))
+        self.assertIn("WARNING conversation cleanup request failed", result.stderr)
+
+    def test_timed_out_job_is_kept_for_retry_so_nothing_is_cleaned_up(self):
+        result = self.run_adapter("hang", ("--wall", "1"))
+        self.assertEqual(result.returncode, 124)
+        self.assertEqual(self.gateway.release_calls, [])
+
+    def stuck_wake(self, **status):
+        self.gateway.status_extra = status
+        self.env.update(CROSSFEED_TEST_WAKE_STUCK_S="1", CROSSFEED_TEST_WATCH_EVERY_S="1")
+
+    def test_stuck_wake_fails_fast_with_the_gateway_reason_and_cancels_the_job(self):
+        self.stuck_wake(jobs=[{"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}],
+                        wakes=[{"label": "fixture-medium~session-abc", "state": "failed",
+                                "failure_code": "composer_not_empty", "failure_stage": "ready"}])
+        result = self.run_adapter("hang")
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("no ChatGPT worker could start: wake failed (composer_not_empty at ready)", result.stderr)
+        self.assertEqual(len(self.gateway.cancel_calls), 1)
+        self.assertEqual(result.stdout, "")
+
+    def test_spent_wake_cap_also_fails_fast_but_a_wake_in_progress_does_not(self):
+        job = {"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}
+        self.stuck_wake(jobs=[job], wake_limits={"blocked": "Hourly fresh-chat cap (12) reached."})
+        result = self.run_adapter("hang")
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("wake blocked: Hourly fresh-chat cap (12) reached.", result.stderr)
+        self.stuck_wake(jobs=[job], wakes=[{"label": "fixture-medium~session-abc", "state": "claimed"}],
+                        wake_limits={"blocked": "Hourly fresh-chat cap (12) reached."})
+        result = self.run_adapter("hang")
+        self.assertEqual((result.returncode, result.stdout), (0, "PONG\n"), result.stderr)
+
+    def test_a_job_that_no_worker_claims_is_given_up_after_the_claim_wait(self):
+        self.stuck_wake(jobs=[{"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}])
+        result = self.run_adapter("hang", ("--claim-wait", "2"))
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("no ChatGPT worker claimed the job within 2 s", result.stderr)
 
     def configure_catalog(self):
         self.gateway.catalog_ids = [self.gateway.selector]
@@ -752,6 +812,25 @@ subprocess.Popen=popen
                     self.gateway.mode = "ok"
                     if self.socketpair:
                         self.provision()
+
+    def test_text_roles_beyond_review_reach_the_zero_price_chat_lane(self):
+        state = self.work / "selector-state"
+        (state / "evidence").mkdir(parents=True)
+        (state / "evidence/levels.json").write_text(json.dumps({"rows": [quality_row("chatgpt:fixture-medium", level="medium")]}))
+        transport = patch("socket.create_connection", self.socket_connection) if self.socketpair else contextlib.nullcontext()
+        with patch.dict(os.environ, self.env), patch.object(fleetctl, "_POLICY_CACHE", ("off", "test")), transport:
+            for role in ["research", "research-scout", "judgment", "second-opinion", "audit"]:
+                with self.subTest(role=role):
+                    if self.socketpair:
+                        self.provision()
+                    choice = selector.select_option(fleetctl.read_overlay(self.overlay, state), {}, state, role, stakes="normal", fleet=fleetctl)["choice"]
+                    self.assertEqual(choice["harness"], "chatgpt-chat")
+            # Prose for a reader is returned as text, so it is a read-only task; write mode keeps its own policy.
+            if self.socketpair:
+                self.provision()
+            choice = selector.select_option(fleetctl.read_overlay(self.overlay, state), {}, state, "writing", stakes="normal",
+                                            mode="read-only", fleet=fleetctl)["choice"]
+            self.assertEqual(choice["harness"], "chatgpt-chat")
 
 
 class ChatGPTGuardTests(unittest.TestCase):

@@ -3187,6 +3187,14 @@
         "lookup",
         "hard-reasoning",
         "review",
+        "reviewer",
+        "audit",
+        "second-opinion",
+        "judgment",
+        "research",
+        "research-scout",
+        "scout",
+        "writing",
         "long-context"
       ],
       "capabilities": {
