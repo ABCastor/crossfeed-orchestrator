@@ -34,7 +34,8 @@ class AgyModelsTests(unittest.TestCase):
 
     def test_catalogue_fixture_matches_declared_list_and_roster_controls(self):
         fixture = json.loads((ROOT/'tests/fixtures/agy-models-1.4.0.json').read_text())
-        declared = (ROOT/'skill/references/lane-antigravity.md').read_text().split('<!-- agy-models:start -->')[1].split('<!-- agy-models:end -->')[0]
+        lane = next(p for p in (ROOT/'skill/references/lane-antigravity.md', ROOT/'references/lane-antigravity.md') if p.is_file())  # repo or installed layout
+        declared = lane.read_text().split('<!-- agy-models:start -->')[1].split('<!-- agy-models:end -->')[0]
         ids = set()
         for lane in self.roster['lanes']:
             if lane['harness'] != 'agy' or lane['admission_status'] != 'active':
