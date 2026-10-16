@@ -455,11 +455,47 @@ fi
 tee "$RUNERR" <"$RUNERR_PIPE" >&2 &
 TEE_PID=$!
 
+_oauth_token=""
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  _oauth_ref="${CROSSFEED_CLAUDE_OAUTH_REF:-}"
+  _oauth_ref="${_oauth_ref#"${_oauth_ref%%[![:space:]]*}"}"
+  _oauth_ref="${_oauth_ref%"${_oauth_ref##*[![:space:]]}"}"
+  if [ -z "$_oauth_ref" ]; then
+    _oauth_ref_file="${HOME:-~}/.config/crossfeed/claude-oauth-ref"
+    if [ -f "$_oauth_ref_file" ] && [ -r "$_oauth_ref_file" ]; then
+      read -r _oauth_ref <"$_oauth_ref_file" || true
+      _oauth_ref="${_oauth_ref#"${_oauth_ref%%[![:space:]]*}"}"
+      _oauth_ref="${_oauth_ref%"${_oauth_ref##*[![:space:]]}"}"
+    fi
+  fi
+  if [ -n "$_oauth_ref" ] && command -v op >/dev/null 2>&1; then
+    _oauth_token="$(python3 -c '
+import subprocess, sys
+ref = sys.argv[1]
+try:
+    proc = subprocess.run(["op", "read", ref], capture_output=True, text=True, timeout=15)
+    if proc.returncode == 0:
+        val = proc.stdout.strip()
+        if val.startswith("sk-ant-oat"):
+            sys.stdout.write(val)
+        else:
+            sys.stderr.write("claude-agent: CLAUDE_CODE_OAUTH_TOKEN from 1Password does not start with sk-ant-oat; ignoring\n")
+except Exception:
+    pass
+' "$_oauth_ref")" || _oauth_token=""
+  fi
+fi
+
 LAUNCHED=1
 CROSSFEED_STARTED=1
 set -m
-(cd "$DIR" && exec claude "${args[@]}" -- "$PROMPT" </dev/null >"$RUNOUT" 2>"$RUNERR_PIPE") &
+(
+  [ -z "$_oauth_token" ] || export CLAUDE_CODE_OAUTH_TOKEN="$_oauth_token"
+  unset _oauth_token
+  cd "$DIR" && exec claude "${args[@]}" -- "$PROMPT" </dev/null >"$RUNOUT" 2>"$RUNERR_PIPE"
+) &
 CHILD_PID=$!
+unset _oauth_token
 if [ -n "$PENDING_SIGNAL_CODE" ]; then
   _handle_signal "$PENDING_SIGNAL_NAME" "$PENDING_SIGNAL_CODE"
 fi

@@ -3,6 +3,7 @@ Load before any scripted claude -p call, especially one processing untrusted inp
 # Headless Claude
 
 `claude-agent.sh` uses the official subscription login. It accepts prompt/file, dir, model, role, effort, permission-mode, tools, read-only, timeout, idle-timeout, kill-after, last and dry-run. `--read-only` selects plan permissions plus Read/Grep/Glob. It is a tool-policy boundary, not a kernel sandbox. `--bare` is forbidden: it selects API-key billing instead of the subscription.
+When `CLAUDE_CODE_OAUTH_TOKEN` is unset, `claude-agent.sh` resolves it from 1Password via `CROSSFEED_CLAUDE_OAUTH_REF` or `~/.config/crossfeed/claude-oauth-ref`. Tokens must begin with `sk-ant-oat`; invalid values and 1Password read failures are ignored cleanly with normal desktop login fallback. When resolved, the token is exported strictly to the child subshell and unset in the parent immediately.
 
 Read the brief first, let the console resolve identity, and report confirmed actual model from receipt/stand-in evidence. Exit 4 means no final output, not lease refusal; other native CLI errors pass through. There is no default wrapper wall clock, only the 2400-second idle watchdog unless an intentional timeout is passed.
 
