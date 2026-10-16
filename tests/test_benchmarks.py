@@ -133,6 +133,69 @@ class BenchmarksTests(unittest.TestCase):
         (self.state / 'excluded-hook-tasks.txt').write_text('fixture-one\n')
         self.assertEqual(to_evidence.import_records([other], self.overlay), [])
 
+    def test_infrastructure_exits_are_separate_from_judged_trials(self):
+        # BR-EVIDENCE-001
+        path = ROOT / 'tests/fixtures/benchmarks/infra.jsonl'
+        result = self.cli('import-bench', str(path), '--measured-on', '2026-10-03')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual((receipt['imported'], receipt['excluded']), (3, 8))
+        self.assertEqual(self.high()['own']['coding-agent'], {'passes': 1, 'trials': 3})
+        # Two judged completions (12 s) plus the PREREG timeout (999 s).
+        self.assertEqual(self.high()['latency_s'], 12)
+        self.assertEqual(self.high()['source_telemetry']['codex/codex']['trials'], 3)
+        excluded = [json.loads(line) for line in (self.state / 'bench-excluded.jsonl').read_text().splitlines()]
+        self.assertEqual({r['exit_code'] for r in excluded}, {4, 5, 8, 125, 127, 1, None, 0})
+        for row in excluded:
+            self.assertTrue(row['excluded'])
+            self.assertTrue(row['exclusion_reason'])
+            self.assertEqual(row['evidence_path'], str(path.resolve()))
+            self.assertNotIn('outcome', row)
+            self.assertNotIn('tokens', row)
+            self.assertNotIn('completion_time_s', row)
+        before = [(self.state / name).read_bytes() for name in ('runs.jsonl', 'bench-excluded.jsonl')]
+        again = self.cli('import-bench', str(path), '--measured-on', '2026-10-03')
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(again.stdout)['already_present'], 11)
+        self.assertEqual(before, [(self.state / name).read_bytes() for name in ('runs.jsonl', 'bench-excluded.jsonl')])
+
+    def test_retract_legacy_then_reimport_preserves_unrelated_bytes(self):
+        # BR-EVIDENCE-001
+        path = ROOT / 'tests/fixtures/benchmarks/infra.jsonl'
+        # Reproduce the old bug: every fit row, including infra failures, had proof.
+        legacy = to_evidence.import_records([path], self.overlay, '2026-10-03')
+        for row in legacy:
+            row['evidence_source'] = 'bench.fit'
+            row['outcome'] = {'mechanically_verified': True, 'passed': False}
+        unrelated = (b'{ "run_id": "other", "evidence_source": "bench.fit", '
+                     b'"evidence_path": "/another/source.jsonl", "model_key": "fixture-model", '
+                     b'"level": "high", "family": "coding-agent", '
+                     b'"outcome": {"mechanically_verified": true, "passed": true}}\r\n')
+        # Same path with a different evidence source must also survive.
+        same_path = json.dumps(dict(run_id='not-bench', evidence_source='other',
+                                   evidence_path=str(path.resolve()))).encode()  # no trailing newline
+        ledger = self.state / 'runs.jsonl'
+        ledger.write_bytes(unrelated + b''.join((json.dumps(r) + '\n').encode() for r in legacy) + same_path)
+        result = self.cli('import-bench', '--retract-source', str(path), '--measured-on', '2026-10-03')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['retracted'], 11)
+        self.assertEqual(ledger.read_bytes(), unrelated + same_path)
+        self.assertEqual(self.high()['own']['coding-agent'], {'passes': 1, 'trials': 1})
+        again = self.cli('import-bench', '--retract-source', str(path), '--measured-on', '2026-10-03')
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(again.stdout)['retracted'], 0)
+        self.assertEqual(ledger.read_bytes(), unrelated + same_path)
+        imported = self.cli('import-bench', str(path), '--measured-on', '2026-10-03')
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        self.assertEqual(json.loads(imported.stdout)['imported'], 3)
+        self.assertEqual(self.high()['own']['coding-agent'], {'passes': 2, 'trials': 4})
+        self.assertTrue(ledger.read_bytes().startswith(unrelated + same_path + b'\n'))
+        # Retraction also removes the separately recorded exclusions, then is inert.
+        result = self.cli('import-bench', '--retract-source', str(path), '--measured-on', '2026-10-03')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['retracted'], 11)
+        self.assertEqual((self.state / 'bench-excluded.jsonl').read_bytes(), b'')
+
     def test_cards_share_evidence_prices_counts_and_unknowns(self):
         self.install()
         cards = model_cards.read_cards(self.state, self.overlay, fleet=fleetctl)

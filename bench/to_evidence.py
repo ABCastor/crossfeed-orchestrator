@@ -7,6 +7,8 @@ import hashlib
 from collections import defaultdict
 import json
 import math
+import os
+import tempfile
 from pathlib import Path
 import statistics
 import sys
@@ -167,6 +169,26 @@ def build_evidence(paths, levels, costs=None, overlay=None):
 
 
 # BR-EVIDENCE-001
+def exclusion_reason(row):
+    """Only completed checks and PREREG wall-budget failures are trials."""
+    if row.get('excluded'):
+        return row.get('reason') or 'campaign exclusion'
+    code = row.get('exit_code')
+    reasons = {4: 'empty output or lease failure', 5: 'prelaunch refusal or session failure',
+               8: 'receipt failure', 125: 'idle watchdog kill', 127: 'command not found'}
+    if type(code) is not int:
+        return 'missing or invalid exit code'
+    if code == 124:
+        return None  # main-2026-10-03/PREREG.md: "a timeout is a fail"
+    if code != 0:
+        return reasons.get(code, 'worker failure without a task-check verdict')
+    reason = row.get('reason', '')
+    if reason.startswith(('execution/check error:', 'worker output exceeded', 'final reply exceeded')):
+        return 'task check unavailable: ' + reason
+    return None
+
+
+# BR-EVIDENCE-001
 def import_records(paths, overlay, measured_on=None):
     """Translate checked fit cells to the live ledger's mechanical-proof contract.
 
@@ -177,7 +199,7 @@ def import_records(paths, overlay, measured_on=None):
     if measured_on is not None:
         dt.date.fromisoformat(measured_on)
     rows = list(iter_split_rows(paths, "fit"))
-    costs = fit_costs(paths, rows)
+    costs = fit_costs(paths, [dict(row, excluded=True) if exclusion_reason(row) else row for row in rows])
     by_option = {(c['pool'], c['option']): c for c in costs['options']}
     sources = {}
     for path in paths:
@@ -185,8 +207,7 @@ def import_records(paths, overlay, measured_on=None):
             sources.setdefault((row['task'], row['option']), str(path))
     records = []
     for row in rows:
-        if row.get('excluded'):
-            continue
+        excluded_reason = exclusion_reason(row)
         if type(row.get('pass')) is not bool:
             raise ValueError('fit pass must be boolean')
         date = row.get('started_at') or measured_on
@@ -203,6 +224,16 @@ def import_records(paths, overlay, measured_on=None):
                       date_basis='started_at' if row.get('started_at') else 'operator',
                       outcome={'mechanically_verified': True, 'passed': row['pass']},
                       evidence_flags=['model_harness_specific'])
+        if excluded_reason:
+            record.update(evidence_source='bench.excluded', excluded=True,
+                          exclusion_reason=excluded_reason, exit_code=row.get('exit_code'),
+                          reason=row.get('reason'))
+            record.pop('outcome')
+            records.append(record)
+            continue
+        # A wall-clock expiry is a failure even if a malformed cell claims pass.
+        if row['exit_code'] == 124:
+            record['outcome']['passed'] = False
         for field in ('harness', 'provider_identity_unconfirmed', 'dynamic_model'):
             if field in row:
                 record[field] = row[field]
@@ -230,10 +261,13 @@ def import_records(paths, overlay, measured_on=None):
 
 
 # BR-EVIDENCE-001
-def install_evidence(paths, state_dir, overlay, measured_on=None):
-    """Import to the append-only live ledger, then rebuild from cached priors offline."""
+def install_evidence(paths, state_dir, overlay, measured_on=None, retract_source=False):
+    """Import judged trials or retract source provenance, then rebuild offline."""
     from scripts import fleetctl, evidence
-    records = import_records(paths, overlay, measured_on)
+    paths = [Path(path).expanduser().resolve() for path in paths]
+    if measured_on is not None:
+        dt.date.fromisoformat(measured_on)
+    records = [] if retract_source else import_records(paths, overlay, measured_on)
     state_dir = Path(state_dir)
     catalog = fleetctl.load_json(state_dir / 'market' / 'market-catalog.json', {}) or {}
     levels = fleetctl.load_json(state_dir / 'evidence' / 'levels.json', {}) or {}
@@ -242,36 +276,67 @@ def install_evidence(paths, state_dir, overlay, measured_on=None):
                         if source.get('source')}
     if any(not catalog.get(source) for source in prior_publishers):
         raise ValueError('cached market catalog missing outside sources; refusing to discard existing priors')
+    counts = {'imported': 0, 'excluded': 0, 'already_present': 0, 'retracted': 0}
     with fleetctl.ledger_lock(state_dir):
-        ledger = state_dir / 'runs.jsonl'
-        existing = {}
-        if ledger.exists():
-            for line in ledger.read_text().splitlines():
+        updates = []
+        for filename, source in [('runs.jsonl', 'bench.fit'), ('bench-excluded.jsonl', 'bench.excluded')]:
+            ledger = state_dir / filename
+            original = ledger.read_bytes() if ledger.exists() else b''
+            lines = original.splitlines(keepends=True)
+            existing = {}
+            retained = []
+            for line in lines:
                 try:
                     record = json.loads(line)
-                except ValueError:
+                except (ValueError, UnicodeDecodeError):
+                    retained.append(line)
                     continue
+                if (retract_source and isinstance(record, dict)
+                        and record.get('evidence_source') == source
+                        and record.get('evidence_path') in {str(p) for p in paths}):
+                    counts['retracted'] += 1
+                    continue
+                retained.append(line)
                 if isinstance(record, dict) and record.get('run_id'):
                     existing.setdefault(record['run_id'], []).append(record)
-        fresh = []
-        for record in records:
-            prior = existing.get(record['run_id'], [])
-            # Path is provenance, not trial identity: copied inputs count once.
-            comparable = lambda r: {k: v for k, v in r.items() if k != 'evidence_path'}
-            if prior:
-                if not all(comparable(r) == comparable(record) for r in prior):
-                    raise ValueError('conflicting imported trial: ' + record['run_id'])
-            else:
-                fresh.append(record)
-                existing[record['run_id']] = [record]
-        if fresh:
-            # Repair a torn final line boundary without interpreting it as proof.
-            prefix = '\n' if ledger.exists() and ledger.stat().st_size and not ledger.read_bytes().endswith(b'\n') else ''
-            with ledger.open('a') as stream:
-                stream.write(prefix + ''.join(json.dumps(r, sort_keys=True, allow_nan=False) + '\n' for r in fresh))
+            fresh = []
+            for record in (r for r in records if r['evidence_source'] == source):
+                prior = existing.get(record['run_id'], [])
+                # Path is provenance, not trial identity: copied inputs count once.
+                comparable = lambda r: {k: v for k, v in r.items() if k != 'evidence_path'}
+                if prior:
+                    if not all(comparable(r) == comparable(record) for r in prior):
+                        raise ValueError('conflicting imported trial: ' + record['run_id'])
+                    counts['already_present'] += 1
+                else:
+                    fresh.append(record)
+                    existing[record['run_id']] = [record]
+            counts['imported' if source == 'bench.fit' else 'excluded'] += len(fresh)
+            content = b''.join(retained)
+            if fresh:
+                prefix = b'\n' if content and not content.endswith(b'\n') else b''
+                content += prefix + ''.join(json.dumps(r, sort_keys=True, allow_nan=False) + '\n'
+                                             for r in fresh).encode()
+            if content != original:
+                updates.append((ledger, content))
+        # Validate all conflicts before writing either ledger. Retraction copies
+        # untouched lines verbatim, including malformed lines and final newlines.
+        for ledger, content in updates:
+            fd, temporary = tempfile.mkstemp(prefix='.' + ledger.name, dir=state_dir)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    if ledger.exists():
+                        os.fchmod(stream.fileno(), ledger.stat().st_mode & 0o777)
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, ledger)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
     result = evidence.write_evidence(state_dir, overlay, catalog)
-    return {'imported': len(fresh), 'already_present': len(records) - len(fresh),
-            'fit_only': True, 'rows': len(result['rows']),
+    return {**counts, 'fit_only': True, 'rows': len(result['rows']),
+            'excluded_ledger': str(state_dir / 'bench-excluded.jsonl'),
             'levels': str(state_dir / 'evidence' / 'levels.json')}
 
 

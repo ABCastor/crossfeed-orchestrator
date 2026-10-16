@@ -5333,6 +5333,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("model-cards", help="print private live model/level evidence as compact JSON, offline")
     bench_import = sub.add_parser("import-bench", help="import checked fit-only benchmark results and rebuild evidence offline")
     bench_import.add_argument("results", nargs="+", type=Path)
+    bench_import.add_argument("--retract-source", action="store_true",
+                              help="remove benchmark imports by exact stored source path, then rebuild evidence")
     bench_import.add_argument("--measured-on", help="measurement date for legacy undated cells, YYYY-MM-DD")
 
     return parser
@@ -5585,7 +5587,7 @@ def main() -> int:
             sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
             from bench.to_evidence import install_evidence
             roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
-            print(json.dumps(install_evidence(args.results, state_dir, roster, args.measured_on)))
+            print(json.dumps(install_evidence(args.results, state_dir, roster, args.measured_on, args.retract_source)))
             return 0
         if args.command == "model-cards":
             try:

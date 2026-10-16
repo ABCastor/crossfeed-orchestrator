@@ -27,6 +27,18 @@ python3 scripts/fleetctl.py model-cards > /private/model-cards.json
 
 `--measured-on` supplies the measurement date for older rows without `started_at`; it is marked as operator-supplied provenance. New rows use their recorded timestamp. Supply final result files, not progress logs or intermediate attempts. Multiple result paths are accepted. Imports retain source paths locally, reject conflicting copies, and count repeated imports once. An existing matching run ID with a different ledger payload is rejected for review rather than risking double counting.
 
+`import-bench` accepts boolean check verdicts after worker exit 0, including failed task checks. Other worker exits are excluded, except wall-clock exit 124: the main campaign's `grid/main-2026-10-03/PREREG.md`, amendment at 00:45 CEST, explicitly says “a timeout is a fail, as it would be in real use.” Exit 124 always counts as a failure. Exits 4 (empty output or lease failure), 5 (prelaunch refusal or session failure), 8 (receipt failure), 125 (idle kill), 127 (missing command), unknown nonzero exits, missing exit codes and execution/check errors never supply quality or telemetry. They are recorded once in the separate local `bench-excluded.jsonl`, with their exit, reason, measurement date and source path. Quota batches containing excluded cells cannot establish measured fit cost. The import receipt reports newly imported and excluded counts separately.
+
+To correct a previous import, retract its original source paths, then re-import with the corrected importer:
+
+```sh
+python3 scripts/fleetctl.py import-bench --retract-source /private/campaign/results.jsonl --measured-on 2026-10-03
+python3 scripts/fleetctl.py import-bench /private/campaign/results.jsonl --measured-on 2026-10-03
+python3 scripts/fleetctl.py model-cards > /private/model-cards.json
+```
+
+Retraction removes only benchmark records whose stored absolute source path matches an argument, from both ledgers, and rebuilds evidence from the remaining records. It preserves unrelated ledger lines byte for byte. Use the original imported paths, even if the source files have since disappeared; a copied file's new path does not identify the original import. Repeating retraction or import is harmless. Retraction uses source provenance alone; `--measured-on` is validated when supplied but does not narrow which dates are retracted.
+
 Only the frozen fit split enters the ledger. Held-out payloads and excluded tasks never train quality, latency or token estimates. Mixed fit/held-out quota batches cannot establish fit-only measured cost. The older `bench/to_evidence.py --split fit --levels-in ... --levels-out ...` interface still builds isolated replay evidence; it does not install live evidence. `import-bench` persists observations in `runs.jsonl`, so later market refreshes retain them. Every checked trial adds one pass or failure to the Beta update; outside priors keep their source weights and small pseudo-sample strength. No other thinking level borrows its results.
 
 `model-cards` prints compact `crossfeed-model-cards/v1` JSON to stdout, including quality and uncertainty by family, ordered family strengths, outside metrics and weights, local counts and provenance, prices, latency and quota costs by source. Strength ordering compares `mean - sd` within a row; these heuristic family estimates are not calibrated probabilities or proof that one model beats another. Unmeasured families are listed in `unmeasured_families`; zero-trial families are omitted from `own`. Missing data stays unknown and estimates carry their basis. The authenticated console also serves the same export at `/model-cards.json`.
