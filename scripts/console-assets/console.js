@@ -466,6 +466,27 @@ function boot(document, window) {
     if (target?.matches('[data-search-label]')) reveal(target);
   }
 
+  // Model links work under the console's strict script-src policy: no inline page script.
+  function revealModel(hash = window.location.hash) {
+    if (!hash.startsWith('#model-')) return;
+    let id;
+    try { id = decodeURIComponent(hash.slice(1)); } catch (_) { return; }
+    const target = document.getElementById(id);
+    const drawer = target?.querySelector('details.model-disclosure');
+    if (!drawer) return;
+    drawer.open = true;
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+      if (parent.matches('details')) parent.open = true;
+    }
+    target.scrollIntoView({block: 'start'});
+  }
+  window.addEventListener('hashchange', () => revealModel());
+  document.addEventListener('click', event => {
+    const href = event.target.closest('a')?.getAttribute('href');
+    if (href?.startsWith('#model-')) revealModel(href);
+  });
+  revealModel();
+
   // ---- changes: level, model choice, quota refresh ----
   // One line of feedback, shown at the foot of the screen wherever the page is scrolled, then gone.
   const status = document.querySelector('.save-status');

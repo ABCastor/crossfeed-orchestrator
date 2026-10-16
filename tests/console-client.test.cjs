@@ -1342,3 +1342,27 @@ test('header sizing measures the name and the room beside it, remeasures font sw
   assert.equal(values['--hroom'], undefined);              // below 1000px the stylesheet gives the room
   assert.equal(values['--hbw'], '461px');
 });
+
+test('benchmark links open model drawers and collapsed parents under the external script', () => {
+  let drawer, outer, target;
+  const f = start({configureWindow(win, env) {
+    drawer = h('details', {class: 'model-disclosure'});
+    target = h('article', {id: 'model-fixture:next/model'}, drawer);
+    outer = h('details', {class: 'unmeasured-box'}, target);
+    env.document.append(outer);
+    env.document.getElementById = id => env.document.all().find(el => el.id === id) || null;
+    win.location.hash = '#model-fixture%3Anext%2Fmodel';
+  }});
+  assert.equal(drawer.open, true);
+  assert.equal(outer.open, true);
+  assert.equal(target.scrolled, true);
+  drawer.open = false;
+  for (const listener of f.windowListeners.hashchange) listener();
+  assert.equal(drawer.open, true);
+  drawer.open = false;
+  const link = h('a', {href: '#model-fixture%3Anext%2Fmodel'});
+  f.document.dispatch('click', {target: link});
+  assert.equal(drawer.open, true, 'clicking the same hash reopens a closed drawer');
+  f.window.location.hash = '#model-%not-valid';
+  for (const listener of f.windowListeners.hashchange) listener();
+});

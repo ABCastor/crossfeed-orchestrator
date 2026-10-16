@@ -586,3 +586,57 @@ h1{margin-top:calc(17px + var(--line-w))}
 .benchmark-columns li{margin:0 0 .65rem;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .benchmark-columns small{display:block;color:var(--quiet);margin-top:.2rem}
 @media(max-width:600px){.benchmark-columns{grid-template-columns:1fr}.nav{gap:1rem}}
+
+/* Job-first benchmarks, within the existing paper-and-ink console shell. */
+.bench-page{overflow-wrap:anywhere}
+.bench-page h2{font:600 23px/1.2 var(--read);margin:2.6rem 0 1rem}
+.bench-intro{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.6rem 1.5rem;margin:.85rem 0 1rem;padding-bottom:.9rem;border-bottom:1px solid var(--rule);font:400 13px/1.6 var(--mono);color:var(--quiet)}
+.conf{display:inline-block;width:fit-content;font:500 12px/1.3 var(--face);padding:.18rem .45rem;border:1px solid var(--rule);border-radius:3px;color:var(--quiet)}
+.conf-own{color:var(--machine-text);border-color:color-mix(in srgb,var(--machine) 30%,transparent);background:color-mix(in srgb,var(--machine) 9%,transparent)}
+.conf-outside{color:var(--quiet);background:var(--surface);border-color:var(--rule-strong)}
+.conf-guess{color:var(--human-text);border-color:color-mix(in srgb,var(--human) 32%,transparent);background:color-mix(in srgb,var(--human) 9%,transparent)}
+.jobs-ledger{border-top:1px solid var(--ink)}
+.job-row{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,2.1fr);gap:1.5rem 2.2rem;padding:1.35rem 0;border-bottom:1px solid var(--rule)}
+.job-row h3{font:600 18.5px/1.25 var(--read);margin:.25rem 0}
+.job-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.25rem 2.2rem}
+.job-pick{display:flex;flex-direction:column;align-items:start;gap:.38rem;min-width:0;padding:.25rem 0}
+.job-pick>small{font:600 11.5px/1.2 var(--face);text-transform:uppercase;letter-spacing:.05em;color:var(--machine-text)}
+.job-pick:nth-child(2)>small{color:var(--quiet)}
+.job-pick p{font:400 14px/1.48 var(--face);margin:.1rem 0 0}
+.job-pick .cost-feel{font-size:13px;color:var(--quiet)}
+.pick-name{font:600 16px/1.25 var(--face);color:var(--ink)}
+.pick-name .pick-setting{display:block;color:var(--quiet);font:400 12.5px/1.4 var(--face);margin-top:.2rem}
+.model-list{border-top:1px solid var(--ink)}
+.bench-page article{border-bottom:1px solid var(--rule);scroll-margin-top:5rem}
+.model-disclosure>summary{list-style:none;cursor:pointer}
+.model-disclosure>summary::-webkit-details-marker{display:none}
+.model-line{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1.45fr) minmax(0,1.35fr) minmax(0,1.25fr) minmax(0,.75fr);gap:1.1rem;align-items:baseline;padding:.9rem 0;min-height:44px}
+.model-line>span{min-width:0;font-size:13.5px}
+.model-line strong{display:block;font:600 15.5px/1.3 var(--face);margin-bottom:.3rem}
+.model-line .conf{margin:.15rem 0}
+.model-line small{display:block;font-size:11.5px;color:var(--quiet);margin-bottom:.25rem}
+.model-line .details-label{color:var(--machine-text);font-size:12px}
+.details-label::after{content:' +'}
+.model-disclosure[open] .details-label::after{content:' −'}
+.nerd-panel{padding:1rem 1.1rem 1.25rem;margin-bottom:.75rem;background:var(--surface);border-radius:4px;font-size:13.5px;line-height:1.48}
+.nerd-panel h4{font:600 14px/1.4 var(--face);margin:1.5rem 0 .5rem}
+.nerd-panel ul{padding-left:1.2rem}
+.nerd-panel li{margin:.45rem 0}
+.nerd-panel small{display:block;color:var(--quiet)}
+.nerd-panel code{font-size:11.5px}
+.nerd-panel table{width:100%;table-layout:fixed;border-collapse:collapse;text-align:left;font-size:12px}
+.nerd-panel th,.nerd-panel td{padding:.5rem .3rem;border-bottom:1px solid var(--rule);vertical-align:top;overflow-wrap:anywhere}
+.nerd-panel th{font-weight:600}
+.unmeasured-box{margin-top:2.2rem;border-top:1px solid var(--rule-strong);border-bottom:1px solid var(--rule)}
+.unmeasured-box>summary{padding:1rem 0;min-height:44px;cursor:pointer;font:600 17px/1.3 var(--read)}
+@media(max-width:860px){
+ .job-row,.job-choices{grid-template-columns:minmax(0,1fr);gap:.85rem}
+ .job-pick:nth-child(2){border-top:1px solid var(--rule);padding-top:.85rem}
+ .model-line{grid-template-columns:minmax(0,1fr) auto;row-gap:.4rem}
+ .model-line>span{grid-column:1/-1}
+ .model-line>span:first-child{grid-column:1;grid-row:1}
+ .model-line .details-label{grid-column:2;grid-row:1}
+ .model-line small{display:inline;margin-right:.4rem}
+ .nerd-panel{padding:.75rem}
+}
+@media(max-width:400px){.bench-page h1{font-size:27px}.nerd-panel table{font-size:11px}}

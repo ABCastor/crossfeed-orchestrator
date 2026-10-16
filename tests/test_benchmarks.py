@@ -313,6 +313,19 @@ class BenchmarksTests(unittest.TestCase):
             self.assertIsNone(high['sources'][0]['cost']['estimated_usd'])
             self.assertIn('unknown in / unknown out', console.render_benchmarks(cards))
 
+    def test_imported_live_fixture_main_view_uses_plain_language(self):
+        from tests.test_benchmark_page import VisibleText
+        self.install()
+        cards = model_cards.read_cards(self.state, self.overlay, fleet=fleetctl)
+        parser = VisibleText()
+        parser.feed(console.render_benchmarks(cards))
+        visible = ' '.join(parser.text)
+        self.assertIn('Best for coding', visible)
+        self.assertIn('Measured by us', visible)
+        for raw in ('coding-agent', 'repo-qa', 'xhigh', 'family_strengths', 'quota_price',
+                    'provider-default', 'service-chosen', 'heuristic_priors', 'go_request_estimate'):
+            self.assertNotIn(raw, visible)
+
     def test_real_overlay_metadata_and_all_configured_rows_render(self):
         from tests.test_console import base_overlay
         roster = base_overlay()

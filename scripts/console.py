@@ -1274,61 +1274,11 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
 
 
 def render_benchmarks(cards: dict[str, Any]) -> str:
-    esc = lambda value: html.escape(str(value))
-    sections = []
-    for card in cards['rows']:
-        quality = ''.join(f'<li>{esc(family)}: {q["mean"]:.0%} ± {q["sd"]:.0%}'
-                          f' <span class="quiet">(prior strength {q.get("prior_strength", 0):.2g})</span></li>'
-                          for family, q in card['quality'].items() if not q.get('unknown', True))
-        outside = ''.join(f'<li>{esc(source["source"])} · {esc(source["metric"])}: '
-                          f'{esc(source.get("value") if source.get("value") is not None else "estimated")} '
-                          f'· weight {source["weight"]:.3g} · {esc(source.get("read_on") or "undated")}</li>'
-                          for source in card['outside'])
-        own = []
-        for family, count in card['own'].items():
-            if not count.get('trials'):
-                continue
-            details = '; '.join(f'{p["source"]}: n={p["n"]}, {p.get("date") or "undated"}'
-                                for p in card['own_provenance'].get(family, []))
-            own.append(f'<li>{esc(family)}: {count["passes"]}/{count["trials"]} '
-                       f'(n={count["trials"]})<small>{esc(details or "Provenance unavailable in this cache; rebuild evidence.")}</small></li>')
-        prices = []
-        for source in card['sources']:
-            price, cost = source['price_1m'], source['cost']
-            money = lambda value: 'unknown' if value is None else f'${value:g}'
-            percent = cost.get('percent')
-            quota = 'unknown' if percent is None else f'{percent:.3g}%/task'
-            latency = source.get('latency') or {}
-            timing = (f'{latency["latency_s"]:.1f}s ({latency["metric"]}, n={latency["trials"]})'
-                      if latency else 'latency unmeasured for this source')
-            availability = source.get('quota_state', 'UNKNOWN')
-            if source.get('quota_reset_at'):
-                availability += ' until ' + source['quota_reset_at']
-            prices.append(f'<li>{esc(availability)} · {esc(source["pool"])} / {esc(source["harness"])}: '
-                          f'{money(price.get("in"))} in / {money(price.get("out"))} out per million tokens'
-                          f'<small>API equivalent estimate; quota {quota} ({esc(cost["basis"])}); '
-                          f'pressure price {source["quota_price"]:.3g}'
-                          f'{" (projection unknown)" if source["quota_projection_unknown"] else ""}; {esc(timing)}</small></li>')
-        sections.append(f'<article class="benchmark-row"><h2>{esc(card["model"])} <small>{esc(card["level"])}</small></h2>'
-                        f'<p class="benchmark-verdict">{esc(card["verdict"])}</p><div class="benchmark-columns">'
-                        f'<section><h3>Task families</h3><ul>{quality or "<li>Unmeasured</li>"}</ul></section>'
-                        f'<section><h3>Outside scores</h3><ul>{outside or "<li>No outside scores</li>"}</ul></section>'
-                        f'<section><h3>Our checks</h3><ul>{"".join(own) or "<li>No local trials</li>"}</ul></section>'
-                        f'<section><h3>Cost and quota</h3><ul>{"".join(prices) or "<li>No configured source</li>"}</ul></section>'
-                        '</div></article>')
-    body = ('<h1>Benchmarks</h1><p class="lede">Compare the evidence at each thinking level. '
-            'Outside scores supply weak starting estimates; each checked local task adds one observation.</p>'
-            '<p class="quiet">Family estimates are heuristic, not calibrated success probabilities. '
-            'Strengths compare evidence within a row. Harnesses can change results. '
-            'Fit trials only; held-out evaluations stay separate.</p>'
-            f'<p class="stamp">Evidence read: {esc(cards.get("read_on") or "not built yet")}. Reload to read current local state.</p>'
-            '<p><a href="/model-cards.json" download="model-cards.json">Download private model cards</a>. '
-            'Includes runtime publisher data: keep this export private. '
-            'Outside scores from Artificial Analysis and configured LMArena data.</p>'
-            '<p class="quiet">Quota pressure price is the selector penalty per percentage point of allowance. '
-            'Higher means scarcer quota; it is not a dollar charge.</p>'
-            + (''.join(sections) or '<p>No evidence or thinking levels configured. Import fit results or run a market refresh.</p>'))
-    return shell('Benchmarks', body, benchmarks=True)
+    try:
+        from scripts.benchmark_page import render_body
+    except ImportError:
+        from benchmark_page import render_body
+    return shell('Benchmarks', render_body(cards), benchmarks=True)
 
 
 def message_page(title: str, text: str) -> str:

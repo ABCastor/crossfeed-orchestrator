@@ -5,17 +5,60 @@ scores remain runtime data. Cards inform judgment, they never authorize a route.
 """
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 
 try:
     from . import selector
-    from .run_identity import canonical_model, evidence_index
+    from .run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ImportError:
     import selector
-    from run_identity import canonical_model, evidence_index
+    from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
 
-def build_cards(roster, runtime, evidence, *, fleet):
+def _when(value):
+    """An ISO timestamp as an aware UTC datetime, or None when it is not one."""
+    try:
+        moment = dt.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=dt.timezone.utc)
+
+
+def _iso(moment):
+    return moment.astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _availability(roster, runtime, fleet, pool, key, now):
+    """Admission plus the fleet's authoritative pool state, evaluated once per route."""
+    off = fleet.pool_level(runtime, pool) == 'off' or not fleet.pool_switches(roster, runtime, pool).get(key, False)
+    state, evidence = fleet.current_pool_state(runtime, pool, now, roster=roster, model_key=key)
+    until = _when(evidence.get('until'))
+    blocked = None
+    if not off and state == 'EXHAUSTED':
+        blocked = {'reason': evidence.get('source'), 'until': _iso(until) if until else None,
+                   'reset_known': until is not None}
+    return {'quota_state': state, 'quota_reset_at': evidence.get('until'),
+            'availability': {'switched_off': off, 'blocked': blocked}}
+
+
+def _owner_prior(roster, model, measured):
+    """Families the owner expects this model to lead in, from the roles its provisional lanes were admitted for.
+
+    A prior is a starting judgement, not a test: it is read only for families with no measurement behind them.
+    """
+    by_role = roster.get('policy', {}).get('selector', {}).get('families_by_role', {})
+    families = set()
+    for lane in roster.get('lanes', []):
+        if (lane.get('evidence_confidence') == 'provisional' and lane.get('admission_status') == 'active'
+                and canonical_model(lane.get('model_key'), roster) == model):
+            families.update(by_role.get(role) or FAMILY_BY_ROLE.get(role) for role in lane.get('roles') or [])
+    return sorted(family for family in families if family and family not in measured)
+
+
+def build_cards(roster, runtime, evidence, *, fleet, now=None):
+    now = now or fleet.utc_now()
+    named = fleet.model_cards(roster)
     rows = evidence_index(roster, evidence.get('rows', []))
     cells = set(rows)
     for model, effort in roster.get('effort', {}).items():
@@ -62,8 +105,8 @@ def build_cards(roster, runtime, evidence, *, fleet):
             cost, flags = selector._task_cost(roster, option, priced, binding, None)
             telemetry = row.get('source_telemetry', {})
             latency = telemetry.get(pool + '/' + str(harness), telemetry.get(pool, {}))
-            quota_state, quota_evidence = fleet.current_pool_state(runtime, pool, roster=roster, model_key=key)
-            sources.append({'quota_state': quota_state, 'quota_reset_at': quota_evidence.get('until'), 'pool': pool, 'harness': harness, 'model_key': key,
+            availability = _availability(roster, runtime, fleet, pool, key, now)
+            sources.append({**availability, 'pool': pool, 'harness': harness, 'model_key': key,
                             'price_1m': priced.get('price_1m', {}), 'cost': cost,
                             'quota_price': binding['lambda'], 'binding_window': binding['binding_window'],
                             'quota_projection_unknown': binding['projection_unknown'],
@@ -78,11 +121,22 @@ def build_cards(roster, runtime, evidence, *, fleet):
         quality = {family: {key: q[key] for key in
                    ('mean', 'sd', 'unknown', 'prior_strength', 'anchor_metric', 'imputed') if key in q}
                    for family, q in families.items() if not q.get('unknown', True)}
+        # Preserve the normalized outside anchor separately from the local-updated estimate.
+        outside_quality = {}
+        for family, q in families.items():
+            if family in quality:
+                anchor = next((source for source in q.get('sources', [])
+                               if isinstance(source.get('prior_mean'), (int, float))), None)
+                if anchor:
+                    outside_quality[family] = anchor['prior_mean']
         outside = [{key: source[key] for key in
                    ('source', 'metric', 'value', 'weight', 'read_on', 'mapping', 'families') if key in source}
                    for source in row.get('sources', [])]
+        card = named.get(model) or next((c for key, c in named.items() if canonical_model(key, roster) == model), {})
         cards.append({'model': model, 'level': level, 'family_strengths': strengths,
-                      'quality': quality, 'unmeasured_families': sorted(selector.FAMILIES - set(quality)), 'outside': outside, 'own': {f: c for f, c in own.items() if c.get('trials')},
+                      'name': card.get('name'), 'status': card.get('status'),
+                      'owner_prior': _owner_prior(roster, model, set(quality) | {f for f, c in own.items() if c.get('trials')}),
+                      'quality': quality, 'outside_quality': outside_quality, 'unmeasured_families': sorted(selector.FAMILIES - set(quality)), 'outside': outside, 'own': {f: c for f, c in own.items() if c.get('trials')},
                       'own_provenance': row.get('own_provenance', {}),
                       'evidence_counts': {'trials': trials, 'passes': passes,
                                           'outside_metrics': len(row.get('sources', []))},
