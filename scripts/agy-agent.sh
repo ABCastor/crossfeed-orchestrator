@@ -603,6 +603,17 @@ esac
 
 [ -n "$RAW" ] && cp "$ptyfile" "$RAW"
 
+# Persist only this run's captured refusal, including its full reset duration.
+# Never attribute the newest global CLI log to a concurrent run.
+if grep -qi 'Individual quota reached\|RESOURCE_EXHAUSTED\|HTTP[[:space:]]*429' "$ptyfile"; then
+  if [ -n "$LANE" ]; then
+    "$HERE/fleetctl.py" quota-error --lane "$LANE" --stderr "$ptyfile" || exit 8
+  fi
+  echo "agy-agent: AGY QUOTA EXHAUSTED (429)" >&2
+  tail -6 "$ptyfile" >&2
+  exit 3
+fi
+
 # Strip ANSI CSI / OSC / charset escapes and carriage returns.
 _clean() { sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\][0-9;]*(\x07|\x1b\\)?//g; s/\x1b[()][AB0]//g; s/\r//g' "$1"; }
 
@@ -626,6 +637,8 @@ answer="$(_clean "$ptyfile" | awk '
 # AGY can hide quota errors behind exit 0 plus empty PTY output. Preserve the
 # distinct quota and generic-empty outcomes used by fleet callers.
 if [ -z "$answer" ]; then
+  # Preserve the legacy diagnostic fallback, but never persist a pool circuit
+  # from a global log that cannot be attributed to this run.
   cli_log="$(ls -t "$HOME"/.gemini/antigravity-cli/cli.log \
                    "$HOME"/.gemini/antigravity-cli/log/*.log 2>/dev/null | head -1 || true)"
   if [ -n "$cli_log" ] && grep -q 'RESOURCE_EXHAUSTED\|Individual quota reached' "$cli_log" 2>/dev/null; then

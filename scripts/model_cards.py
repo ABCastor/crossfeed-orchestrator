@@ -62,7 +62,8 @@ def build_cards(roster, runtime, evidence, *, fleet):
             cost, flags = selector._task_cost(roster, option, priced, binding, None)
             telemetry = row.get('source_telemetry', {})
             latency = telemetry.get(pool + '/' + str(harness), telemetry.get(pool, {}))
-            sources.append({'pool': pool, 'harness': harness, 'model_key': key,
+            quota_state, quota_evidence = fleet.current_pool_state(runtime, pool, roster=roster, model_key=key)
+            sources.append({'quota_state': quota_state, 'quota_reset_at': quota_evidence.get('until'), 'pool': pool, 'harness': harness, 'model_key': key,
                             'price_1m': priced.get('price_1m', {}), 'cost': cost,
                             'quota_price': binding['lambda'], 'binding_window': binding['binding_window'],
                             'quota_projection_unknown': binding['projection_unknown'],

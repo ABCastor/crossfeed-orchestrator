@@ -571,7 +571,12 @@ def current_pool_state(
     # An open circuit is the provider itself saying "quota exhausted" (a real 429 or limit
     # error), not a gauge estimate. Forced overrides gauges, never a known failure, so the
     # circuit is checked first: forcing past it would only send more calls into the refusal.
-    circuit = runtime.get("pool_circuits", {}).get(pool, {})
+    # The overlay may seed a caller-verified refusal during a guarded migration.
+    # Runtime observations can extend it, but a healthy gauge never clears it.
+    circuits = [runtime.get("pool_circuits", {}).get(pool, {}),
+                (roster or {}).get("quota_pools", {}).get(pool, {}).get("quota_error", {})]
+    circuit = max(circuits, key=lambda c: parse_iso(c["until"]) if c.get("until")
+                  else dt.datetime.min.replace(tzinfo=dt.timezone.utc))
     circuit_until = circuit.get("until")
     if circuit_until and parse_iso(circuit_until) > now:
         return "EXHAUSTED", {
@@ -2447,6 +2452,20 @@ def start_verdict(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
                              and (not harness or item.get("harness") == harness)), None)
                 if lane and lane.get("selector") and lane["selector"] not in instead:
                     instead.append(lane["selector"])
+            # A successor may move to its own subscription allowance (AGY Argon).
+            # Keep the recommendation within the same transport and never suggest
+            # an automatic paid route or a pool with a known refusal.
+            if first["lane"] and successor:
+                replacement = next((item for item in roster.get("lanes", [])
+                    if item.get("model_key") == successor
+                    and item.get("harness") == first["lane"].get("harness")
+                    and _lane_is_admitted(item)
+                    and pools.get(item.get("quota_pool"), {}).get("plan", {}).get("billing") == "subscription"
+                    and not model_blocked(roster, runtime, item["quota_pool"], successor)
+                    and current_pool_state(runtime, item["quota_pool"], roster=roster,
+                                           model_key=successor)[0] != "EXHAUSTED"), None)
+                if replacement and replacement.get("selector") not in instead:
+                    instead.insert(0, replacement["selector"])
             instead = instead[:3]
     message = first["text"]
     if instead:
@@ -3353,6 +3372,43 @@ def parse_events(path: Path | None) -> dict[str, Any]:
 QUOTA_RE = re.compile(r"(?:usage limit|quota|GoUsageLimitError|HTTP\s*429|\b429\b)", re.I)
 LIMIT_RE = re.compile(r"(?:limitName|limit name)[\"'=:\s]+(5 hour|weekly|monthly)", re.I)
 RETRY_RE = re.compile(r"retry-after[\"'=:\s]+(\d+)", re.I)
+AGY_RESET_RE = re.compile(r"Resets\s+in\s+(?=\d)(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?(?!\w)", re.I)
+
+
+def quota_refusal(error_text, *, agy=False):
+    """Provider duration wins over the generic retry cooldown, in seconds."""
+    if agy and not re.search(r"Individual quota reached|RESOURCE_EXHAUSTED|HTTP\s*429", error_text, re.I):
+        return None
+    if not QUOTA_RE.search(error_text) and not (agy and re.search(r"RESOURCE_EXHAUSTED", error_text, re.I)):
+        return None
+    limit = LIMIT_RE.search(error_text)
+    retry = RETRY_RE.search(error_text)
+    seconds = int(retry.group(1)) if retry else 1800
+    name = limit.group(1).lower() if limit else None
+    if agy and re.search(r"Individual quota reached", error_text, re.I):
+        reset = AGY_RESET_RE.search(error_text)
+        if reset and any(reset.groups()):
+            seconds = sum(int(value or 0) * scale for value, scale in zip(reset.groups(), (3600, 60, 1)))
+        name = "individual quota"
+    return {"type": "quota", "retry_after_seconds": seconds, "limit_name": name}
+
+
+def record_quota_error(state_dir, roster, lane_id, error_text):
+    lane = lane_map(roster).get(lane_id)
+    if not lane:
+        raise FleetError(f"unknown lane: {lane_id}")
+    error = quota_refusal(error_text, agy=lane.get("harness") == "agy")
+    if error:
+        now = utc_now()
+        circuit = {"opened_at": iso(now),
+                   "until": iso(now + dt.timedelta(seconds=error["retry_after_seconds"])),
+                   "limit_name": error["limit_name"], "source": "explicit-run-error"}
+        with locked_runtime(state_dir) as runtime:
+            circuits = runtime.setdefault("pool_circuits", {})
+            previous = circuits.get(lane["quota_pool"], {})
+            if not previous.get("until") or parse_iso(previous["until"]) < parse_iso(circuit["until"]):
+                circuits[lane["quota_pool"]] = circuit
+    return error
 
 
 def run_selection_metadata(selection=None, **actual):
@@ -3438,22 +3494,7 @@ def record_run(
     if afk_attempt_id:
         record["afk_attempt_id"] = afk_attempt_id
     if quota_error:
-        limit_match = LIMIT_RE.search(error_text)
-        retry_match = RETRY_RE.search(error_text)
-        retry_s = int(retry_match.group(1)) if retry_match else 1800
-        limit_name = limit_match.group(1).lower() if limit_match else None
-        record["error"] = {
-            "type": "quota",
-            "retry_after_seconds": retry_s,
-            "limit_name": limit_name,
-        }
-        with locked_runtime(state_dir) as runtime:
-            runtime.setdefault("pool_circuits", {})[lane["quota_pool"]] = {
-                "opened_at": iso(),
-                "until": iso(utc_now() + dt.timedelta(seconds=retry_s)),
-                "limit_name": limit_name,
-                "source": "explicit-run-error",
-            }
+        record["error"] = record_quota_error(state_dir, roster, lane_id, error_text)
     state_dir.mkdir(parents=True, exist_ok=True)
     with ledger_lock(state_dir):
         with (state_dir / "runs.jsonl").open("a", encoding="utf-8") as handle:
@@ -4572,6 +4613,14 @@ def fleet_overview(
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, (snapshot or {}).get("idle_windows") if windows else None,
             evidence.get("spend_down") or [], now)
+        if evidence.get("source") == "explicit-quota-error":
+            entry["limits"].append({
+                "name": "provider_refusal", "title": evidence.get("limit_name") or "Provider refusal",
+                "scope": None, "kind": "refusal", "minutes": None,
+                "used_percent": 100, "state": "full", "reset_at": evidence["until"],
+                "resets_in_s": max(0, int((parse_iso(evidence["until"]) - now).total_seconds())),
+                "resets": reset_words(evidence["until"], now), "spend_down": False,
+            })
         pools.append(entry)
     ages = [p["quota"]["age_s"] for p in pools if p["quota"] and p["quota"].get("age_s") is not None]
     sources = sorted({p["quota"]["source"] for p in pools if p["quota"] and p["quota"].get("source")})
@@ -4653,6 +4702,8 @@ def _brief_entry(pool: dict[str, Any]) -> str:
 
 def _limit_text(limit: dict[str, Any]) -> str:
     """One limit as an agent reads it: "weekly Fable only 0%, resets Tue 6 Oct 15:00 (in 6d 5h)"."""
+    if limit["kind"] == "refusal":
+        return f"{limit['title']}: EXHAUSTED until {limit['reset_at']} (in {format_duration(limit['resets_in_s'])})"
     if limit["kind"] == "budget":
         name = "daily budget"
     else:   # "weekly", "5-hour", and a source's own word for a limit ("Premium") as it writes it
@@ -4833,6 +4884,10 @@ def render_brief(
             window = "daily $"
         if pool["plan"].get("limit") == "none-known":
             window, used, resets, price = "no known limit", "-", "-", "0.00"
+        refusal = next((limit for limit in pool.get("limits", []) if limit["kind"] == "refusal"), None)
+        if refusal:
+            window, used = "provider refusal", "EXHAUSTED"
+            resets = format_duration(refusal["resets_in_s"]) + " (" + refusal["reset_at"] + ")"
         lines.append(" | ".join([pool["pool"], pool["level"], window, used, resets,
                                  price, models_text]))
         retired = models.get("retired") or {}
@@ -5060,7 +5115,9 @@ def codexbar_snapshot_command(
                     continue
 
             runtime.setdefault("quota_snapshots", {})[pool_key] = observed
-            if all(int(w["used_percent"]) < 100 for w in observed["windows"].values()):
+            agy_pool = any(l.get("harness") == "agy" and l.get("quota_pool") == pool_key
+                           for l in (roster or {}).get("lanes", []))
+            if not agy_pool and all(int(w["used_percent"]) < 100 for w in observed["windows"].values()):
                 runtime.setdefault("pool_circuits", {}).pop(pool_key, None)
             state, evidence = current_pool_state(runtime, pool_key, utc_now(), roster=roster)
             results[pool_key] = {
@@ -5222,6 +5279,10 @@ def build_parser() -> argparse.ArgumentParser:
     release_claim.add_argument("--token", required=True)
 
     sub.add_parser("claims", help="list active path claims")
+
+    refusal = sub.add_parser("quota-error", help="record a run-correlated provider refusal")
+    refusal.add_argument("--lane", required=True)
+    refusal.add_argument("--stderr", type=Path, required=True)
 
     record = sub.add_parser("record", help="append prompt-free structured run telemetry")
     record.add_argument("--lane", required=True)
@@ -5643,6 +5704,13 @@ def main() -> int:
             print(json.dumps(list_path_claims(state_dir), indent=2, sort_keys=True))
             return 0
 
+        if args.command == "quota-error":
+            # A refusal belongs to the static AGY lane; recording it must not
+            # depend on discovery of unrelated remote catalogues.
+            roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
+            record_quota_error(state_dir, roster, args.lane,
+                               args.stderr.read_text(encoding="utf-8", errors="replace"))
+            return 0
         roster = read_overlay(args.overlay.expanduser(), state_dir)
         if args.command == "codex-mcp-denials":
             for server in codex_mcp_denials(roster, args.directory):

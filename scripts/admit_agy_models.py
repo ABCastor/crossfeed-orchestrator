@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 LEVELS = ['low', 'medium', 'high']
-MODELS = {'gemini-4-argon': ('antigravity-gemini', 'google'),
+MODELS = {'gemini-4-argon': ('antigravity-argon', 'google'),
           'claude-opus-5-5': ('antigravity-3p', 'anthropic'),
           'claude-sonnet-5-5': ('antigravity-3p', 'anthropic')}
 SUPERSEDED = {'gemini-3.1-pro': 'gemini-4-argon', 'gemini-3.6-flash': 'gemini-3.8-flash',
@@ -23,6 +23,14 @@ def migrate(source, *, example=False):
     lanes = roster['lanes']
     templates = {pool: next(l for l in lanes if l.get('harness') == 'agy' and l['quota_pool'] == pool)
                  for pool in ('antigravity-gemini', 'antigravity-3p')}
+    if 'antigravity-argon' not in roster['quota_pools']:
+        try:
+            from .agy_quota_pools import migrate as split_pools
+        except ImportError:
+            from agy_quota_pools import migrate as split_pools
+        roster = split_pools(roster, seed_refusals=False)
+        lanes = roster['lanes']
+    templates['antigravity-argon'] = templates['antigravity-gemini']
     cards = roster.setdefault('model_cards', {})
     for lane in lanes:
         if lane.get('harness') == 'agy' and lane['model_key'] in SUPERSEDED:

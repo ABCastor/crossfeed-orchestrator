@@ -6,7 +6,7 @@ Always pass `--lane` or `--role`; a bare call uses agy's own settings model, not
 
 The wrapper runs `agy --print` under a PTY because non-TTY stdout can be empty even after successful work. It passes `--add-dir`: changing cwd alone does not add a workspace. Missing workspace can look like file blindness; distinguish wrapper configuration from model capability before recording a limitation. The PTY passes an argv array, not shell-interpolated prompt text. Avoid newest-global-transcript recovery under concurrency; it may identify another run.
 
-Gemini and third-party models spend separate pools, antigravity-gemini and antigravity-3p, with separate windows. A measured healthy gauge can omit an individual provider limit. Before a multi-task campaign, run a small canary and require actual output. Treat empty output and provider quota refusal as different failures; an exit 0 with nothing is not success.
+Flash, Argon and third-party models spend separate pools: antigravity-gemini, antigravity-argon and antigravity-3p. Argon has an individual allowance absent from the shared Gemini gauge. Third-party Claude refusals also override a healthy shared gauge until their stated reset (the pool has a five-hour window). A measured healthy gauge can omit an individual provider limit. Before a multi-task campaign, run a small canary and require actual output. Treat empty output and provider quota refusal as different failures; an exit 0 with nothing is not success.
 
 Keep long analytical writes off this transport until its write-step failure is disproved by current evidence. Wrapper watchdog settings cannot repair a cap inside agy. Use an admitted transport proved for long work, preserving the task's quality floor; do not relabel agy as unable to read/write local files.
 
@@ -21,7 +21,7 @@ AGY 1.4.0, caller-verified on 16 October 2026. The supported selectors below are
 <!-- agy-models:start -->
 | Model | Pool | Selectors |
 |---|---|---|
-| gemini-4-argon | antigravity-gemini | `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high` |
+| gemini-4-argon | antigravity-argon | `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high` |
 | gemini-3.8-flash | antigravity-gemini | `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high` |
 | claude-opus-5-5 | antigravity-3p | `claude-opus-5-5-low`, `claude-opus-5-5-medium`, `claude-opus-5-5-high` |
 | claude-sonnet-5-5 | antigravity-3p | `claude-sonnet-5-5-low`, `claude-sonnet-5-5-medium`, `claude-sonnet-5-5-high` |
@@ -34,3 +34,5 @@ The owner's Argon design and writing preference is provisional. Manual `route` r
 The caller's Argon-high and Opus-high canaries returned OK. Other levels and Sonnet have catalogue evidence only. None of those canaries proves task quality, long-write reliability or native image delivery. Recheck those boundaries before a campaign.
 
 Outside evidence checked 16 October: [Text Arena](https://arena.ai/leaderboard/chat/text) places Argon high first with preliminary results; [Writing, Literature and Language](https://arena.ai/leaderboard/chat/text/industry-writing-and-literature-and-language) is a distinct category; [WebDev Arena](https://arena.ai/leaderboard/code/webdev) places Argon high ninth, preliminary, below native Claude Opus 5.5 max and Sonnet 5.5 xhigh. This does not establish a design lead. These are preference priors, not local task checks. [Artificial Analysis](https://artificialanalysis.ai/models/gemini-4-argon) has a high-level model record; raw AA scores belong only in local runtime state. Refresh through the existing market tooling with the updated overlay. Do not copy high-level scores to low or medium. Existing evidence gives each source a small weighted pseudo-sample budget; every mechanically checked local fit trial adds one observation. Own trials therefore progressively outweigh priors without erasing provenance.
+
+An AGY `Individual quota reached ... Resets in 164h32m20s` refusal blocks only the selected lane's pool until that duration passes. The same rule applies to `antigravity-3p` refusals such as `Resets in 1h18m27s`. A fresh percentage never clears a provider refusal. Recovery is automatic at its reset. Argon is also available as `gemini-4-argon` on the paid `gemini-metered` API route, which requires explicit admission; there is no automatic paid fallback.

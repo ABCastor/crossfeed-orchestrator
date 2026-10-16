@@ -503,6 +503,12 @@ def _scope_words(scope: str | None, pool: str) -> str | None:
 
 def _limit_row(limit: dict[str, Any], pool: str = "", *, spare_allowed: bool = True) -> str:
     limit = {**limit, "scope": _scope_words(limit.get("scope"), pool)}
+    if limit["kind"] == "refusal":
+        title = html.escape(limit["title"])
+        until = html.escape(limit["reset_at"])
+        return (f'<li class="lim hot full"><span class="ln">{title}</span>'
+                f'<span class="pc"><b>EXHAUSTED</b></span>'
+                f'<span class="rs">resets <time datetime="{until}">{until}</time></span></li>')
     title = html.escape(limit["title"])
     scope = f'<small>{html.escape(limit["scope"])}</small>' if limit.get("scope") else ""
     if limit["kind"] == "budget":
@@ -1295,7 +1301,10 @@ def render_benchmarks(cards: dict[str, Any]) -> str:
             latency = source.get('latency') or {}
             timing = (f'{latency["latency_s"]:.1f}s ({latency["metric"]}, n={latency["trials"]})'
                       if latency else 'latency unmeasured for this source')
-            prices.append(f'<li>{esc(source["pool"])} / {esc(source["harness"])}: '
+            availability = source.get('quota_state', 'UNKNOWN')
+            if source.get('quota_reset_at'):
+                availability += ' until ' + source['quota_reset_at']
+            prices.append(f'<li>{esc(availability)} · {esc(source["pool"])} / {esc(source["harness"])}: '
                           f'{money(price.get("in"))} in / {money(price.get("out"))} out per million tokens'
                           f'<small>API equivalent estimate; quota {quota} ({esc(cost["basis"])}); '
                           f'pressure price {source["quota_price"]:.3g}'
