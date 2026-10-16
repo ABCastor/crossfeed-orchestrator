@@ -179,6 +179,13 @@ case "$prompt" in
     printf '%s\n' "$$" >"${FAKE_TARGET_PID_FILE:?}"
     while :; do sleep 1; done
     ;;
+  check-token)
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+      printf 'final:token-set\n'
+    else
+      printf 'final:token-unset\n'
+    fi
+    ;;
   *) printf 'final:%s\n' "$prompt";;
 esac
 FAKE_CLAUDE
@@ -420,6 +427,25 @@ set -u
 exec /usr/bin/tee "$@"
 FAKE_TEE
 
+cat >"$FAKE_BIN/op" <<'FAKE_OP'
+#!/bin/bash
+set -u
+if [ -n "${FAKE_OP_LOG:-}" ]; then printf '%s\n' "$*" >>"$FAKE_OP_LOG"; fi
+if [ "${FAKE_OP_FAIL:-0}" != "0" ]; then
+  echo "op: failed to read secret" >&2
+  exit 1
+fi
+case "${1:-}" in
+  read)
+    val="${FAKE_OP_VAL:-sk-ant-oat01-fake-token-test-12345}"
+    printf '%s\n' "$val"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+FAKE_OP
+
 # A virtual clock makes a restored hidden 600-second default fire in one real
 # second. Correct wrappers ignore the jump because TIMEOUT is empty.
 cat >"$CLOCK_BIN/date" <<'FAKE_DATE'
@@ -437,7 +463,7 @@ printf '%s\n' "$value" >"$state"
 printf '%s\n' "$value"
 FAKE_DATE
 
-chmod +x "$FAKE_BIN/claude" "$FAKE_BIN/agy" "$FAKE_BIN/copilot" "$FAKE_BIN/ps" "$FAKE_BIN/tee" "$CLOCK_BIN/date"
+chmod +x "$FAKE_BIN/claude" "$FAKE_BIN/agy" "$FAKE_BIN/copilot" "$FAKE_BIN/ps" "$FAKE_BIN/tee" "$FAKE_BIN/op" "$CLOCK_BIN/date"
 
 BASE_PATH="$FAKE_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
 PASS_COUNT=0
@@ -848,6 +874,108 @@ test_claude_stderr_streaming() {
   assert_dead "$case_dir/tee-pid" "Claude stderr tee" || return 1
 }
 
+test_claude_oauth_env_ref() {
+  local case_dir out err op_log rc
+  case_dir="$(new_case claude-oauth-env)"
+  out="$case_dir/out"
+  err="$case_dir/err"
+  op_log="$case_dir/op.log"
+
+  FAKE_OP_LOG="$op_log" CROSSFEED_CLAUDE_OAUTH_REF="op://vault/claude/token" \
+    CLAUDE_CODE_OAUTH_TOKEN="" invoke "$CLAUDE_WRAPPER" "$case_dir" "$out" "$err" \
+    --prompt check-token --dir "$case_dir/work"
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "wrapper exited $rc"; return 1; }
+  contains "$out" "final:token-set" || { fail "fake claude did not see token"; return 1; }
+  contains "$op_log" "op://vault/claude/token" || { fail "fake op was not called with env ref"; return 1; }
+  [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || { fail "token leaked into parent environment"; return 1; }
+}
+
+test_claude_oauth_file_ref() {
+  local case_dir out err op_log ref_file rc
+  case_dir="$(new_case claude-oauth-file)"
+  out="$case_dir/out"
+  err="$case_dir/err"
+  op_log="$case_dir/op.log"
+  ref_file="$case_dir/home/.config/crossfeed/claude-oauth-ref"
+  mkdir -p "$(dirname "$ref_file")"
+  printf '  op://vault/from-file/token  \n' >"$ref_file"
+
+  FAKE_OP_LOG="$op_log" CROSSFEED_CLAUDE_OAUTH_REF="" \
+    CLAUDE_CODE_OAUTH_TOKEN="" invoke "$CLAUDE_WRAPPER" "$case_dir" "$out" "$err" \
+    --prompt check-token --dir "$case_dir/work"
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "wrapper exited $rc"; return 1; }
+  contains "$out" "final:token-set" || { fail "fake claude did not see token"; return 1; }
+  contains "$op_log" "op://vault/from-file/token" || { fail "fake op was not called with file ref"; return 1; }
+}
+
+test_claude_oauth_bad_value_ignored() {
+  local case_dir out err op_log rc
+  case_dir="$(new_case claude-oauth-bad)"
+  out="$case_dir/out"
+  err="$case_dir/err"
+  op_log="$case_dir/op.log"
+
+  FAKE_OP_LOG="$op_log" FAKE_OP_VAL="bad-token-not-starting-with-sk-ant-oat" \
+    CROSSFEED_CLAUDE_OAUTH_REF="op://vault/claude/token" \
+    CLAUDE_CODE_OAUTH_TOKEN="" invoke "$CLAUDE_WRAPPER" "$case_dir" "$out" "$err" \
+    --prompt check-token --dir "$case_dir/work"
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "wrapper exited $rc"; return 1; }
+  contains "$out" "final:token-unset" || { fail "fake claude saw invalid token"; return 1; }
+  contains "$err" "CLAUDE_CODE_OAUTH_TOKEN" || { fail "stderr did not name variable"; return 1; }
+  ! contains "$err" "bad-token-not-starting-with-sk-ant-oat" || { fail "stderr leaked token value"; return 1; }
+}
+
+test_claude_oauth_op_failure_fallback() {
+  local case_dir out err op_log rc
+  case_dir="$(new_case claude-oauth-op-fail)"
+  out="$case_dir/out"
+  err="$case_dir/err"
+  op_log="$case_dir/op.log"
+
+  FAKE_OP_LOG="$op_log" FAKE_OP_FAIL=1 \
+    CROSSFEED_CLAUDE_OAUTH_REF="op://vault/claude/token" \
+    CLAUDE_CODE_OAUTH_TOKEN="" invoke "$CLAUDE_WRAPPER" "$case_dir" "$out" "$err" \
+    --prompt check-token --dir "$case_dir/work"
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "wrapper exited $rc on op failure"; return 1; }
+  contains "$out" "final:token-unset" || { fail "token set despite op failure"; return 1; }
+}
+
+test_claude_oauth_existing_token_untouched() {
+  local case_dir out err op_log rc
+  case_dir="$(new_case claude-oauth-existing)"
+  out="$case_dir/out"
+  err="$case_dir/err"
+  op_log="$case_dir/op.log"
+
+  FAKE_OP_LOG="$op_log" CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-existing-preconfigured" \
+    CROSSFEED_CLAUDE_OAUTH_REF="op://vault/claude/token" \
+    invoke "$CLAUDE_WRAPPER" "$case_dir" "$out" "$err" \
+    --prompt check-token --dir "$case_dir/work"
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "wrapper exited $rc"; return 1; }
+  contains "$out" "final:token-set" || { fail "fake claude did not see existing token"; return 1; }
+  [ ! -e "$op_log" ] || [ ! -s "$op_log" ] || { fail "op was called when token was already set"; return 1; }
+}
+
+test_claude_oauth_dry_run_never_calls_op() {
+  local case_dir out err op_log rc
+  case_dir="$(new_case claude-oauth-dry-run)"
+  out="$case_dir/out"
+  err="$case_dir/err"
+  op_log="$case_dir/op.log"
+
+  FAKE_OP_LOG="$op_log" CROSSFEED_CLAUDE_OAUTH_REF="op://vault/claude/token" \
+    CLAUDE_CODE_OAUTH_TOKEN="" invoke "$CLAUDE_WRAPPER" "$case_dir" "$out" "$err" \
+    --prompt check-token --dir "$case_dir/work" --dry-run
+  rc=$?
+  [ "$rc" -eq 0 ] || { fail "wrapper dry-run exited $rc"; return 1; }
+  [ ! -e "$op_log" ] || [ ! -s "$op_log" ] || { fail "op was called during dry-run"; return 1; }
+}
+
 test_agy_output_liveness() { common_output_liveness agy "$AGY_WRAPPER"; }
 test_agy_cpu_liveness() { common_cpu_liveness agy "$AGY_WRAPPER"; }
 test_agy_descendant_cpu_liveness() { common_descendant_cpu_liveness agy "$AGY_WRAPPER"; }
@@ -1080,6 +1208,12 @@ run_test claude_passthrough test_claude_passthrough
 run_test claude_interface test_claude_interface
 run_test claude_help_contract test_claude_help_contract
 run_test claude_stderr_streaming test_claude_stderr_streaming
+run_test claude_oauth_env_ref test_claude_oauth_env_ref
+run_test claude_oauth_file_ref test_claude_oauth_file_ref
+run_test claude_oauth_bad_value_ignored test_claude_oauth_bad_value_ignored
+run_test claude_oauth_op_failure_fallback test_claude_oauth_op_failure_fallback
+run_test claude_oauth_existing_token_untouched test_claude_oauth_existing_token_untouched
+run_test claude_oauth_dry_run_never_calls_op test_claude_oauth_dry_run_never_calls_op
 
 run_test sibling_fast_exit_passthrough test_sibling_fast_exit_passthrough
 run_test sibling_immediate_signal_cleanup test_sibling_immediate_signal_cleanup

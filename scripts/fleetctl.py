@@ -4022,6 +4022,25 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
         else:
             problems += 1
             print(f"  MISSING  {harness:10s} -> `{binary}` not on PATH ({used_by} lanes unusable)")
+        if harness == "claude":
+            oauth_file = Path.home() / ".config/crossfeed/claude-oauth-ref"
+            if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+                print("           claude auth: CLAUDE_CODE_OAUTH_TOKEN set in env")
+            elif os.environ.get("CROSSFEED_CLAUDE_OAUTH_REF"):
+                print(f"           claude auth: CROSSFEED_CLAUDE_OAUTH_REF set ({os.environ['CROSSFEED_CLAUDE_OAUTH_REF']})")
+            elif oauth_file.is_file():
+                ref = ""
+                try:
+                    for line in oauth_file.read_text().splitlines():
+                        line = line.strip()
+                        if line:
+                            ref = line
+                            break
+                except Exception:
+                    pass
+                print(f"           claude auth: {oauth_file} ({ref})")
+            else:
+                print("           claude auth: normal login (Claude Code desktop/local session)")
 
     print("quota sources:")
     sources = quota_sources(roster)
