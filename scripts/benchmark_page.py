@@ -16,6 +16,7 @@ LEVELS = dict(minimal='Minimal thinking', low='Light thinking', medium='Normal t
               'service-chosen': 'Chosen automatically'})
 POOLS = {'claude': 'Claude subscription', 'codex': 'ChatGPT / Codex subscription',
          'antigravity-gemini': 'Gemini subscription (Antigravity)',
+         'antigravity-argon': 'Antigravity Argon allowance',
          'antigravity-3p': 'Antigravity third-party pool', 'opencode-go': 'OpenCode Go subscription',
          'openrouter-free': 'OpenRouter free pool', 'github-copilot-student': 'GitHub Copilot Student',
          'gemini-metered': 'Metered Gemini API'}
@@ -80,7 +81,7 @@ def availability(row):
     if sources(row, True):
         return 'No known quota block'  # Unknown gauges do not establish exhaustion.
     blocks = [s['availability']['blocked'] for s in active]
-    known = [b['until'] for b in blocks if b.get('reset_known')]
+    known = [b['until'] for b in blocks if b.get('reset_known') and b.get('until')]
     return ('Not available until ' + min(known).replace('T', ' ').replace('Z', ' UTC')
             if len(known) == len(blocks) else 'Not available: quota error; reset not published')
 
@@ -149,6 +150,31 @@ def has_evidence(row):
 
 def lineage(row):
     return row['model'].split('-')[0].split(':')[0]
+
+
+def outside_design_score(row):
+    q = measured(row, ('visual',)).get('visual', {})
+    # Older outside-only cards have an unmodified mean; local posteriors cannot rank publishers.
+    return row.get('outside_quality', {}).get('visual', q.get('mean') if not local(row, ('visual',)) else None)
+
+
+def design_choices(rows):
+    priors = [r for r in rows if 'visual' in r.get('owner_prior', []) and sources(r)]
+    prior = max(priors, key=lambda r: (quality_score(r, ('visual',)), r['model'], r.get('level', '')), default=None)
+    ranked = [r for r in rows if sources(r, True) and outside(r, ('visual',))
+              and outside_design_score(r) is not None]
+    working = max(ranked, key=lambda r: (outside_design_score(r), r['model'], r.get('level', '')), default=None)
+    return prior, working
+
+
+def design_status(row):
+    if sources(row, True):
+        return availability(row)
+    blocks = [s['availability']['blocked'] for s in sources(row)]
+    if blocks and all(b.get('reset_known') and b.get('until') for b in blocks):
+        reset = min(b['until'] for b in blocks)
+        return 'Out of allowance until ' + datetime.fromisoformat(reset.replace('Z', '+00:00')).strftime('%d %b')
+    return availability(row)
 
 
 def select_jobs(rows):
@@ -290,7 +316,7 @@ def nerd_panel(best, rows):
             flags.update(s.get('flags', []))
             price, cost = s.get('price_1m', {}), s.get('cost', {})
             money = lambda v: 'unknown' if v is None else f'${v:g}'
-            prices.append(f'<li>{e(level(row))}: {e(POOLS.get(s.get("pool"), plain(s.get("pool"))))} / {e(HARNESSES.get(s.get("harness"), plain(s.get("harness"))))}: {money(price.get("in"))} in / {money(price.get("out"))} out per million tokens (API equivalent). Allowance: {e(cost.get("percent"))}%/task; estimated dollars {money(cost.get("estimated_usd"))}; scarcity weight {e(s.get("quota_price"))}; {e(cost.get("basis", "unknown"))}. <small>{e(availability(dict(row, sources=[s])))}; source timing: {e(s.get("latency") or "unmeasured")}</small></li>')
+            prices.append(f'<li>{e(level(row))}: {e(POOLS.get(s.get("pool"), plain(s.get("pool"))))} / {e(HARNESSES.get(s.get("harness"), plain(s.get("harness"))))}: {money(price.get("in"))} in / {money(price.get("out"))} out per million tokens (API equivalent). Allowance: {e(cost.get("percent"))}%/task; estimated dollars {money(cost.get("estimated_usd"))}; scarcity weight {e(s.get("quota_price"))}; {e(cost.get("basis", "unknown"))}. <small>{e(s.get("quota_state", "UNKNOWN"))}{e(" until " + s["quota_reset_at"] if s.get("quota_reset_at") else "")} · {e(availability(dict(row, sources=[s])))}; source timing: {e(s.get("latency") or "unmeasured")}</small></li>')
     settings = []
     for r in rows:
         estimates = '; '.join(f'{FAMILIES.get(f, plain(f))} {q["mean"]:.0%} ±{q.get("sd", 0):.0%}' for f, q in measured(r, r.get('quality', {})).items())
@@ -340,6 +366,18 @@ def render_body(cards):
     jobs = []
     for key, title, families, picks in select_jobs(rows):
         choices = []
+        if key == 'design':
+            prior, working = design_choices(rows)
+            for label, r in [('Top pick · your judgement', prior), ('Working choice', working)]:
+                if r is None:
+                    text = ('No owner’s prior for design is configured.' if 'Top pick' in label else
+                            'Missing WebDev Arena or visual-family outside ranking for available models. Use your owner’s prior for design when its allowance returns.')
+                    choices.append(f'<div class="job-pick"><small>{label}</small><p>{e(text)}</p></div>')
+                    continue
+                evidence = 'Guess · owner’s prior' if 'Top pick' in label else 'Outside rankings only'
+                choices.append(f'<div class="job-pick"><small>{label}</small><a class="pick-name" href="#{quote(anchor(r["model"]), safe="")}"><span translate="no">{e(name(r))}</span> <span class="pick-setting">{e(level(r))}</span></a><span class="conf">{e(evidence)}</span><p>{e(design_status(r))}</p><p class="cost-feel">{e(cost_feel(r))}</p></div>')
+            jobs.append(f'<section class="job-row"><h3>{e(title)}</h3><div class="job-choices">{"".join(choices)}</div></section>')
+            continue
         for i in range(2):
             label = 'Top pick' if i == 0 else 'Runner-up'
             if i >= len(picks):

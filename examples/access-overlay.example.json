@@ -32,6 +32,7 @@
           "claude",
           "codex",
           "antigravity-gemini",
+          "antigravity-argon",
           "antigravity-3p",
           "antigravity",
           "github-copilot-student",
@@ -359,6 +360,15 @@
       "quota_refresh": null,
       "quota_source": "Live OpenRouter pricing plus locked spend reservations.",
       "source": "https://openrouter.ai/api/v1/models"
+    },
+    "antigravity-argon": {
+      "label": "Antigravity · Argon",
+      "plan": {
+        "name": "Antigravity · Argon individual allowance",
+        "billing": "subscription"
+      },
+      "quota_refresh": null,
+      "quota_source": "AGY individual quota refusals; the shared Gemini gauge does not measure this allowance."
     }
   },
   "model_evidence": {
@@ -1812,7 +1822,7 @@
         "read-only",
         "write"
       ],
-      "quota_pool": "antigravity-gemini",
+      "quota_pool": "antigravity-argon",
       "max_parallel": 1,
       "max_tasks_per_run": 1,
       "timeout_s": 1500,
@@ -1849,7 +1859,7 @@
         "read-only",
         "write"
       ],
-      "quota_pool": "antigravity-gemini",
+      "quota_pool": "antigravity-argon",
       "max_parallel": 1,
       "max_tasks_per_run": 1,
       "timeout_s": 1500,
@@ -1886,7 +1896,7 @@
         "read-only",
         "write"
       ],
-      "quota_pool": "antigravity-gemini",
+      "quota_pool": "antigravity-argon",
       "max_parallel": 1,
       "max_tasks_per_run": 1,
       "timeout_s": 1500,

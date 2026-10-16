@@ -51,6 +51,37 @@ class JobTests(unittest.TestCase):
         self.assertNotIn('64', page.why(r, ('visual',)))
         self.assertIn('No test of ours yet for this job', page.why(r, ('visual',)))
 
+    def test_design_keeps_exhausted_owner_prior_and_visual_working_choice(self):
+        prior = row('gemini-4-argon', quality={}, own={}, outside=[], owner_prior=['visual'], pool='antigravity-argon')
+        prior['sources'][0]['availability'] = {'blocked': {'until': '2026-10-23T09:18:00Z', 'reset_known': True}}
+        visual = row('visual-best', family='visual', own=False, score=.85)
+        lower = row('visual-lower', family='visual', own=False, score=.7)
+        coding = row('coding-only', score=.99)
+        self.assertEqual(page.design_choices([prior, visual, lower, coding]), (prior, visual))
+        html = page.render_body({'rows': [prior, visual, lower, coding]}).split('Best for design')[1].split('</section>')[0]
+        for text in ['Gemini 4 Argon', 'Out of allowance until 23 Oct', 'Visual Best', 'Outside rankings only', 'owner’s prior']:
+            self.assertIn(text, html)
+        self.assertNotIn('Coding Only', html)
+        visual['sources'][0]['availability'] = {'switched_off': True}
+        self.assertEqual(page.design_choices([prior, visual, lower])[1], lower)
+
+    def test_working_design_uses_outside_anchor_instead_of_local_posterior(self):
+        outside_best = row('outside-best', family='visual', own=False, score=.9)
+        local_best = row('local-best', family='visual', own=False, score=.99)
+        local_best['own'] = {'visual': {'passes': 100, 'trials': 100}}
+        local_best['outside_quality'] = {'visual': .7}
+        self.assertEqual(page.design_choices([outside_best, local_best])[1], outside_best)
+
+    def test_missing_visual_ranking_names_gap_and_keeps_owner_judgement(self):
+        prior = row('gemini-4-argon', quality={}, own={}, outside=[], owner_prior=['visual'])
+        coding = row('coding-only', score=.99)
+        html = page.render_body({'rows': [prior, coding]}).split('Best for design')[1].split('</section>')[0]
+        self.assertIn('Missing WebDev Arena or visual-family outside ranking', html)
+        self.assertIn('owner’s prior for design', html)
+        self.assertIn('Gemini 4 Argon', html)
+        self.assertNotIn('Coding Only', html)
+        self.assertEqual(page.design_choices([coding]), (None, None))
+
     def test_real_writing_family_prior_is_labelled_and_usable(self):
         prior = row('new-model', quality={}, own={}, outside=[], owner_prior=['writing'], pool='antigravity-gemini')
         measured = row(family='writing')
@@ -149,7 +180,7 @@ class AvailabilityTests(unittest.TestCase):
     def test_pool_exhaustion_and_switches_are_read_live(self):
         roster = {'quota_pools': {'codex': {}}, 'model_cards': {'fixture-a': {'pool': 'codex'}}}
         runtime = {'pool_circuits': {'codex': {'until': '2026-10-17T00:00:00Z'}}}
-        check = lambda: model_cards._availability(roster, runtime, fleetctl, 'codex', 'fixture-a', 'fixture-a', {}, self.NOW)
+        check = lambda: model_cards._availability(roster, runtime, fleetctl, 'codex', 'fixture-a', self.NOW)['availability']
         self.assertIsNotNone(check()['blocked'])
         runtime['switches'] = {'codex': 'off'}
         self.assertTrue(check()['switched_off'])
@@ -175,51 +206,46 @@ class AvailabilityTests(unittest.TestCase):
         cards = model_cards.build_cards(roster, {}, evidence, fleet=fleetctl)
         self.assertEqual(picks(cards['rows'], 'coding'), [])
 
-    def test_refusal_reset_success_recovery_and_stale_refusal(self):
+    def test_pool_authority_ignores_legacy_ledger_and_recovers_at_reset(self):
+        roster = json.loads((Path(__file__).parents[1] / 'examples/access-overlay.example.json').read_text())
+        from scripts.agy_quota_pools import migrate
+        roster = migrate(roster)
+        until = dt.datetime(2026, 10, 23, 9, 18, tzinfo=dt.timezone.utc)
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'runs.jsonl'
-            refusal = dict(model='fixture-a', harness='agy', quota_pool='antigravity-gemini',
-                ended_at='2026-10-15T23:50:00Z', status='error', returncode=3)
-            with patch.object(model_cards, 'agy_quota_reset', return_value=self.NOW + dt.timedelta(hours=164)):
-                path.write_text(json.dumps(refusal) + '\n')
-                result = model_cards.quota_refusals(directory, {}, now=self.NOW)
-                self.assertTrue(result[('antigravity-gemini', 'fixture-a')]['reset_known'])
-                # Other failures cannot clear the refusal; a subsequent successful run can.
-                failure = dict(refusal, ended_at='2026-10-16T00:00:01Z', returncode=1)
-                path.write_text(json.dumps(refusal) + '\n' + json.dumps(failure) + '\n')
-                self.assertTrue(model_cards.quota_refusals(directory, {}, now=self.NOW))
-                success = dict(failure, status='ok', returncode=0)
-                path.write_text(json.dumps(refusal) + '\n' + json.dumps(success) + '\n')
-                self.assertFalse(model_cards.quota_refusals(directory, {}, now=self.NOW))
-            path.write_text(json.dumps(refusal) + '\n')
-            with patch.object(model_cards, 'agy_quota_reset', return_value=self.NOW - dt.timedelta(seconds=1)):
-                self.assertFalse(model_cards.quota_refusals(directory, {}, now=self.NOW))
+            state = Path(directory)
+            (state / 'runs.jsonl').write_text(json.dumps(dict(model='gemini-4-argon', harness='agy',
+                quota_pool='antigravity-argon', ended_at='2026-10-23T09:17:59Z', status='error', returncode=3)) + '\n')
+            for now, blocked in [(self.NOW, True), (until, False)]:
+                with patch.object(fleetctl, 'utc_now', return_value=now):
+                    cards = model_cards.read_cards(state, roster, fleet=fleetctl)
+                argon = next(r for r in cards['rows'] if r['model'] == 'gemini-4-argon')
+                source = next(s for s in argon['sources'] if s['pool'] == 'antigravity-argon')
+                self.assertEqual(bool(source['availability']['blocked']), blocked)
+                self.assertEqual(source['quota_state'] == 'EXHAUSTED', blocked)
+                if blocked:
+                    self.assertEqual(source['quota_reset_at'], '2026-10-23T09:18:00Z')
+                self.assertEqual(bool(page.sources(argon, True)), not blocked)
 
-    def test_agy_log_duration_is_not_replaced_by_half_hour_default(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            stamp = self.NOW.astimezone().strftime('E%m%d %H:%M:%S')
-            (home / 'cli.log').write_text(stamp + '.000 12 Individual quota reached. Resets in 164h32m20s\n')
-            with patch.object(model_cards, 'AGY_LOG_HOME', home):
-                reset = model_cards.agy_quota_reset('2026-10-16T00:00:00Z')
-            self.assertEqual(reset, self.NOW + dt.timedelta(hours=164, minutes=32, seconds=20))
+    def test_build_uses_one_pool_read_with_the_supplied_clock(self):
+        roster = {'quota_pools': {'codex': {}}, 'model_cards': {'fixture-a': {'pool': 'codex'}},
+                  'effort': {'fixture-a': {'levels': ['high']}}}
+        with patch.object(fleetctl, 'current_pool_state', wraps=fleetctl.current_pool_state) as state:
+            cards = model_cards.build_cards(roster, {}, {}, fleet=fleetctl, now=self.NOW)
+        # Pricing separately reads state without an explicit clock; availability reads once.
+        availability_reads = [c for c in state.call_args_list if len(c.args) == 3]
+        self.assertEqual(len(availability_reads), 1)
+        self.assertEqual(availability_reads[0].args[2], self.NOW)
+        self.assertIsNone(cards['rows'][0]['sources'][0]['availability']['blocked'])
 
-    def test_busy_logs_and_ledger_cannot_hide_unexpired_refusal(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            (home / 'log').mkdir()
-            stamp = self.NOW.astimezone().strftime('E%m%d %H:%M:%S')
-            (home / 'log/old.log').write_text(stamp + '.000 12 Individual quota reached. Resets in 164h32m20s\n')
-            for n in range(12):
-                (home / f'log/new-{n}.log').write_text('No quota event\n')
-            refusal = dict(model='fixture-a', harness='agy', quota_pool='antigravity-gemini',
-                ended_at='2026-10-16T00:00:00Z', status='error', returncode=3,
-                error={'retry_after_seconds': 1800})
-            (home / 'runs.jsonl').write_text(json.dumps(refusal) + '\n' + ('{"padding":"' + 'x' * 10000 + '"}\n') * 120)
-            with patch.object(model_cards, 'AGY_LOG_HOME', home):
-                result = model_cards.quota_refusals(home, {}, now=self.NOW + dt.timedelta(hours=2))
-            self.assertIn(('antigravity-gemini', 'fixture-a'), result)
-            self.assertEqual(result[('antigravity-gemini', 'fixture-a')]['until'], '2026-10-22T20:32:20Z')
+    def test_cards_keep_the_outside_anchor_separate_from_local_quality(self):
+        evidence = {'rows': [dict(model='fixture-a', level='high',
+            q={'visual': dict(mean=.99, sd=.01, unknown=False,
+                             sources=[dict(prior_mean=.7)])},
+            own={'visual': dict(passes=100, trials=100)},
+            sources=[dict(source='fixture-arena', metric='elo', value=1200, families=['visual'])])]}
+        cards = model_cards.build_cards({}, {}, evidence, fleet=fleetctl, now=self.NOW)
+        self.assertEqual(cards['rows'][0]['outside_quality']['visual'], .7)
+        self.assertEqual(page.outside_design_score(cards['rows'][0]), .7)
 
     def test_provisional_prior_comes_from_roster_not_model_name(self):
         roster = {'lanes': [dict(model_key='new-fixture', evidence_confidence='provisional',
