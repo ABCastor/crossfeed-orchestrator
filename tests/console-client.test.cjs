@@ -744,8 +744,10 @@ test('search results support arrows and edge keys, and legacy copy returns focus
 });
 
 
+// EXPECTED TO CHANGE (16 Oct): "olive dot centred" puts one dot where the two halves of the line meet, and nothing
+// travels between tabs, so the knot, its view transition and these script hooks are gone. Kept as written; the lead decides.
 // Navigation must stretch a travelling knot, never pulse the current tab or a previously hidden one.
-test('the knot stays round on reload or arrival from a hidden tab and clears after the transition', async () => {
+test('the knot stays round on reload or arrival from a hidden tab and clears after the transition', {todo: 'expected to change (16 Oct): no knot travels'}, async () => {
   for (const visible of [true, false]) {
     const env = start();
     const storage = new Map();
@@ -766,7 +768,7 @@ test('the knot stays round on reload or arrival from a hidden tab and clears aft
   }
 });
 
-test('travel between different visible tabs stretches; unavailable storage does not break navigation', () => {
+test('travel between different visible tabs stretches; unavailable storage does not break navigation', {todo: 'expected to change (16 Oct): no knot travels'}, () => {
   const env = start(), storage = new Map();
   env.window.sessionStorage = {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
     removeItem: key => storage.delete(key)};
@@ -1299,4 +1301,44 @@ test('reopening during partial pipe travel resumes its remaining distance withou
   assert.equal(f.markValues().left, 0);
   assertPhysicalTrace(f, 1200);
   assert.equal(f.markValues().state, 'hold');
+});
+
+test('header sizing measures the name and the room beside it, remeasures font swaps and resize, and leaves the scale to CSS', async () => {
+  let measure, fontsReady;
+  const values = {};
+  const env = start({
+    prepare(env) {
+      const mast = env.document.querySelector('.mast');
+      env.brand = h('span', {class: 'brand'});
+      env.nav = h('nav', {class: 'nav'});
+      env.tools = h('span', {class: 'bar-tools'});
+      mast.append(env.brand, env.nav, env.tools);
+      mast.clientWidth = 1440;
+      env.brand.offsetWidth = 400;
+      env.nav.offsetWidth = 180;
+      env.tools.offsetWidth = 74;
+      env.document.classList.add('front');
+      env.document.style = {
+        setProperty: (key, value) => { values[key] = value; },
+        removeProperty: key => { delete values[key]; }};
+      env.document.fonts = {ready: new Promise(resolve => { fontsReady = resolve; }), addEventListener() {}};
+    },
+    configureWindow(window) {
+      window.innerWidth = 1440;
+      window.getComputedStyle = () => ({paddingLeft: '244px', paddingRight: '244px', marginLeft: '18px'});
+      window.ResizeObserver = class { constructor(fn) { measure = fn; } observe() {} };
+    }
+  });
+  // the 952px column, less the tabs, the tools, their 18px margin and the 24px clear
+  assert.equal(values['--hroom'], '656px');
+  assert.equal(values['--hbw'], '401px');
+  assert.equal(values['--h0'], undefined);                 // the scale is CSS arithmetic, never a script value
+  env.brand.offsetWidth = 460; // a fallback face swaps for the loaded one
+  fontsReady(); await flush();
+  assert.equal(values['--hbw'], '461px');
+  env.nav.offsetWidth = 240; measure(); // a longer tab label
+  assert.equal(values['--hroom'], '596px');
+  env.window.innerWidth = 768; env.windowListeners.resize.at(-1)();
+  assert.equal(values['--hroom'], undefined);              // below 1000px the stylesheet gives the room
+  assert.equal(values['--hbw'], '461px');
 });

@@ -915,25 +915,33 @@ function boot(document, window) {
     });
   }
 
-  // The knot stretches only when it travels to a different visible tab. Reloading the one-tab console or
-  // arriving from a phone (where the tab is hidden) keeps the bead round. Storage is optional in private mode.
-  const knotFrom = 'crossfeed-knot-from';
-  function visibleTab() {
-    const at = document.querySelector('.nav a[aria-current]');
-    return at && at.getClientRects().length ? at.getAttribute('href') : 'none';
+  // The front page's name may grow only into the room the tabs and tools leave. The CSS does the sizing
+  // arithmetic from two numbers measured here: the name's own width and the room beside it on desktop. offsetWidth
+  // is the untransformed layout width, so the scale never feeds back into the measurement. Fonts that swap in
+  // and a tab that gets longer are both remeasured, so the name moves rather than overlapping the tabs.
+  const mast = document.querySelector('.mast');
+  const brand = mast?.querySelector('.brand');
+  const nav = mast?.querySelector('.nav');
+  const tools = mast?.querySelector('.bar-tools');
+  if (brand && nav && tools && typeof window.ResizeObserver === 'function') {
+    const measureHeader = () => {
+      const root = document.documentElement;
+      if (!root.classList.contains('front')) return;
+      root.style.setProperty('--hbw', `${brand.offsetWidth + 1}px`);
+      if (window.innerWidth <= 1000) { root.style.removeProperty('--hroom'); return; }   // the tabs have their own row here
+      const style = window.getComputedStyle(mast);
+      const room = mast.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+        - nav.offsetWidth - tools.offsetWidth - parseFloat(window.getComputedStyle(tools).marginLeft)
+        - 24; // the clear space between the name and the tabs
+      root.style.setProperty('--hroom', `${room}px`);
+    };
+    const observer = new window.ResizeObserver(measureHeader);
+    for (const element of [mast, brand, nav, tools]) observer.observe(element);
+    window.addEventListener('resize', measureHeader);
+    document.fonts?.addEventListener?.('loadingdone', measureHeader);
+    document.fonts?.ready.then(measureHeader);
+    measureHeader();
   }
-  if (typeof window.addEventListener === 'function') window.addEventListener('pageswap', event => {
-    if (!event.viewTransition) return;
-    try { window.sessionStorage.setItem(knotFrom, visibleTab()); } catch (_) { /* private mode */ }
-  });
-  if (typeof window.addEventListener === 'function') window.addEventListener('pagereveal', event => {
-    let from = null;
-    try { from = window.sessionStorage.getItem(knotFrom); window.sessionStorage.removeItem(knotFrom); } catch (_) { /* private mode */ }
-    if (!event.viewTransition || (from !== 'none' && from !== visibleTab())) return;
-    document.documentElement.classList.add('knot-arrives');
-    const clear = () => document.documentElement.classList.remove('knot-arrives');
-    event.viewTransition.finished.then(clear, clear);
-  });
 
   // ---- stay current: quota readings age, and another tab or an agent may change a setting ----
   async function refresh() {
