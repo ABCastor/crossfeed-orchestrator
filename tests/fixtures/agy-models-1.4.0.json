@@ -1,0 +1,13 @@
+{
+  "version": "1.4.0",
+  "observed_on": "2026-10-16",
+  "source": "Caller-verified agy models listing, no network in tests",
+  "ids": [
+    "gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high",
+    "gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high",
+    "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+    "claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high",
+    "gpt-oss-120b-medium"
+  ],
+  "excluded": {"gpt-oss-120b-medium": "No demonstrated role advantage over admitted models on the same 3p pool; catalogue visibility alone is insufficient."}
+}

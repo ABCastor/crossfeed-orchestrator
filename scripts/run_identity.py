@@ -26,6 +26,7 @@ FAMILY_BY_ROLE = {
     "hard-reasoning": "reasoning", "judgment": "reasoning", "filter": "extraction",
     "classification": "extraction", "schema": "extraction", "research-scout": "research",
     "research": "research", "scout": "research", "frontend-visual": "visual",
+    "design": "visual", "visual": "visual", "writing": "writing",
     "owned-dispatch": "coding-agent", "audit-retry": "review",
     "long-context": "repo-qa", "audio-video": "visual",
 }

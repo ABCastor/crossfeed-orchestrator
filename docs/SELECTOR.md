@@ -164,3 +164,5 @@ The JSON result includes the chosen option, the top three options ranked by expl
 `policy.selector` also accepts `allowed_pools_by_role`, `stakes_weights`, `high_cost_cap`, `target`, `lambda0`, `families_by_role`, `mode_by_role` and `uncertainty_weight`. Source overrides must supply their assumption text and exactly one anchor per anchored family. See the [example overlay](../examples/access-overlay.example.json).
 
 Synthetic regression tests establish these mechanics. A held-out comparison against fixed policies is still needed to establish whether the selector improves real task outcomes.
+
+Creative roles use distinct evidence: `design`, `visual` and `frontend-visual` map to `visual`; `writing` maps to `writing`. An unmeasured writing cell remains unknown. The AGY admission template ranks Argon first in manual `route` lists as a provisional owner preference; `select` and `dispatch` retain evidence scoring and all hard gates. See [the AGY admission reference](../skill/references/lane-antigravity.md) for current selectors and dated evidence limits.

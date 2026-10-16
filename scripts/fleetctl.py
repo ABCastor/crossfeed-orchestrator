@@ -2412,7 +2412,9 @@ def start_verdict(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
     for where, model, lane in places:
         label = pool_label(where, pools.get(where) or {})
         blocked = model_blocked(roster, runtime, where, model)
-        if blocked == "retired":
+        if lane and lane.get("admission_status") == "retired":
+            why, text = "retired", f"{name} is retired from the {label} roster and can no longer be run."
+        elif blocked == "retired":
             why, text = "retired", f"{name} was retired by its provider on {retired_on(roster, model)} and can no longer be run."
         elif pool_level(runtime, where) == "off":
             why, text = "provider off", f"{label} is set to Off in the {PRODUCT_NAME} console, so {name} cannot start."
@@ -2436,7 +2438,8 @@ def start_verdict(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
             switches = pool_switches(roster, runtime, where)
             order = model_order(roster, where, [model])
             on = [key for key in current_models(roster, where) if switches.get(key)]
-            on.sort(key=lambda key: (abs(order.index(key) - order.index(model)), order.index(key) < order.index(model)))
+            successor = superseded_by(roster, where, model)
+            on.sort(key=lambda key: (key != successor, abs(order.index(key) - order.index(model)), order.index(key) < order.index(model)))
             for key in on:
                 lane = next((item for item in roster.get("lanes", [])
                              if item.get("quota_pool") == where and item.get("model_key") == key
@@ -2550,7 +2553,7 @@ def resolve_effort(
     lane = next((row for row in roster.get("lanes", [])
                  if model in (row.get("lane_id"), row.get("selector"))
                  and (not harness or row.get("harness") == harness)), None)
-    if not lane and harness == "agy" and model.startswith("gemini-") and model.rsplit("-", 1)[-1] in ("low", "medium", "high", "max"):
+    if not lane and harness == "agy" and model.startswith(("gemini-", "claude-")) and model.rsplit("-", 1)[-1] in ("low", "medium", "high", "max"):
         # Explicit levels need not have a separate auto-routing lane. They still
         # belong to the same measured family and use that family's quota pool.
         lane = next((row for row in roster.get("lanes", []) if row.get("harness") == "agy"
@@ -2581,6 +2584,10 @@ def resolve_effort(
     refusal = entry.get("refuse_roles", {}).get(role) or entry.get("refuse_roles", {}).get(f"{band}/{role}")
     if refusal and not explicit:
         raise FleetError(f"{key}/{role}: {refusal}")
+    overrides = entry.get("harness_overrides", {})
+    if not isinstance(overrides, dict) or not isinstance(overrides.get(harness, {}), dict):
+        raise FleetError(f"invalid harness effort overrides for {key}")
+    entry = {**entry, **overrides.get(harness, {})}
     supported = entry["levels"]
     if not harness and len(supported) == 1:
         harness = next(iter(supported))
@@ -2650,6 +2657,11 @@ def effort_problems(roster: dict[str, Any], state_dir: Path, now: dt.datetime | 
         if not isinstance(entry, dict):
             problems.append(f"{key}: missing effort data ({harness})")
             continue
+        overrides = entry.get("harness_overrides", {})
+        if not isinstance(overrides, dict) or not isinstance(overrides.get(harness, {}), dict):
+            problems.append(f"{key}: invalid harness effort overrides ({harness})")
+            continue
+        entry = {**entry, **overrides.get(harness, {})}
         evidence = entry.get("evidence", {})
         if not isinstance(evidence, dict):
             problems.append(f"{key}: invalid effort evidence, expected object")

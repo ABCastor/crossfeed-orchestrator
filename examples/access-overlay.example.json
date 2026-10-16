@@ -58,7 +58,18 @@
       "target": 90,
       "lambda0": 1,
       "lambda_unknown": 0.5,
-      "explore": 0.1
+      "explore": 0.1,
+      "mode_by_role": {
+        "design": "write",
+        "visual": "write",
+        "frontend-visual": "write",
+        "writing": "write"
+      },
+      "families_by_role": {
+        "design": "visual",
+        "visual": "visual",
+        "writing": "writing"
+      }
     },
     "evidence": {
       "sources": {
@@ -212,9 +223,9 @@
       ]
     },
     "antigravity-gemini": {
-      "label": "Antigravity \u00b7 Gemini",
+      "label": "Antigravity · Gemini",
       "plan": {
-        "name": "Example Antigravity \u00b7 Gemini",
+        "name": "Example Antigravity · Gemini",
         "price": null,
         "currency": "USD",
         "billing": "subscription",
@@ -235,9 +246,9 @@
       "exhaustion_behaviour": "HARD FAIL, not degradation: when the cap is hit Antigravity returns RESOURCE_EXHAUSTED (429) with a reset timer, and does not fall back to a lighter model. So EXHAUSTED keeps blocking this pool; treating 100% as 'degraded but usable' would send calls straight into a 429."
     },
     "antigravity-3p": {
-      "label": "Antigravity \u00b7 Claude and GPT",
+      "label": "Antigravity · Claude and GPT",
       "plan": {
-        "name": "Example Antigravity \u00b7 Claude and GPT",
+        "name": "Example Antigravity · Claude and GPT",
         "billing": "subscription",
         "allowance": null,
         "price": null
@@ -399,7 +410,8 @@
       "page_url": "https://artificialanalysis.ai/models/claude-opus-5-5",
       "min_cli": {
         "claude": "2.1.280"
-      }
+      },
+      "lineage": "anthropic"
     },
     "claude-sonnet-5-5": {
       "pool": "claude",
@@ -409,7 +421,8 @@
       "aliases": [
         "sonnet"
       ],
-      "page_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5"
+      "page_url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+      "lineage": "anthropic"
     },
     "claude-sonnet-5": {
       "pool": "claude",
@@ -467,12 +480,13 @@
       "pool": "claude",
       "name": "Haiku",
       "run_as": "haiku",
-      "status": "current",
+      "status": "older",
       "order": 4,
       "aliases": [
         "haiku"
       ],
-      "page_url": "https://artificialanalysis.ai/models/claude-4-5-haiku"
+      "page_url": "https://artificialanalysis.ai/models/claude-4-5-haiku",
+      "superseded_by": "claude-haiku-5-5"
     },
     "claude-fable-5": {
       "pool": "claude",
@@ -489,12 +503,16 @@
     "gemini-3.7-flash": {
       "page_url": "https://artificialanalysis.ai/models/gemini-3-7-flash",
       "superseded_by": "gemini-3.8-flash",
-      "name": "Gemini 3.7 Flash"
+      "name": "Gemini 3.7 Flash",
+      "status": "older",
+      "superseded_on": "2026-10-16"
     },
     "gemini-3.6-flash": {
       "page_url": "https://artificialanalysis.ai/models/gemini-3-6-flash",
-      "superseded_by": "gemini-3.7-flash",
-      "name": "Gemini 3.6 Flash"
+      "superseded_by": "gemini-3.8-flash",
+      "name": "Gemini 3.6 Flash",
+      "status": "older",
+      "superseded_on": "2026-10-16"
     },
     "mimo-v2.6-pro": {
       "name": "MiMo V2.6 Pro",
@@ -507,6 +525,37 @@
       "lineage": "xiaomi",
       "status": "current",
       "pool": "openrouter-mimo"
+    },
+    "gemini-3.1-pro": {
+      "status": "older",
+      "superseded_by": "gemini-4-argon",
+      "superseded_on": "2026-10-16"
+    },
+    "claude-opus-4-6-thinking": {
+      "status": "older",
+      "superseded_by": "claude-opus-5-5",
+      "superseded_on": "2026-10-16"
+    },
+    "claude-sonnet-4-6": {
+      "status": "older",
+      "superseded_by": "claude-sonnet-5-5",
+      "superseded_on": "2026-10-16"
+    },
+    "gemini-4-argon": {
+      "name": "Gemini 4 Argon",
+      "status": "current",
+      "lineage": "google"
+    },
+    "claude-haiku-5-5": {
+      "pool": "claude",
+      "name": "Haiku 5.5",
+      "status": "current",
+      "aliases": [
+        "haiku"
+      ],
+      "min_cli": {
+        "claude": "2.1.293"
+      }
     }
   },
   "routing": {
@@ -587,7 +636,7 @@
           "opencode-go-glm-5.2",
           "antigravity-gemini-flash-38-medium",
           "opencode-go-deepseek-v4-pro",
-          "antigravity-3p-opus"
+          "antigravity-claude-opus-5-5-high"
         ],
         "conserve": [
           "chatgpt",
@@ -595,12 +644,12 @@
           "antigravity-gemini-flash-38-medium",
           "opencode-go-glm-5.2",
           "opencode-go-deepseek-v4-pro",
-          "antigravity-3p-opus"
+          "antigravity-claude-opus-5-5-high"
         ],
         "critical": [
           "chatgpt",
           "antigravity-gemini-flash-38-medium",
-          "antigravity-3p-opus",
+          "antigravity-claude-opus-5-5-high",
           "opencode-go-deepseek-v4-flash"
         ]
       },
@@ -668,17 +717,20 @@
       },
       "frontend-visual": {
         "quality_first": [
+          "antigravity-gemini-4-argon-high",
           "chatgpt",
           "opencode-go-kimi-k3",
           "opencode-go-qwen3.7-plus",
           "opencode-go-mimo-v2.5"
         ],
         "conserve": [
+          "antigravity-gemini-4-argon-high",
           "chatgpt",
           "opencode-go-qwen3.7-plus",
           "opencode-go-mimo-v2.5"
         ],
         "critical": [
+          "antigravity-gemini-4-argon-medium",
           "chatgpt",
           "antigravity-gemini-flash-38-medium",
           "opencode-go-mimo-v2.5"
@@ -723,6 +775,39 @@
           "chatgpt",
           "antigravity-gemini-flash-38-medium",
           "opencode-go-deepseek-v4-flash"
+        ]
+      },
+      "design": {
+        "quality_first": [
+          "antigravity-gemini-4-argon-high"
+        ],
+        "conserve": [
+          "antigravity-gemini-4-argon-high"
+        ],
+        "critical": [
+          "antigravity-gemini-4-argon-medium"
+        ]
+      },
+      "visual": {
+        "quality_first": [
+          "antigravity-gemini-4-argon-high"
+        ],
+        "conserve": [
+          "antigravity-gemini-4-argon-high"
+        ],
+        "critical": [
+          "antigravity-gemini-4-argon-medium"
+        ]
+      },
+      "writing": {
+        "quality_first": [
+          "antigravity-gemini-4-argon-high"
+        ],
+        "conserve": [
+          "antigravity-gemini-4-argon-high"
+        ],
+        "critical": [
+          "antigravity-gemini-4-argon-medium"
         ]
       }
     },
@@ -1252,7 +1337,7 @@
       "provider": "antigravity",
       "selector": "gemini-3.6-flash-high",
       "access_status": "verified",
-      "admission_status": "active",
+      "admission_status": "retired",
       "verified_at": null,
       "quality_tier": "standard",
       "roles": [],
@@ -1284,7 +1369,7 @@
       "provider": "antigravity",
       "selector": "gemini-3.1-pro-high",
       "access_status": "verified",
-      "admission_status": "active",
+      "admission_status": "retired",
       "verified_at": null,
       "quality_tier": "standard",
       "roles": [],
@@ -1316,12 +1401,10 @@
       "provider": "antigravity",
       "selector": "claude-opus-4-6-thinking",
       "access_status": "verified",
-      "admission_status": "active",
+      "admission_status": "retired",
       "verified_at": null,
       "quality_tier": "strong",
-      "roles": [
-        "review"
-      ],
+      "roles": [],
       "capabilities": {
         "input": [
           "text"
@@ -1350,7 +1433,7 @@
       "provider": "antigravity",
       "selector": "claude-sonnet-4-6",
       "access_status": "verified",
-      "admission_status": "active",
+      "admission_status": "retired",
       "verified_at": null,
       "quality_tier": "strong",
       "roles": [],
@@ -1414,7 +1497,7 @@
       "provider": "antigravity",
       "selector": "gemini-3.7-flash-high",
       "access_status": "verified",
-      "admission_status": "active",
+      "admission_status": "retired",
       "allowed_modes": [
         "read-only",
         "write"
@@ -1446,7 +1529,7 @@
       "provider": "antigravity",
       "selector": "gemini-3.7-flash-medium",
       "access_status": "verified",
-      "admission_status": "active",
+      "admission_status": "retired",
       "allowed_modes": [
         "read-only",
         "write"
@@ -1699,6 +1782,327 @@
       "retries": 0,
       "timeout_s": null,
       "notes": "Explicit paid opt-in only. Public/synthetic prompt-contained text; no tools or filesystem. Live catalog and daily reservations checked before each call."
+    },
+    {
+      "lane_id": "antigravity-gemini-4-argon-low",
+      "model_key": "gemini-4-argon",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-4-argon-low",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "design",
+        "visual",
+        "frontend-visual",
+        "writing"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-4-argon-medium",
+      "model_key": "gemini-4-argon",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-4-argon-medium",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "design",
+        "visual",
+        "frontend-visual",
+        "writing"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-gemini-4-argon-high",
+      "model_key": "gemini-4-argon",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "gemini-4-argon-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "design",
+        "visual",
+        "frontend-visual",
+        "writing"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-gemini",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-claude-opus-5-5-low",
+      "model_key": "claude-opus-5-5",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-opus-5-5-low",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-claude-opus-5-5-medium",
+      "model_key": "claude-opus-5-5",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-opus-5-5-medium",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-claude-opus-5-5-high",
+      "model_key": "claude-opus-5-5",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-opus-5-5-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-claude-sonnet-5-5-low",
+      "model_key": "claude-sonnet-5-5",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-sonnet-5-5-low",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-claude-sonnet-5-5-medium",
+      "model_key": "claude-sonnet-5-5",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-sonnet-5-5-medium",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
+    },
+    {
+      "lane_id": "antigravity-claude-sonnet-5-5-high",
+      "model_key": "claude-sonnet-5-5",
+      "harness": "agy",
+      "provider": "antigravity",
+      "selector": "claude-sonnet-5-5-high",
+      "access_status": "verified",
+      "admission_status": "active",
+      "verified_at": null,
+      "quality_tier": "frontier",
+      "roles": [
+        "review",
+        "hard-reasoning"
+      ],
+      "capabilities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ],
+        "native_search": false
+      },
+      "allowed_modes": [
+        "read-only",
+        "write"
+      ],
+      "quota_pool": "antigravity-3p",
+      "max_parallel": 1,
+      "max_tasks_per_run": 1,
+      "timeout_s": 1500,
+      "retries": 0,
+      "notes": "AGY 1.4.0 catalogue controls. Caller canaries: Argon high and Opus high returned OK; other levels and Sonnet are catalogue-only. No long-write or quality trial claimed.",
+      "evidence_confidence": "example, not deployment evidence"
     }
   ],
   "catalogue_only": [
@@ -1855,7 +2259,7 @@
           "workers": [
             {
               "id": "opus-critic",
-              "lane_id": "antigravity-3p-opus",
+              "lane_id": "antigravity-claude-opus-5-5-high",
               "angle": "Give the single strongest objection a different model family would raise."
             },
             {
@@ -2162,6 +2566,11 @@
           "high",
           "xhigh",
           "max"
+        ],
+        "agy": [
+          "low",
+          "medium",
+          "high"
         ]
       },
       "default": "high",
@@ -2178,6 +2587,26 @@
         "status": "unmeasured",
         "source": "Illustrative policy. Record the controls and evidence you verified.",
         "read_on": null
+      },
+      "harness_overrides": {
+        "agy": {
+          "default": "high",
+          "knee": "high",
+          "by_role": {},
+          "by_band": {
+            "critical": {
+              "design": "medium",
+              "visual": "medium",
+              "frontend-visual": "medium",
+              "writing": "medium"
+            }
+          },
+          "evidence": {
+            "status": "unmeasured",
+            "read_on": "2026-10-16",
+            "source": "agy 1.4.0 models, caller-verified catalogue"
+          }
+        }
       }
     },
     "claude-sonnet-5-5": {
@@ -2188,6 +2617,11 @@
           "high",
           "xhigh",
           "max"
+        ],
+        "agy": [
+          "low",
+          "medium",
+          "high"
         ]
       },
       "default": "xhigh",
@@ -2204,6 +2638,26 @@
         "status": "unmeasured",
         "source": "Illustrative policy. Record the controls and evidence you verified.",
         "read_on": null
+      },
+      "harness_overrides": {
+        "agy": {
+          "default": "high",
+          "knee": "high",
+          "by_role": {},
+          "by_band": {
+            "critical": {
+              "design": "medium",
+              "visual": "medium",
+              "frontend-visual": "medium",
+              "writing": "medium"
+            }
+          },
+          "evidence": {
+            "status": "unmeasured",
+            "read_on": "2026-10-16",
+            "source": "agy 1.4.0 models, caller-verified catalogue"
+          }
+        }
       }
     },
     "claude-fable-5-1": {
@@ -2648,6 +3102,63 @@
       "evidence": {
         "status": "unmeasured",
         "source": "Illustrative policy. Record the controls and evidence you verified.",
+        "read_on": null
+      }
+    },
+    "gemini-4-argon": {
+      "levels": {
+        "agy": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "default": "high",
+      "knee": "high",
+      "by_role": {},
+      "evidence": {
+        "status": "unmeasured",
+        "read_on": "2026-10-16",
+        "source": "agy 1.4.0 models, caller-verified catalogue",
+        "note": "High is provisional, not a measured knee."
+      },
+      "recheck": "New AGY catalogue, transport failure, or local fit trials.",
+      "harness_overrides": {
+        "agy": {
+          "default": "high",
+          "knee": "high",
+          "by_role": {},
+          "by_band": {
+            "critical": {
+              "design": "medium",
+              "visual": "medium",
+              "frontend-visual": "medium",
+              "writing": "medium"
+            }
+          },
+          "evidence": {
+            "status": "unmeasured",
+            "read_on": "2026-10-16",
+            "source": "agy 1.4.0 models, caller-verified catalogue"
+          }
+        }
+      }
+    },
+    "claude-haiku-5-5": {
+      "levels": {
+        "claude": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "default": "medium",
+      "knee": "medium",
+      "evidence": {
+        "status": "unmeasured",
+        "source": "Illustrative controls; verify your installed CLI.",
         "read_on": null
       }
     }

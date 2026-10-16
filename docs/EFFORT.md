@@ -28,19 +28,21 @@ The shipped effort blocks are examples. They carry no deployment evidence or ben
 
 Resolution uses a supported explicit override first, then `by_band.<band>.<role>`, `by_role.<role>`, and `default`. A role or `<band>/<role>` in `refuse_roles` refuses an implicit dispatch; an explicit supported override bypasses that effort policy. Console model and provider switches still apply.
 
+When a model has different controls on different tools, `harness_overrides.<harness>` can override its `default`, `knee`, `by_role`, `by_band` and `evidence` at resolution time. For example, AGY Claude 5.5 exposes low/medium/high while native Claude also exposes xhigh/max. AGY uses an unmeasured high default without changing native Claude policy or refusal rules. Explicit caller levels still validate against the harness’s declared levels.
+
 ## Wrapper controls
 
 | Wrapper | Role flag | Caller override | CLI control |
 |---|---|---|---|
 | Codex | `--role` | `--reasoning`, or `-c model_reasoning_effort=...` | `-c model_reasoning_effort=...` |
 | Claude | `--role` | `--effort` | `--effort` |
-| Antigravity | `--role` | `--effort`, or a named Gemini selector suffix | selector suffix and `--effort` |
+| Antigravity | `--role` | `--effort`, or a named Gemini or Claude selector suffix | selector suffix and `--effort` |
 | OpenCode | `--role`, or `--effort-role` for a named lane | `--variant` | `--variant` |
 | Copilot, OpenRouter | service chooses | none | one stderr notice |
 
 Codex resolves `-c model=...` before a console stand-in. `--model` wins over that config, and the last config model wins over earlier ones. `--reasoning` wins over config effort. The resolved effort flag is appended last. If no model is named, Crossfeed reads the configured model, then `policy.effort_defaults.codex` as a fallback. Stand-ins resolve their own role policy and clamp caller levels to their supported ceiling.
 
-Fanout forwards `role` and `effort` to Claude, Codex and Antigravity, and `role` and `variant` to OpenCode. A Codex write task without a role uses `builder`; read-only tasks use `default`. Automatically routed Gemini selectors are remapped to the table's level before admission and capacity checks. An explicitly named model or lane retains its suffix unless `--effort` overrides it, and leases stay on that model's pool.
+Fanout forwards `role` and `effort` to Claude, Codex and Antigravity, and `role` and `variant` to OpenCode. A Codex write task without a role uses `builder`; read-only tasks use `default`. Automatically routed AGY selectors are remapped to the table's level before admission and capacity checks. An explicitly named model or lane retains its suffix unless `--effort` overrides it, and leases stay on that model's pool.
 
 Missing effort data refuses a wrapper launch. Unsupported explicit levels refuse, including for models without controls. An entry with an empty supported-level list must record `default` and `knee` as `provider-default` or `service-chosen`. OpenCode also logs a provider-default exception when an implicit table level is unsupported; doctor flags that invalid policy. An explicit supported level can run an unlisted direct Codex or Claude model, with caller provenance.
 

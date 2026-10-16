@@ -146,7 +146,7 @@ _model_lane() {
     printf '%s\n' "$candidate"; return
   fi
   case "$selector" in
-    gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max)
+    gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max|claude-*-low|claude-*-medium|claude-*-high)
       for level in medium high low max; do
         if candidate="$("$HERE/roster.sh" lookup agy "${selector%-*}-$level" 2>/dev/null)" &&
            "$HERE/roster.sh" check-lane "$candidate" read-only >/dev/null 2>&1; then
@@ -171,7 +171,7 @@ if [ -n "$LANE" ]; then
     MODEL="$lane_model"
   elif [ "$MODEL" != "$lane_model" ]; then
     case "$MODEL" in
-      gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max)
+      gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max|claude-*-low|claude-*-medium|claude-*-high)
         [ "${MODEL%-*}" = "${lane_model%-*}" ] || _usage_error "model $MODEL does not belong to lane $LANE";;
       *) _usage_error "model $MODEL does not belong to lane $LANE";;
     esac
@@ -185,16 +185,16 @@ fi
 # caller's named model/lane level, while automatically routed models use the table.
 if [ -z "$EFFORT" ] && { [ -n "$CALLER_MODEL" ] || [ -n "$CALLER_LANE" ]; }; then
   case "$MODEL" in
-    gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max) EFFORT="${MODEL##*-}";;
+    gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max|claude-*-low|claude-*-medium|claude-*-high) EFFORT="${MODEL##*-}";;
   esac
 fi
 effort_args=( effort "$MODEL" "${ROLE:-default}" --harness agy --explain )
 [ -z "$EFFORT" ] || effort_args+=( --level "$EFFORT" )
 effort_row="$("$HERE/fleetctl.py" "${effort_args[@]}")" || _usage_error "cannot resolve AGY effort"
 IFS=$'\t' read -r EFFORT _effort_model _effort_why <<<"$effort_row"
-# Gemini's selector is the level control, and must agree with --effort.
+# AGY's selector is the level control, and must agree with --effort.
 case "$MODEL" in
-  gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max)
+  gemini-*-low|gemini-*-medium|gemini-*-high|gemini-*-max|claude-*-low|claude-*-medium|claude-*-high)
     _old_model="$MODEL"; MODEL="${MODEL%-*}-$EFFORT"
     if [ -n "$LANE" ] && [ "$MODEL" != "$_old_model" ]; then
       LANE="$(_model_lane "$MODEL")" || _usage_error "no admitted AGY model family for $MODEL"

@@ -15,7 +15,7 @@ import statistics
 import urllib.request
 from pathlib import Path
 
-FAMILIES = ("coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual")
+FAMILIES = ("coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual", "writing")
 try:
     from run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
 except ModuleNotFoundError:

@@ -30,7 +30,7 @@ DEFAULTS = {"target": 90.0, "lambda0": 1.0, "mu": .001, "explore": .1,
             "uncertainty_weight": 1.0,
             "high_cost_cap": 1.0,
             "stakes_weights": {"low": 1.0, "normal": 2.0, "high": 40.0}}
-FAMILIES = {"coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual"}
+FAMILIES = {"coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
 WRAPPERS = {name: name + "-agent.sh" for name in
             ("codex", "claude", "opencode", "agy", "copilot", "openrouter", "pi")}
 WRAPPERS["chatgpt-chat"] = "chatgpt-agent.sh"
