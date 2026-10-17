@@ -1,6 +1,6 @@
 # Routing business rules
 
-Scope: the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, and local fit-evidence imports. This ledger claims conformance for the rules listed — it is NOT a claim of repo-wide coverage.
+Scope: the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, local fit-evidence imports, and the proposed OpenCode Go value-routing policy below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
 
 ## BR-MIMO-001 — MiMo paid calls require explicit opt-in [DECIDED · owner instruction supplied as 13 Oct 2026]
 
@@ -37,3 +37,11 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Clarification, 16 Oct 2026, supplied infrastructure-import correction: live imports require worker exit 0 with a boolean task-check verdict; execution/check errors are excluded. Infrastructure exits, including 4, 5, 8, 125 and 127, unknown nonzero exits and missing exit codes, are recorded separately with reasons and never train quality or telemetry. Exit 124 remains a failed trial under the main campaign's `grid/main-2026-10-03/PREREG.md` amendment at 00:45 CEST (“a timeout is a fail”); its 02:30 amendment explicitly drops quota refusals with exit 4. Source retraction removes only imported benchmark provenance from the named original paths, preserving unrelated ledger bytes; repeated retract/import operations are idempotent.
 - Additional implemented-by: `bench/to_evidence.py:exclusion_reason`, `scripts/fleetctl.py:build_parser`.
 - Additional tested-by: `tests/test_benchmarks.py:BenchmarksTests.test_infrastructure_exits_are_separate_from_judged_trials`, `test_retract_legacy_then_reimport_preserves_unrelated_bytes`.
+
+## BR-OPENCODE-GO-001 — Route Go calls through the value shortlist [PROPOSED · owner direction supplied 17 Oct 2026]
+
+- RULE: Keep only MiMo V2.6 Flash, DeepSeek V4.1 Flash, Qwen3.8 Flash, GLM-5.3 Flash, and MiMo V2.6 Pro in OpenCode Go automatic routing. Assign each model only its proposed lane roles and remove every other OpenCode Go lane from automatic role bands. Preserve every lane and its access/admission/switch state so other models remain explicitly addressable where those existing gates allow. The current proposed role map is in `scripts/patch_opencode_go_roles.py:SHORTLIST` and the order is in `ROUTE_ORDER`; this policy remains proposed until the owner applies the generated patch.
+- Authority: the owner's 17 Oct 2026 instruction prioritizes cheap Chinese models with sufficient Artificial Analysis quality, asks for independent ranking, and explicitly requests a guarded patch without applying it to the live overlay. This shortlist is the resulting recommendation, not a benchmark claim about the subscribed serving route.
+- Implemented-by: `scripts/patch_opencode_go_roles.py:migrate`.
+- Tested-by: `tests/test_opencode_value.py:OpenCodeValuePatchTests.test_migration_is_idempotent_and_only_routes_shortlisted_go_models`, `test_shortlist_routes_automatically_and_nonshortlist_stays_explicit`, `test_dry_run_writes_patch_validates_candidate_and_preserves_source_bytes`, `test_apply_on_temp_overlay_creates_backup_and_validates_result`, `test_failed_post_apply_validation_restores_the_backup`, and `test_symlink_source_is_refused_without_changing_target`.
+- Review when: the owner changes the allowed pool spend, AA quality or price inputs change enough to alter the shortlist, or OpenCode Go changes model availability/route semantics.
