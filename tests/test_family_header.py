@@ -9,8 +9,10 @@ olive, the owner's selected knot and person's line. Motion was recorded side by 
 the rules and the arithmetic that produce it.
 
 The owner's 16 October request changed four things these checks encoded: the nav has two tabs, Providers and
-Benchmarks; the nav and the name never touch; the line is terracotta then teal in equal halves with the olive dot
-centred; the tab icon has no plate. A check that one of those contradicted is adapted where it stands, and says why.
+Benchmarks; the nav and the name never touch; the tab icon has no plate. The equal-halves rule it also asked for
+belongs to the README signatures, not this header, so the line is terracotta from its left end to the selected
+tab's centre and teal after, the olive dot rides that knot under the selected tab and follows it, and the selected
+tab's label is underlined in olive. A check that one of those contradicted is adapted where it stands, and says why.
 """
 
 import math
@@ -118,17 +120,24 @@ class FamilyHeaderTests(unittest.TestCase):
         self.assertIn('<i class="here" aria-hidden="true"></i>', render())
         self.assertIn('<span class="tl" data-t="Providers">Providers</span>', render())
 
-    def test_the_olive_knot_is_centred_on_the_persons_line(self):
-        # Adapted (16 Oct): the olive dot sits where the two halves of the line meet, not on the selected tab, and
-        # terracotta no longer runs from the gutter to a tab, so the halves are one equal gradient.
+    def test_the_olive_knot_follows_the_selected_tab_on_the_line(self):
+        # The olive dot rides the line directly under the current tab and follows it; terracotta runs from the
+        # column's left edge to that tab's centre, teal after. The anchor fallbacks keep equal halves without it.
         self.assertIn("--between:#667D2F", CSS)
         knot = rule(V28, ".mast .here")
         self.assertEqual(knot["background"], "var(--between)")
         self.assertEqual((knot["width"], knot["height"], knot["border-radius"]), ("8px", "8px", "50%"))
         self.assertEqual(knot["box-shadow"], "0 0 0 2px var(--paper)")
-        self.assertEqual((knot["left"], knot["top"]), ("calc(50% - 4px)", "calc(100% + var(--line-w) / 2 - 4px)"))
-        self.assertNotIn(".nav a[aria-current]::after", CSS)
-        self.assertNotIn("anchor-name", CSS)
+        self.assertEqual((knot["left"], knot["top"]),
+                         ("calc(anchor(--here center, 50%) - 4px)", "calc(100% + var(--line-w) / 2 - 4px)"))
+        self.assertEqual(rule(CSS, ".nav a[aria-current]")["anchor-name"], "--here")
+        line = rule(V28, ".mast::before")
+        self.assertEqual((line["top"], line["left"], line["right"], line["height"], line["background"]),
+                         ("100%", "var(--line-x0,0px)", "anchor(--here center,50%)", "var(--line-w)", "var(--human)"))
+        self.assertIn("right:50%;right:anchor(--here center,50%)", V28)
+        self.assertEqual(rule(V28, ".mast:has(> .here)::after")["background-image"],
+                         "linear-gradient(var(--machine),var(--machine))")
+        self.assertEqual(rule(HELD, ".mast")["--line-x0"], "var(--gut)")
         self.assertNotIn(".mast .here{display:none}", V28)     # the dot stands on a phone too
         self.assertEqual((ROOT["--line-l"], ROOT["--line-r"]), ("var(--human)", "var(--machine)"))
 
@@ -185,7 +194,7 @@ class FamilyHeaderTests(unittest.TestCase):
     def test_every_part_rides_up_with_the_page_on_one_range_one_to_one_then_holds(self):
         riders = re.search(r"\n  ([^{\n]+)\{animation:mast-ride linear forwards;animation-timeline:scroll\(root\);"
                            r"animation-range:0 var\(--travel\)\}", HELD).group(1)
-        self.assertEqual(riders.split(","), [".mast .brand", ".mast .nav", ".mast .bar-tools", ".mast .here", ".mast::after", ".find-panel", ".settings-panel"])
+        self.assertEqual(riders.split(","), [".mast .brand", ".mast .nav", ".mast .bar-tools", ".mast .here", ".mast::before", ".mast::after", ".find-panel", ".settings-panel"])
         # One keyframe, one range, nothing else moves: no part may start later, last longer or run on its own timeline
         # (the old header eased the name over one range and faded a second name in over another: scattered).
         self.assertEqual(HELD.count("animation:"), 1)
@@ -304,7 +313,7 @@ class FamilyHeaderTests(unittest.TestCase):
 
     def test_narrow_header_uses_intrinsic_height_and_its_own_tab_row(self):
         narrow = CSS[CSS.index('.mast{position:relative;height:auto;'):]
-        self.assertIn('.mast{position:relative;height:auto;padding-left:0;padding-right:0;row-gap:calc(24px + var(--hE))}', narrow)
+        self.assertIn('.mast{position:relative;height:auto;padding-left:0;padding-right:0;row-gap:calc(24px + var(--hE));--line-x0:0px}', narrow)
         self.assertIn('.mast .nav{margin-left:0;order:-1;flex-basis:100%}', narrow)
         self.assertIn('main{padding-top:0}', narrow)
         self.assertIn('.find-panel,.settings-panel{right:0;width:min(25rem,100%)}', narrow)
@@ -315,25 +324,25 @@ class FamilyHeaderTests(unittest.TestCase):
         self.assertIn('@keyframes mast-ride{to{translate:0 calc(-1 * var(--travel));scale:1}}', CSS)
         self.assertIn('right:var(--gut);width:min(25rem,100% - 2 * var(--gut))', CSS)
 
-    def test_equal_halves_share_one_painted_layer(self):
+    def test_the_line_is_terracotta_to_the_knot_then_teal_with_an_equal_halves_fallback(self):
         self.assertIn('linear-gradient(90deg,var(--line-l) 0 50%,var(--line-r) 50%)', CSS)
         self.assertIn('--line-l:var(--human);--line-r:var(--machine)', CSS)
-        self.assertNotIn('anchor(--here', CSS)
-        self.assertNotIn('.mast:has(> .here)::after', CSS)
+        self.assertIn('anchor(--here', CSS)
+        self.assertIn('.mast:has(> .here)::after', CSS)
         self.assertNotIn('view-transition-name:mast-here', CSS)
         self.assertNotIn('view-transition-name:mast-current', CSS)
 
-    def test_olive_dot_is_centred_and_rides_with_the_rule(self):
+    def test_olive_dot_follows_the_selected_tab_and_rides_with_the_rule(self):
         dot = re.search(r'\.mast \.here\{([^}]+)\}', CSS).group(1)
-        for declaration in ['left:calc(50% - 4px)', 'width:8px', 'height:8px',
+        for declaration in ['left:calc(anchor(--here center, 50%) - 4px)', 'width:8px', 'height:8px',
                             'background:var(--between)', 'box-shadow:0 0 0 2px var(--paper)',
                             'top:calc(100% + var(--line-w) / 2 - 4px)']:
             self.assertIn(declaration, dot)
-        self.assertIn('.mast .here,.mast::after', CSS)
+        self.assertIn('.mast .here,.mast::before,.mast::after', CSS)
 
     def test_tab_selection_keeps_accessible_and_visible_indication(self):
         self.assertIn('aria-current="page"', console._masthead())
-        self.assertIn('text-decoration-color:var(--human);text-underline-offset:6px', CSS)
+        self.assertIn('text-decoration-color:var(--between);text-underline-offset:6px', CSS)
         self.assertIn('content:attr(data-t) / ""', CSS)
         self.assertIn('.nav a[aria-current] .tl{font-weight:700}', CSS)
 

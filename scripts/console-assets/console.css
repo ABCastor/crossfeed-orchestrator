@@ -42,7 +42,7 @@ body{overflow-x:clip}
 .nav{margin-left:auto;display:flex;align-items:flex-end;gap:1.1rem;font-size:14px;font-weight:400;letter-spacing:.01em}
 .nav a{position:relative;display:block;padding:14px 0 10px;margin:-14px 0 -10px;line-height:1;text-box:trim-both cap alphabetic;color:var(--tab)}  /* padding widens the target to 33px and the negative margin gives the space back, so the baseline stays on the name's */
 .nav a:hover{color:var(--ink);text-decoration:none}
-.nav a[aria-current]{color:var(--ink)}
+.nav a[aria-current]{color:var(--ink);anchor-name:--here}
 .nav .tl{display:inline-flex;flex-direction:column;align-items:center}
 .nav .tl::after{content:attr(data-t) / "";height:0;overflow:hidden;visibility:hidden;font-weight:700;pointer-events:none}
 .nav a[aria-current] .tl{font-weight:700}
@@ -436,7 +436,7 @@ h1{margin-top:calc(17px + var(--line-w))}
   @media (prefers-reduced-motion:reduce){:root.front{--h0:1}}   /* no shrink to watch: the name at its size */
 
   html{scroll-padding-top:calc(var(--mast-stuck) + 1rem)}   /* anchors and search jumps land below the held header */
-  .mast{position:fixed;top:0;left:0;right:0;width:auto;height:var(--mast-h);margin:0;padding-left:var(--gut);padding-right:var(--gut);align-content:flex-end}   /* where a browser cannot trim the name to its capitals, the row overflows upwards, never under the line */
+  .mast{position:fixed;top:0;left:0;right:0;width:auto;height:var(--mast-h);margin:0;padding-left:var(--gut);padding-right:var(--gut);align-content:flex-end;--line-x0:var(--gut)}   /* where a browser cannot trim the name to its capitals, the row overflows upwards, never under the line */
   .mast::after{background-size:calc(100% - 2 * var(--gut)) var(--line-w),auto}   /* the paper edge to edge, the line the column's width */
   main{padding-top:var(--mast-h)}   /* the page starts where the header's line is */
   .find-panel,.settings-panel{right:var(--gut);width:min(25rem,100% - 2 * var(--gut))}
@@ -447,23 +447,27 @@ h1{margin-top:calc(17px + var(--line-w))}
   @media (max-width:680px){.mast .bar-tools{translate:0 calc(10px * (1 - var(--h0)))}}
 
   /* The ride: one keyframe, one range, for every part. */
-  .mast .brand,.mast .nav,.mast .bar-tools,.mast .here,.mast::after,.find-panel,.settings-panel{animation:mast-ride linear forwards;animation-timeline:scroll(root);animation-range:0 var(--travel)}
+  .mast .brand,.mast .nav,.mast .bar-tools,.mast .here,.mast::before,.mast::after,.find-panel,.settings-panel{animation:mast-ride linear forwards;animation-timeline:scroll(root);animation-range:0 var(--travel)}
 }
 @keyframes mast-ride{to{translate:0 calc(-1 * var(--travel));scale:1}}
 
-/* Both colours are painted by the same gradient on the same moving layer. The olive
-   dot is fixed to its centre, independent of the current tab, title and font metrics. */
-.mast .here{position:absolute;top:calc(100% + var(--line-w) / 2 - 4px);left:calc(50% - 4px);width:8px;height:8px;border-radius:50%;background:var(--between);box-shadow:0 0 0 2px var(--paper);pointer-events:none}
-/* The selected tab: bold and ink, and underlined in terracotta, now that the olive dot marks the centre rather than a tab. */
-.nav a[aria-current]{text-decoration:underline;text-decoration-color:var(--human);text-underline-offset:6px}
+/* The person's terracotta runs from the column's left edge to the selected tab's centre, and teal the rest of
+   the way, on the same 2px line. The olive dot is the knot where they meet: it rides the line directly under the
+   selected tab, and follows it. The anchor fallbacks paint equal halves with the dot centred, so a browser without
+   anchor positioning still reads the header. */
+.mast .here{position:absolute;top:calc(100% + var(--line-w) / 2 - 4px);left:calc(anchor(--here center, 50%) - 4px);width:8px;height:8px;border-radius:50%;background:var(--between);box-shadow:0 0 0 2px var(--paper);pointer-events:none}
+.mast::before{content:"";position:absolute;top:100%;left:var(--line-x0,0px);right:50%;right:anchor(--here center,50%);height:var(--line-w);background:var(--human);pointer-events:none}
+.mast:has(> .here)::after{background-image:linear-gradient(var(--machine),var(--machine))}
+/* The selected tab: bold and ink, and underlined in olive — the knot's colour, the owner's mark. */
+.nav a[aria-current]{text-decoration:underline;text-decoration-color:var(--between);text-underline-offset:6px}
 
 /* Below desktop size the header is in the flow: the tabs take a row above the name, which keeps its foot on the line
    with the lens and the toggle beside it. Intrinsic height takes a fallback face; nothing rides or clips. */
 @media (max-width:1000px){
-  .mast{position:relative;height:auto;padding-left:0;padding-right:0;row-gap:calc(24px + var(--hE))}   /* the column's own gutter is the page's */
+  .mast{position:relative;height:auto;padding-left:0;padding-right:0;row-gap:calc(24px + var(--hE));--line-x0:0px}   /* the column's own gutter is the page's; the line starts at the mast's own left */
   .mast .nav{margin-left:0;order:-1;flex-basis:100%}
   .mast .bar-tools{margin-left:auto}
-  .mast .brand,.mast .nav,.mast .bar-tools,.mast .here,.mast::after,.find-panel,.settings-panel{animation:none}
+  .mast .brand,.mast .nav,.mast .bar-tools,.mast .here,.mast::before,.mast::after,.find-panel,.settings-panel{animation:none}
   .mast::after{background-size:100% var(--line-w),auto}
   main{padding-top:0}
   .find-panel,.settings-panel{right:0;width:min(25rem,100%)}
