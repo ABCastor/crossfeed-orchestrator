@@ -307,6 +307,17 @@ oc_data_home="$(mktemp -d "$oc_homes_root/run.XXXXXXXX")"
 mkdir -m 700 "$oc_data_home/opencode"
 cp "$auth_source" "$oc_data_home/opencode/auth.json"
 chmod 600 "$oc_data_home/opencode/auth.json"
+# Since Oct 2026 OpenCode Go signs in with a console account (`opencode console login`), kept in
+# OpenCode's database, and its API keys expire. Each worker gets a private, consistent snapshot of
+# that database so the account sign-in works without sharing the owner's live file.
+db_source="$HOME/.local/share/opencode/opencode.db"
+if [ -f "$db_source" ] && command -v sqlite3 >/dev/null 2>&1; then
+  if sqlite3 "file:$db_source?mode=ro" ".backup '$oc_data_home/opencode/opencode.db'" 2>/dev/null; then
+    chmod 600 "$oc_data_home/opencode/opencode.db"
+  else
+    echo "opencode-agent: WARNING could not snapshot the OpenCode account database; console sign-in unavailable to this worker" >&2
+  fi
+fi
 if [ "$DIRECT" = "1" ]; then
   direct_config_dir="$(mktemp -d)"
   cat >"$direct_config_dir/opencode.json" <<'JSON'
