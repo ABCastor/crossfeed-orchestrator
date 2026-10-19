@@ -1,6 +1,14 @@
 # Routing business rules
 
-Scope: the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, local fit-evidence imports, and the proposed OpenCode Go value-routing policy below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
+Scope: the Benchmarks page and local admission-check policy, the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, local fit-evidence imports, and the proposed OpenCode Go value-routing policy below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
+
+## BR-BENCH-001 — Outside rankings guide job picks; local checks stay small [DECIDED · owner instruction supplied 19 Oct 2026]
+
+- RULE: Do not start new broad local benchmark campaigns. For each newly admitted model, run one small admission check using a handful of tasks on cheap lanes and keep a receipt. Run more local benchmarking only when the owner asks. Keep existing local results visible and labelled as ours.
+- Authority: the owner agreed on 17–19 Oct 2026 to rely more on outside rankings and stop broad local tests, with one small check when a new model arrives. The check shape comes from the supplied task brief.
+- implemented-by: `scripts/benchmark_page.py:render_body` (outside rankings first and small-admission-check copy) and `scripts/benchmark_page.py:nerd_panel` (outside readings before local results).
+- tested-by: `tests/test_business_benchmark_policy.py:BenchmarkPolicyTests.test_admission_rule_is_documented_and_referenced` and `tests/test_benchmark_page.py:JobTests.test_each_job_pick_has_rankings_or_says_none`.
+- Review when: the owner asks for more local benchmarking or changes the admission-check shape or receipt.
 
 ## BR-MIMO-001 — MiMo paid calls require explicit opt-in [DECIDED · owner instruction supplied as 13 Oct 2026]
 

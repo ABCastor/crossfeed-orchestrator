@@ -608,6 +608,10 @@ h1{margin-top:calc(17px + var(--line-w))}
 .job-pick:nth-child(2)>small{color:var(--quiet)}
 .job-pick p{font:400 14px/1.48 var(--face);margin:.1rem 0 0}
 .job-pick .cost-feel{font-size:13px;color:var(--quiet)}
+.pick-sources,.job-reference{font:400 12px/1.5 var(--face);color:var(--quiet)}
+.pick-sources a,.job-reference a{text-underline-offset:.16em}
+.job-reference{grid-column:1/-1;margin:.2rem 0 0;padding-top:.65rem;border-top:1px solid var(--rule)}
+.job-reference a{margin-right:.2rem}
 .pick-name{font:600 16px/1.25 var(--face);color:var(--ink)}
 .pick-name .pick-setting{display:block;color:var(--quiet);font:400 12.5px/1.4 var(--face);margin-top:.2rem}
 .model-list{border-top:1px solid var(--ink)}

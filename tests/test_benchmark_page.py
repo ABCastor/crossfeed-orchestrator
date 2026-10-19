@@ -3,6 +3,7 @@ import copy
 import datetime as dt
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -43,6 +44,53 @@ class VisibleText(HTMLParser):
 
 
 class JobTests(unittest.TestCase):
+    def test_each_job_pick_has_rankings_or_says_none(self):
+        rows = [
+            row('visual-rank', family='visual', own=False, outside=[dict(source='lmarena', metric='elo', value=1200, weight=1, families=['visual'], read_on='2026-10-19')]),
+            row('writing-rank', family='writing', own=False, outside=[dict(source='artificial_analysis', metric='artificial_analysis_intelligence_index', value=80, weight=1, families=['writing'], read_on='2026-10-19')]),
+            row('coding-rank', family='coding-agent', own=False, outside=[dict(source='artificial_analysis', metric='artificial_analysis_coding_index', value=80, weight=1, families=['coding-agent'], read_on='2026-10-19')]),
+            row('research-rank', family='research', own=False, outside=[dict(source='artificial_analysis', metric='artificial_analysis_intelligence_index', value=80, weight=1, families=['research'], read_on='2026-10-19')]),
+            row('review-rank', family='review', own=False, outside=[dict(source='artificial_analysis', metric='artificial_analysis_intelligence_index', value=80, weight=1, families=['review'], read_on='2026-10-19')]),
+            row('bulk-rank', family='extraction', own=False, outside=[dict(source='artificial_analysis', metric='artificial_analysis_intelligence_index', value=80, weight=1, families=['extraction'], read_on='2026-10-19')]),
+            row('fast-rank', family='coding-agent', own=False, flags=['latency_measured'], outside=[dict(source='artificial_analysis', metric='artificial_analysis_coding_index', value=80, weight=1, families=['coding-agent'], read_on='2026-10-19')]),
+        ]
+        rendered = page.render_body({'rows': rows, 'read_on': '2026-10-19T00:00:00Z'})
+        sections = re.findall(r'<section class="job-row">.*?</section>', rendered, re.S)
+        self.assertEqual(len(sections), len(page.JOBS))
+        for section in sections:
+            picks_html = re.findall(r'<div class="job-pick">.*?</div>', section, re.S)
+            self.assertTrue(picks_html)
+            self.assertTrue(all('class="pick-sources"' in choice for choice in picks_html))
+            for choice in picks_html:
+                if 'Outside ranking evidence:' in choice:
+                    self.assertIn('<a href="https://', choice)
+                else:
+                    self.assertIn('No outside ranking used for this pick.', choice)
+            self.assertIn('class="job-reference"', section)
+            self.assertIn('checked 19 October 2026', section)
+
+        for url in [
+            'https://www.vals.ai/benchmarks/terminal-bench-4',
+            'https://www.vals.ai/benchmarks/vibe-code',
+            'https://www.vals.ai/benchmarks/code-migration',
+            'https://www.vals.ai/benchmarks/swebench-multimodal',
+            'https://www.vals.ai/benchmarks/science_index',
+            'https://www.vals.ai/benchmarks/legal_research',
+            'https://www.vals.ai/benchmarks/hlab',
+            'https://www.vals.ai/benchmarks/fabv2',
+        ]:
+            self.assertIn(url, rendered)
+        self.assertIn('No direct Vals.ai ranking is mapped to this job', rendered)
+        self.assertIn('context only; not used to score these picks', rendered)
+
+    def test_page_keeps_our_results_separate_and_after_outside_readings(self):
+        rendered = page.render_body({'rows': [row()]})
+        outside_heading = rendered.index('<h4>Outside benchmark readings</h4>')
+        local_heading = rendered.index('<h4>Our results: local checks at the best setting</h4>')
+        self.assertLess(outside_heading, local_heading)
+        self.assertIn('Our measured results stay visible and labelled as ours', rendered)
+        self.assertIn('newly admitted models get one small admission check', rendered)
+
     def test_coding_does_not_become_design_evidence(self):
         self.assertEqual(picks([row()], 'design'), [])
         r = row(family='visual', own=False)

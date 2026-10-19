@@ -237,7 +237,7 @@ class BenchmarksTests(unittest.TestCase):
         cards = model_cards.read_cards(self.state, self.overlay, fleet=fleetctl)
         page = unmark(console.render_benchmarks(cards))
         for text in ('href="/benchmarks" aria-current="page"', 'href="/"', 'fixture-model',
-                     'Our checks', 'n=1', '2026-10-03', 'weight', 'Cost and quota', '/model-cards.json'):
+                     'Our results: local checks', 'n=1', '2026-10-03', 'weight', 'Cost and quota', '/model-cards.json'):
             self.assertIn(text, page)
         self.assertNotIn('href="/" aria-current="page"', page)
         changed = copy.deepcopy(cards)
@@ -245,7 +245,7 @@ class BenchmarksTests(unittest.TestCase):
         page = unmark(console.render_benchmarks(changed))
         self.assertIn('&lt;script&gt;bad&lt;/script&gt;', page)
         self.assertNotIn('<script>bad</script>', page)
-        self.assertIn('No evidence or thinking levels configured', console.render_benchmarks({'rows': []}))
+        self.assertIn('No model evidence or thinking levels are configured', console.render_benchmarks({'rows': []}))
 
     def request_handler(self, path, signed_in=True):
         # Exercise the real HTTP handler without binding a sandbox-forbidden port.

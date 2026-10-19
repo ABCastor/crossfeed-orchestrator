@@ -48,6 +48,33 @@ JOBS = [('design', 'Best for design', ('visual',)), ('writing', 'Best for writin
         ('bulk', 'Best cheap helper for bulk work', ('coding-agent', 'extraction')),
         ('fast', 'Fast answers', tuple(FAMILIES))]
 
+OUTSIDE_RANKING_PAGES = {
+    'artificial_analysis': ('Artificial Analysis', 'https://artificialanalysis.ai/models/'),
+    'lmarena': ('WebDev Arena (LMArena)', 'https://arena.ai/leaderboard?category=webdev'),
+}
+VALS_READ_ON = '19 October 2026'
+VALS_RANKINGS_BY_JOB = {
+    'writing': [
+        ('HLAB (long-horizon legal work product)', 'https://www.vals.ai/benchmarks/hlab'),
+    ],
+    'coding': [
+        ('Terminal-Bench 4.0 (terminal tasks)', 'https://www.vals.ai/benchmarks/terminal-bench-4'),
+        ('Vibe Code Bench (web apps)', 'https://www.vals.ai/benchmarks/vibe-code'),
+        ('Code Migration (porting)', 'https://www.vals.ai/benchmarks/code-migration'),
+        ('SWE-bench Multimodal (visual software issues)', 'https://www.vals.ai/benchmarks/swebench-multimodal'),
+    ],
+    'research': [
+        ('Vals Science Index (research workflows)', 'https://www.vals.ai/benchmarks/science_index'),
+        ('Vals Web Search Index (legal and finance research tools)', 'https://www.vals.ai/benchmarks/web_search'),
+        ('Finance Agent v2 (financial research)', 'https://www.vals.ai/benchmarks/fabv2'),
+        ('Legal Research Bench (case and statute research)', 'https://www.vals.ai/benchmarks/legal_research'),
+        ('Tax Agent Bench (corporate tax research)', 'https://www.vals.ai/benchmarks/tax_agent_bench'),
+    ],
+    'bulk': [
+        ('Finance Agent v2 (filing retrieval and extraction)', 'https://www.vals.ai/benchmarks/fabv2'),
+    ],
+}
+
 
 def plain(value):
     return str(value).replace('_', ' ').replace('-', ' ').capitalize()
@@ -123,6 +150,54 @@ def local(row, families):
 
 def outside(row, families):
     return [s for s in row.get('outside', []) if set(s.get('families', [])) & set(families)]
+
+
+def evidence_date(value):
+    if not value:
+        return ''
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).strftime('%d %b %Y')
+    except ValueError:
+        return str(value)
+
+
+def pick_sources(row, families):
+    e = lambda x: escape(str(x))
+    rankings = outside(row or {}, families)
+    if not rankings:
+        return '<p class="pick-sources">No outside ranking used for this pick.</p>'
+    links = []
+    missing = []
+    for source in rankings:
+        publisher = source.get('source')
+        page = OUTSIDE_RANKING_PAGES.get(publisher)
+        label = page[0] if page else source.get('source', 'Public ranking')
+        detail = [label, METRICS.get(source.get('metric'), plain(source.get('metric', 'ranking')))]
+        score = metric_score(source)
+        if score != 'unmeasured':
+            detail.append(score)
+        read = evidence_date(source.get('read_on'))
+        if read:
+            detail.append('read ' + read)
+        text = ' · '.join(detail)
+        if page:
+            links.append(f'<a href="{e(page[1])}" target="_blank" rel="noopener noreferrer">{e(text)}</a>')
+        else:
+            missing.append(e(text))
+    parts = links + [e(label) + ' (public page not configured)' for label in missing]
+    return '<p class="pick-sources"><span>Outside ranking evidence:</span> ' + '; '.join(parts) + '</p>'
+
+
+def vals_references(job):
+    e = lambda x: escape(str(x))
+    rankings = VALS_RANKINGS_BY_JOB.get(job, [])
+    if not rankings:
+        return (f'<p class="job-reference">No direct Vals.ai ranking is mapped to this job '
+                f'(checked {e(VALS_READ_ON)}).</p>')
+    links = ''.join(f'<a href="{e(url)}" target="_blank" rel="noopener noreferrer">{e(label)}</a>; '
+                    for label, url in rankings).rstrip('; ')
+    return (f'<p class="job-reference">Related Vals.ai leaderboards, checked {e(VALS_READ_ON)} '
+            f'(context only; not used to score these picks): {links}</p>')
 
 
 def confidence(row, families):
@@ -244,7 +319,7 @@ def why(row, families, fast=False):
     counts = local(row, families)
     labels = ', '.join(FAMILIES[f] for f in families if f in counts)
     if counts:
-        text = f'Passed {sum(c["passes"] for c in counts.values())} of {sum(c["trials"] for c in counts.values())} local checks for {labels}.'
+        text = f'Our recorded checks passed {sum(c["passes"] for c in counts.values())} of {sum(c["trials"] for c in counts.values())} for {labels}.'
     elif outside(row, families):
         metrics = ', '.join(dict.fromkeys(METRICS.get(s.get('metric'), plain(s.get('metric', 'ranking'))) for s in outside(row, families)))
         text = f'No test of ours yet for this job. Outside rankings: {metrics}; starting estimate {quality_score(row, families, 0):.0%}.'
@@ -276,7 +351,7 @@ def summary_phrases(row, rows):
             bad = f'{FAMILIES.get(qs[-1][0], plain(qs[-1][0]))} ({qs[-1][1]["mean"]:.0%} vs {qs[0][1]["mean"]:.0%} on its best)'
     else:
         good = ', '.join(FAMILIES.get(f, plain(f)) for f in row.get('owner_prior', []))
-        good = good + ' (owner’s prior)' if good else 'Waiting for first benchmark'
+        good = good + ' (owner’s prior)' if good else 'Waiting for benchmark evidence'
         bad = ''
     if not bad:
         slow = next((r for r in rows if r.get('level') == 'max' and (r.get('latency_s') or 0) > 140), None)
@@ -298,6 +373,7 @@ def metric_score(s):
 
 
 def nerd_panel(best, rows):
+    # BR-BENCH-001
     e = lambda x: escape(str(x))
     scores = []
     for setting in rows:
@@ -327,15 +403,16 @@ def nerd_panel(best, rows):
         if not translation and flag.startswith('imputed:'):
             translation = FAMILIES.get(flag.split(':', 1)[1], 'Task') + ' estimate inferred from related benchmarks'
         notes.append(f'<li>{e(translation or plain(flag))} <code>{e(flag)}</code></li>')
-    return (f'<div class="nerd-panel"><p>Model: <code>{e(best["model"])}</code></p><p>These are rough starting estimates, updated by local checks. Compare the same task and tool; held-out evaluations stay separate.</p>'
-            '<h4>Our checks: task scores at best setting</h4><ul>' + (''.join(scores) or '<li>No measured task scores</li>') + '</ul>'
+    return (f'<div class="nerd-panel"><p>Model: <code>{e(best["model"])}</code></p><p>Public rankings guide job picks where they fit. Our local results stay separate from held-out evaluations.</p>'
             '<h4>Outside benchmark readings</h4><ul>' + (''.join(rankings) or '<li>No outside scores</li>') + '</ul>'
+            '<h4>Our results: local checks at the best setting</h4><ul>' + (''.join(scores) or '<li>No measured task scores</li>') + '</ul>'
             '<h4>Cost and quota: subscription and cost</h4><ul>' + (''.join(dict.fromkeys(prices)) or '<li>No configured source</li>') + '</ul>'
             '<h4>All thinking levels</h4><table><thead><tr><th>Setting</th><th>Status / evidence</th><th>Task estimates</th><th>Reply speed</th></tr></thead><tbody>' + ''.join(settings) + '</tbody></table>'
             '<h4>Data notes and cautions</h4><ul>' + (''.join(notes) or '<li>No additional flags</li>') + '</ul></div>')
 
 
 def render_body(cards):
+    # BR-BENCH-001
     e = lambda x: escape(str(x))
     rows = cards.get('rows', [])
     groups = defaultdict(list)
@@ -372,20 +449,20 @@ def render_body(cards):
                 if r is None:
                     text = ('No owner’s prior for design is configured.' if 'Top pick' in label else
                             'Missing WebDev Arena or visual-family outside ranking for available models. Use your owner’s prior for design when its allowance returns.')
-                    choices.append(f'<div class="job-pick"><small>{label}</small><p>{e(text)}</p></div>')
+                    choices.append(f'<div class="job-pick"><small>{label}</small><p>{e(text)}</p>{pick_sources(None, families)}</div>')
                     continue
                 evidence = 'Guess · owner’s prior' if 'Top pick' in label else 'Outside rankings only'
-                choices.append(f'<div class="job-pick"><small>{label}</small><a class="pick-name" href="#{quote(anchor(r["model"]), safe="")}"><span translate="no">{e(name(r))}</span> <span class="pick-setting">{e(level(r))}</span></a><span class="conf">{e(evidence)}</span><p>{e(design_status(r))}</p><p class="cost-feel">{e(cost_feel(r))}</p></div>')
-            jobs.append(f'<section class="job-row"><h3>{e(title)}</h3><div class="job-choices">{"".join(choices)}</div></section>')
+                choices.append(f'<div class="job-pick"><small>{label}</small><a class="pick-name" href="#{quote(anchor(r["model"]), safe="")}"><span translate="no">{e(name(r))}</span> <span class="pick-setting">{e(level(r))}</span></a><span class="conf">{e(evidence)}</span><p>{e(design_status(r))}</p>{pick_sources(r, families)}<p class="cost-feel">{e(cost_feel(r))}</p></div>')
+            jobs.append(f'<section class="job-row"><h3>{e(title)}</h3><div class="job-choices">{"".join(choices)}{vals_references(key)}</div></section>')
             continue
         for i in range(2):
             label = 'Top pick' if i == 0 else 'Runner-up'
             if i >= len(picks):
-                choices.append(f'<div class="job-pick"><small>{label}</small><p>No available model with evidence or an owner’s prior for this job yet.</p></div>')
+                choices.append(f'<div class="job-pick"><small>{label}</small><p>No available model with evidence or an owner’s prior for this job yet.</p>{pick_sources(None, families)}</div>')
                 continue
             r = picks[i]
-            choices.append(f'<div class="job-pick"><small>{label}</small><a class="pick-name" href="#{quote(anchor(r["model"]), safe="")}"><span translate="no">{e(name(r))}</span> <span class="pick-setting">{e(level(r))}</span></a>{badge(r, families)}<p>{e(why(r, families, key == "fast"))}</p><p class="cost-feel">{e(cost_feel(r))}</p></div>')
-        jobs.append(f'<section class="job-row"><h3>{e(title)}</h3><div class="job-choices">{"".join(choices)}</div></section>')
+            choices.append(f'<div class="job-pick"><small>{label}</small><a class="pick-name" href="#{quote(anchor(r["model"]), safe="")}"><span translate="no">{e(name(r))}</span> <span class="pick-setting">{e(level(r))}</span></a>{badge(r, families)}<p>{e(why(r, families, key == "fast"))}</p>{pick_sources(r, families)}<p class="cost-feel">{e(cost_feel(r))}</p></div>')
+        jobs.append(f'<section class="job-row"><h3>{e(title)}</h3><div class="job-choices">{"".join(choices)}{vals_references(key)}</div></section>')
     local_count = sum(any(local(r, FAMILIES) for r in rs) for rs in groups.values())
     outside_count = sum(any(r.get('outside') for r in rs) for rs in groups.values())
     new_count = sum(any(r.get('owner_prior') for r in rs) for rs in groups.values())
@@ -394,11 +471,11 @@ def render_body(cards):
     except (ValueError, AttributeError):
         date = 'not built yet'
     extras = [f'<li><a href="#{quote(anchor(model), safe="")}">{e(name(bests[model]))}</a>: {e(", ".join(level(r) for r in rs if not has_evidence(r)))}</li>' for model, rs in groups.items() if any(has_evidence(r) for r in rs) and any(not has_evidence(r) for r in rs)]
-    return ('<div class="bench-page"><h1>What each model is best at</h1><p class="lede">Our own checks come first. Where we have no local test for a job, we label outside rankings or your starting judgement.</p>'
-        f'<div class="bench-intro">{e(date)} · {local_count} locally tested · {outside_count} with outside rankings · {new_count} provisional admissions '
+    return ('<div class="bench-page"><h1>What each model is best at</h1><p class="lede">Public rankings guide each job where they fit. Our measured results stay visible and labelled as ours; newly admitted models get one small admission check.</p>'
+        f'<div class="bench-intro">{e(date)} · {outside_count} with outside rankings · {local_count} models with our checks · {new_count} provisional admissions '
         '<a href="/model-cards.json" download="model-cards.json">Private model cards ↓</a></div>'
         '<p class="quiet">Working choices use current switches and quota readings. Unknown quota is not a guarantee of availability. Estimates are not calibrated success probabilities.</p>'
-        + ('' if rows else '<p>No evidence or thinking levels configured. Import fit results or run a market refresh.</p>') + '<h2>Best models by job</h2><div class="jobs-ledger">' + ''.join(jobs) + '</div>'
+        + ('' if rows else '<p>No model evidence or thinking levels are configured. Refresh public rankings, or run the approved small admission check for a newly admitted model.</p>') + '<h2>Best models by job</h2><div class="jobs-ledger">' + ''.join(jobs) + '</div>'
         '<h2>Models switched on</h2><div class="model-list">' + (''.join(main) or '<p>No measured models switched on yet.</p>') + '</div>'
         f'<details class="unmeasured-box"><summary>Not measured yet ({len(pending) + len(off)} models)</summary><h3>Switched on, waiting for first benchmark</h3>'
         + (''.join(pending) or '<p>None</p>') + '<h3>Switched off / not in an active pool</h3>' + (''.join(off) or '<p>None</p>')
