@@ -76,7 +76,8 @@ def discover(roster):
     lanes = roster.get('lanes', [])
     for provider in sorted({l['provider'] for l in lanes if l.get('harness') == 'opencode'} | (
             {'opencode'} if any(l.get('provider') == 'opencode-go' for l in lanes) else set())):
-        rows = cli_catalog(['opencode', 'models', provider], prefix=provider)
+        # v2 supports --standalone, avoiding the owner's background service.
+        rows = cli_catalog(['opencode', 'models', '--standalone', provider], prefix=provider)
         # Zen's paid catalog is not a Go entitlement. Only free promotions enter
         # a separate zero-cost pool; disappearing promotions retire that pool only.
         if provider == 'opencode':
@@ -88,7 +89,7 @@ def discover(roster):
                 continue
             pool = pools.pop()
         catalogs.append({'harness': 'opencode', 'provider': provider, 'pool': pool,
-                         'models': rows, 'source': f'opencode models {provider}', 'free_only': provider == 'opencode',
+                         'models': rows, 'source': f'opencode models --standalone {provider}', 'free_only': provider == 'opencode',
                          'known_promos': [l['selector'] for l in lanes if l.get('quota_pool') == 'opencode-free']})
     if any(l.get('harness') == 'agy' for l in lanes):
         rows = cli_catalog(['agy', 'models'])
@@ -112,9 +113,9 @@ def discover(roster):
         # github-copilot catalog is a different route and cannot grant admission.
         catalogs.append({'harness': 'copilot', 'provider': 'github-copilot',
                          'pool': 'github-copilot-student',
-                         'models': cli_catalog(['opencode', 'models', 'github-copilot'], prefix='github-copilot'),
+                         'models': cli_catalog(['opencode', 'models', '--standalone', 'github-copilot'], prefix='github-copilot'),
                          'dynamic': True,
-                         'source': 'opencode models github-copilot; native Auto identity/entitlement unconfirmed'})
+                         'source': 'opencode models --standalone github-copilot; native Auto identity/entitlement unconfirmed'})
     # Reuse the gateway's own validated discovery, including provider instances.
     try:
         from . import chatgpt_transport as chat

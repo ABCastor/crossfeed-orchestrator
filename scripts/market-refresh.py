@@ -141,7 +141,7 @@ def entitled_models() -> set[str]:
     }
     try:
         proc = subprocess.run(
-            ["opencode", "models", "opencode-go"],
+            ["opencode", "models", "--standalone", "opencode-go"],
             text=True,
             capture_output=True,
             timeout=60,

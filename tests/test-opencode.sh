@@ -16,6 +16,7 @@ TEST_TMP="$TEST_ROOT/tmp"
 FLEET_STATE="$TEST_ROOT/fleet-state"
 mkdir -p "$FIXTURE_DIR" "$FAKE_BIN" "$CLOCK_BIN" "$TEST_HOME" "$TEST_TMP" "$FLEET_STATE"
 cp "$SOURCE_WRAPPER" "$FIXTURE_DIR/opencode-agent.sh"
+cp "$SCRIPT_DIR/scripts/opencode_v2.py" "$FIXTURE_DIR/"
 cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$FIXTURE_DIR/"
 export FLEET_STATE_DIR="$TEST_ROOT/model-state"
 # Ordinary receipts must work even with an optional gateway configured but down.
@@ -134,11 +135,16 @@ FAKE_FLEET
 cat >"$FAKE_BIN/opencode" <<'FAKE_OPENCODE'
 #!/bin/bash
 set -u
+for arg in "$@"; do
+  case "$arg" in --pure|--dir|--variant) echo "v1 flag rejected: $arg" >&2; exit 2;; esac
+done
 [ -z "${FAKE_ARGS_FILE:-}" ] || printf '%s\n' "$@" >"$FAKE_ARGS_FILE"
 [ -z "${FAKE_ENV_FILE:-}" ] || {
+  printf 'cwd=%s\n' "$(pwd -P)"
   printf 'config=%s\n' "${OPENCODE_CONFIG_DIR:-}"
   printf 'project_config=%s\n' "${OPENCODE_DISABLE_PROJECT_CONFIG:-}"
   printf 'data_home=%s\n' "${XDG_DATA_HOME:-}"
+  if [ -f "${XDG_DATA_HOME:-/nonexistent}/opencode/opencode.db" ]; then printf 'db=present\n'; fi
   if [ -f "${XDG_DATA_HOME:-/nonexistent}/opencode/auth.json" ]; then printf 'auth=present\n'; else printf 'auth=missing\n'; fi
 } >"$FAKE_ENV_FILE"
 
@@ -149,8 +155,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 success() {
-  printf '{"type":"text","part":{"text":"final:%s"}}\n' "$prompt"
-  printf '{"type":"step_finish","part":{"reason":"stop"}}\n'
+  printf '{"type":"step_start","part":{"messageID":"final"}}\n'
+  printf '{"type":"text","part":{"messageID":"final","text":"final:%s"}}\n' "$prompt"
 }
 
 # The fake's behavioral mode is the task payload; recorded argv still proves worker awareness.
@@ -215,8 +221,39 @@ case "$prompt" in
   invalid-json)
     printf 'not-json\n'
     ;;
+  policy-probe)
+    python3 - <<'POLICY_PROBE'
+import fnmatch, json, os
+from pathlib import Path
+config = json.loads((Path(os.environ['OPENCODE_CONFIG_DIR']) / 'opencode.json').read_text())
+agent = 'direct' if '--agent' not in __import__('sys').argv else 'plan'
+agent = next(iter(config['agents']))
+action = os.environ['FAKE_PROBE_ACTION']
+effect = 'allow'
+for rule in config['permissions'] + config['agents'][agent]['permissions']:
+    if fnmatch.fnmatchcase(action, rule['action']) and fnmatch.fnmatchcase('*', rule['resource']):
+        effect = rule['effect']
+if effect == 'allow':
+    Path(os.environ['FAKE_PROBE_MARKER']).write_text('operation permitted')
+print(json.dumps({'type': 'step_start'}))
+print(json.dumps({'type': 'text', 'part': {'text': effect}}))
+POLICY_PROBE
+    ;;
+  auth-error|auth-error-nonzero)
+    printf '{"type":"step_start"}\n{"type":"text","part":{"text":"must-not-publish"}}\n{"type":"error","error":{"type":"provider.auth","message":"expired"}}\n'
+    [ "$prompt" != auth-error-nonzero ] || exit 1
+    ;;
+  real-v2)
+    cat "${V2_FIXTURE:?}"
+    ;;
+  multi-text)
+    printf '%s\n' '{"type":"step_start"}' '{"type":"text","part":{"text":"intermediate"}}' '{"type":"step_finish","part":{"reason":"tool-calls"}}' '{"type":"step_start"}' '{"type":"text","part":{"text":"final "}}' '{"type":"text","part":{"text":"answer"}}'
+    ;;
+  final-empty)
+    printf '%s\n' '{"type":"step_start"}' '{"type":"text","part":{"text":"stale"}}' '{"type":"step_start"}'
+    ;;
   session-error)
-    printf '{"type":"session_error","error":{"message":"fake"}}\n'
+    printf '{"type":"error","error":{"type":"provider.failure","message":"fake"}}\n'
     printf '{"type":"text","part":{"text":"must-not-publish"}}\n'
     printf '{"type":"step_finish","part":{"reason":"stop"}}\n'
     ;;
@@ -576,9 +613,10 @@ test_lane_and_lean_routing() {
   [ "$rc" -eq 0 ] || { fail "routed lean run expected 0, got $rc"; return 1; }
   contains "$d/route" '--role review' || { fail "role was not routed"; return 1; }
   contains "$d/check" 'check-lane fake-lane read-only' || { fail "lane admission was not checked"; return 1; }
-  contains "$d/args" 'fake/model' || { fail "lane selector was not forwarded"; return 1; }
-  contains "$d/args" 'high' || { fail "variant was not forwarded"; return 1; }
-  contains "$d/env" "config=$TEST_HOME/.config/opencode/fleet-worker" || { fail "lean config directory changed"; return 1; }
+  contains "$d/args" 'fake/model#high' || { fail "lane selector was not forwarded"; return 1; }
+  contains "$d/args" '--standalone' || { fail "variant was not forwarded"; return 1; }
+  contains "$d/env" 'config=' && ! contains "$d/env" "config=$TEST_HOME/.config" || { fail "config not isolated"; return 1; }
+  contains "$d/env" "cwd=$(cd "$d/work" && pwd -P)" || { fail "run cwd not selected"; return 1; }
   contains "$d/env" 'project_config=1' || { fail "project config was not disabled"; return 1; }
   contains "$d/env" 'auth=present' || { fail "isolated auth copy missing"; return 1; }
 }
@@ -588,10 +626,10 @@ test_roster_variant() {
   mkdir -p "$d/work"
   FAKE_ARGS_FILE="$d/args" FAKE_EFFORT_QUERY_FILE="$d/query" invoke "$d/out" "$d/err" --prompt quick --dir "$d/work" --lane fake-lane --effort-role hard-reasoning
   rc=$?
-  [ "$rc" -eq 0 ] && contains "$d/args" '--variant' && contains "$d/args" 'max' || { fail "roster max variant not passed, rc $rc"; return 1; }
+  [ "$rc" -eq 0 ] && contains "$d/args" 'fake/model#max' && contains "$d/args" '--standalone' || { fail "roster max variant not passed, rc $rc"; return 1; }
   contains "$d/query" 'hard-reasoning' && contains "$d/err" 'effort max: roster' || { fail "effort role/source lost"; return 1; }
   FAKE_EFFORT_DEFAULT=provider-default FAKE_ARGS_FILE="$d/provider-args" invoke "$d/out" "$d/err" --prompt quick --dir "$d/work"
-  [ "$?" -eq 0 ] && ! contains "$d/provider-args" '--variant' || { fail "model without variants received unsupported flag"; return 1; }
+  [ "$?" -eq 0 ] && contains "$d/provider-args" 'fake/model' && ! contains "$d/provider-args" 'fake/model#' || { fail "model without variants received unsupported flag"; return 1; }
   contains "$d/err" 'effort provider-default' || { fail "provider default exception silent"; return 1; }
   FAKE_EFFORT_MISSING=1 FAKE_ARGS_FILE="$d/missing-args" invoke "$d/out" "$d/err" --prompt quick --dir "$d/work"
   [ "$?" -eq 2 ] && [ ! -e "$d/missing-args" ] || { fail "missing effort launched OpenCode"; return 1; }
@@ -626,6 +664,57 @@ test_help_and_usage_contract() {
   invoke "$d/usage-out" "$d/usage-err" --timeout
   rc=$?
   [ "$rc" -eq 2 ] || { fail "missing option value expected usage 2, got $rc"; return 1; }
+}
+
+
+# BR-OPENCODE-WORKER-001. This drives the emitted profile through an independent
+# ordered-rule test double; native v2 runtime acceptance requires a permitted server.
+test_v2_boundary() {
+  local d="$TEST_ROOT/v2-boundary" action rc
+  mkdir -p "$d/work"
+  git -C "$d/work" init -q
+  for action in edit shell external_directory subagent opencode_session_move; do
+    FAKE_PROBE_ACTION="$action" FAKE_PROBE_MARKER="$d/work/$action" invoke "$d/out" "$d/err" --prompt policy-probe --dir "$d/work"
+    rc=$?
+    [ "$rc" -eq 0 ] && [ "$(cat "$d/out")" = deny ] && [ ! -e "$d/work/$action" ] || { fail "read-only permitted $action"; return 1; }
+  done
+  FAKE_PROBE_ACTION=edit FAKE_PROBE_MARKER="$d/work/control" invoke "$d/out" "$d/err" --prompt policy-probe --dir "$d/work" --write
+  [ "$?" -eq 0 ] && [ "$(cat "$d/work/control")" = 'operation permitted' ] || { fail "write control did not observe a permitted edit"; return 1; }
+  rm -f "$d/work/control"
+  for action in external_directory opencode_session_move opencode.worktree_create; do
+    FAKE_PROBE_ACTION="$action" FAKE_PROBE_MARKER="$d/external" invoke "$d/out" "$d/err" --prompt policy-probe --dir "$d/work" --write
+    [ "$?" -eq 0 ] && [ ! -e "$d/external" ] && [ "$(cat "$d/out")" = deny ] || { fail "build permitted $action"; return 1; }
+  done
+  FAKE_PROBE_ACTION=read FAKE_PROBE_MARKER="$d/read" invoke "$d/out" "$d/err" --prompt policy-probe --dir "$d/work" --direct
+  [ "$?" -eq 0 ] && [ ! -e "$d/read" ] && [ "$(cat "$d/out")" = deny ] || { fail "direct permitted a tool"; return 1; }
+  FAKE_PROBE_ACTION=edit FAKE_PROBE_MARKER="$d/shared" invoke "$d/out" "$d/err" --prompt policy-probe --dir "$d/work" --context shared
+  [ "$?" -eq 0 ] && [ ! -e "$d/shared" ] && [ "$(cat "$d/out")" = deny ] || { fail "shared profile weakened plan boundary"; return 1; }
+}
+
+test_v2_account_snapshot() {
+  local d="$TEST_ROOT/account" rc
+  mkdir -p "$d/work" "$d/data/opencode"
+  sqlite3 "$d/data/opencode/opencode.db" 'CREATE TABLE witness(value); INSERT INTO witness VALUES (1);'
+  XDG_DATA_HOME="$d/data" FAKE_ENV_FILE="$d/env" invoke "$d/out" "$d/err" --prompt quick --dir "$d/work"
+  rc=$?
+  [ "$rc" -eq 0 ] && contains "$d/env" 'db=present' && contains "$d/env" 'auth=missing' || { fail "database-only account sign-in not snapshotted, rc=$rc"; return 1; }
+  [ "$(sqlite3 "$d/data/opencode/opencode.db" 'SELECT value FROM witness;')" = 1 ] || { fail "source database was changed"; return 1; }
+}
+
+test_v2_events() {
+  local d="$TEST_ROOT/v2-events" rc prompt
+  mkdir -p "$d/work"
+  V2_FIXTURE="$SCRIPT_DIR/tests/fixtures/opencode-v2-run-ok-events.jsonl" invoke "$d/out" "$d/err" --prompt real-v2 --dir "$d/work"
+  [ "$?" -eq 0 ] && [ "$(cat "$d/out")" = OK ] || { fail "real v2 success fixture rejected"; return 1; }
+  for prompt in auth-error auth-error-nonzero; do
+    invoke "$d/out" "$d/err" --prompt "$prompt" --dir "$d/work" --last "$d/last"
+    rc=$?
+    [ "$rc" -eq 5 ] && [ ! -s "$d/out" ] && [ ! -e "$d/last" ] && contains "$d/err" 'opencode auth login opencode --method device' || { fail "auth error rc=$rc leaked output or lost sign-in guidance"; return 1; }
+  done
+  invoke "$d/out" "$d/err" --prompt multi-text --dir "$d/work"
+  [ "$?" -eq 0 ] && [ "$(cat "$d/out")" = 'final answer' ] || { fail "final text chunks not joined or stale text returned"; return 1; }
+  invoke "$d/out" "$d/err" --prompt final-empty --dir "$d/work"
+  [ "$?" -eq 7 ] && [ ! -s "$d/out" ] || { fail "earlier step text published for empty final step"; return 1; }
 }
 
 selected() {
@@ -676,6 +765,9 @@ run_test lane_and_lean_routing test_lane_and_lean_routing
 run_test roster_variant test_roster_variant
 run_test write_cleanliness_gate test_write_cleanliness_gate
 run_test help_and_usage_contract test_help_and_usage_contract
+run_test v2_events test_v2_events
+run_test v2_boundary test_v2_boundary
+run_test v2_account_snapshot test_v2_account_snapshot
 
 if [ "$RUN_COUNT" -eq 0 ]; then printf 'FAIL no matching tests selected\n'; exit 2; fi
 printf 'RESULT: %s passed, %s failed, %s total\n' "$PASS_COUNT" "$FAIL_COUNT" "$RUN_COUNT"

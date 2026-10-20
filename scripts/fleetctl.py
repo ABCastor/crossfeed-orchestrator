@@ -3366,6 +3366,9 @@ def parse_events(path: Path | None) -> dict[str, Any]:
     cost = 0.0
     session_id = None
     finish = None
+    step_started = False
+    final_text = ""
+    usage_reported = False
     errors: list[dict[str, Any]] = []
     if path and path.exists():
         for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -3374,13 +3377,25 @@ def parse_events(path: Path | None) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
             session_id = event.get("sessionID") or session_id
-            if event.get("type") == "step_finish":
-                part = event.get("part", {})
-                finish = part.get("reason") or finish
+            if event.get("type") == "step_start":
+                step_started = True
+                final_text = ""
+                finish = None
+            elif event.get("type") == "text":
+                final_text += event.get("part", {}).get("text", "")
+            if event.get("type") in {"step_finish", "session.step.ended"}:
+                part = event.get("part", {}) if event["type"] == "step_finish" else event.get("data", {})
+                finish = part.get("reason") or part.get("finish") or finish
                 tokens = part.get("tokens", {})
+                usage_reported = usage_reported or bool(tokens)
                 cache = tokens.get("cache", {})
-                for key in ("total", "input", "output", "reasoning"):
+                for key in ("input", "output", "reasoning"):
                     totals[key] += int(tokens.get(key, 0) or 0)
+                # V2 TokenUsage has no total; OpenCode defines it as the sum
+                # of input, output, reasoning and both cache counters.
+                totals["total"] += int(tokens.get("total", sum(int(tokens.get(k, 0) or 0)
+                    for k in ("input", "output", "reasoning")) +
+                    sum(int(cache.get(k, 0) or 0) for k in ("read", "write"))) or 0)
                 totals["cache_read"] += int(cache.get("read", 0) or 0)
                 totals["cache_write"] += int(cache.get("write", 0) or 0)
                 cost += float(part.get("cost", 0) or 0)
@@ -3389,6 +3404,9 @@ def parse_events(path: Path | None) -> dict[str, Any]:
     return {
         "session_id": session_id,
         "finish": finish,
+        "completed": not errors and ((finish == "stop") or
+            (finish is None and step_started and bool(final_text.strip()))),
+        "usage_reported": usage_reported,
         "tokens": totals,
         "estimated_cost_usd": cost,
         "errors": errors,
@@ -3471,7 +3489,7 @@ def record_run(
         stderr_text = stderr.read_text(encoding="utf-8", errors="replace")
     error_text = stderr_text + "\n" + json.dumps(parsed["errors"], ensure_ascii=False)
     quota_error = bool(QUOTA_RE.search(error_text))
-    status = "ok" if returncode == 0 and parsed["finish"] == "stop" and not parsed["errors"] else "error"
+    status = "ok" if returncode == 0 and parsed["completed"] else "error"
     if returncode == 124:
         status = "timeout"
     record = {
@@ -3490,6 +3508,7 @@ def record_run(
         "status": status,
         "finish": parsed["finish"],
         "tokens": parsed["tokens"],
+        "usage_reported": parsed["usage_reported"],
         "cost": {
             "estimated_usd": parsed["estimated_cost_usd"],
             "source": "opencode-local-model-pricing",
@@ -3945,8 +3964,11 @@ def opencode_whitelist_problems(roster: dict[str, Any]) -> list[str]:
                               or config_home / "opencode/opencode.jsonc").expanduser()),
              ("fleet-worker", Path(os.environ.get("FLEET_OPENCODE_WORKER_CONFIG")
                                    or config_home / "opencode/fleet-worker/opencode.jsonc").expanduser()))
+    paths = tuple((label + suffix, candidate) for label, path in paths
+                  for suffix, candidate in (("", path), (" (.json)", path.with_suffix(".json")))
+                  if not suffix or path.suffix == ".jsonc")
     issues = []
-    for label, path in paths:
+    for label, path in dict.fromkeys(paths):
         if not path.exists():
             continue
         try:
@@ -3957,6 +3979,12 @@ def opencode_whitelist_problems(roster: dict[str, Any]) -> list[str]:
             provider = providers.get("opencode-go", {})
             if not isinstance(provider, dict):
                 raise ValueError("invalid provider")
+            native = config.get("providers", {}).get("opencode-go", {}).get("models", {})
+            if not isinstance(native, dict):
+                raise ValueError("invalid native model restrictions")
+            disabled = sorted(model for model in admitted if native.get(model, {}).get("disabled") is True)
+            if disabled:
+                issues.append(f"OpenCode {label} config {path}: admitted models disabled in v2: {', '.join(disabled)}")
             if "whitelist" not in provider:
                 continue
             whitelist = provider["whitelist"]

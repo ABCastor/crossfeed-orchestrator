@@ -125,7 +125,7 @@ class SelectorLedgerTests(Sandbox):
         self.assert_replay(self.records()[-1], selection)
 
     def test_generated_opencode_command_records_identity_and_priced_effort(self):
-        args = self.fake_cli("opencode", "echo '{\"type\":\"text\",\"part\":{\"text\":\"answer\"}}'\necho '{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}'\n")
+        args = self.fake_cli("opencode", "echo '{\"type\":\"step_start\"}'\necho '{\"type\":\"text\",\"part\":{\"text\":\"answer\"}}'\n")
         auth = self.home / ".local/share/opencode/auth.json"
         auth.parent.mkdir(parents=True)
         auth.write_text('{"opencode-go":{"type":"api","key":"synthetic-test-only"}}')
@@ -135,11 +135,16 @@ class SelectorLedgerTests(Sandbox):
         result = self.execute(selection, extra=("--direct",))
         self.assertEqual(result.returncode, 0, result.stderr)
         native = args.read_text().splitlines()
+        expected_model = selection["choice"]["run_as"]
         if selection["choice"]["level"] != "provider-default":
-            self.assertEqual(native[native.index("--variant") + 1], selection["choice"]["level"])
+            expected_model += "#" + selection["choice"]["level"]
+        self.assertEqual(native[native.index("--model") + 1], expected_model)
+        self.assertIn("--standalone", native)
+        self.assertNotIn("--variant", native)
         records = self.records()
         identity = next(r for r in records if r["schema"] == "crossfeed-model-run/v1")
         priced = next(r for r in records if r["schema"] == fleetctl.RUN_SCHEMA)
+        self.assertEqual(priced["status"], "ok")
         self.assertEqual(identity["run_id"], priced["run_id"])
         self.assert_replay(identity, selection)
         self.assert_replay(priced, selection)

@@ -214,6 +214,29 @@ class RefreshTests(unittest.TestCase):
         with patch.object(daily.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'opencode-go/beam-free\n', '')):
             self.assertEqual(daily.cli_catalog(['fixture'], prefix='opencode-go')[0]['model_key'], 'beam-free')
 
+    def test_discovery_and_market_listing_use_v2_standalone(self):
+        # BR-REFRESH-001: provider listing is injectable through PATH, with no server.
+        bin_dir = self.tmp / 'catalog-bin'
+        bin_dir.mkdir()
+        executable = bin_dir / 'opencode'
+        executable.write_text('#!' + sys.executable + '\n' +
+            "import sys\n" +
+            "assert sys.argv[1:3] == ['models', '--standalone'], sys.argv\n" +
+            "assert len(sys.argv) == 4, sys.argv\n" +
+            "assert sys.argv[3] in ('opencode-go', 'opencode', 'github-copilot'), sys.argv\n" +
+            "print(sys.argv[3] + '/fixture-model')\n")
+        executable.chmod(0o755)
+        roster = {'lanes': [
+            {'harness': 'opencode', 'provider': 'opencode-go', 'quota_pool': 'opencode-go'},
+            {'harness': 'copilot', 'provider': 'github-copilot'}]}
+        with patch.dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH']):
+            catalogs = daily.discover(roster)
+            entitled = market_refresh.entitled_models()
+        self.assertEqual({c['provider']: c['models'] for c in catalogs}, {
+            provider: [{'selector': provider + '/fixture-model', 'model_key': 'fixture-model'}]
+            for provider in ('opencode-go', 'opencode', 'github-copilot')})
+        self.assertEqual(entitled, {'opencode-go/fixture-model'})
+
     def test_failed_go_catalog_preserves_go_order_when_promos_succeed(self):
         r, free = self._active_free()
         lane = next(l for l in r['lanes'] if l['lane_id'] == free['lane_id'])
@@ -260,7 +283,7 @@ class RefreshTests(unittest.TestCase):
         executable.write_text('#!' + sys.executable + '\n' +
             "import json,os,sys\n" +
             "from pathlib import Path\n" +
-            "Path(os.environ['R19_OBSERVED']).write_text(json.dumps(sys.argv[1:]))\n" +
+            "Path(os.environ['R19_OBSERVED']).write_text(json.dumps({'args':sys.argv[1:],'cwd':os.getcwd()}))\n" +
             "print(json.dumps({'type':'text','part':{'text':'PUBLIC_OK'}}))\n" +
             "print(json.dumps({'type':'step_finish','part':{'reason':'stop'}}))\n")
         executable.chmod(0o755)
@@ -276,8 +299,12 @@ class RefreshTests(unittest.TestCase):
         run = subprocess.run(argv, env=dict(env, FLEET_DATA_CLASS='public'), text=True, capture_output=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(run.stdout.strip(), 'PUBLIC_OK')
-        provider_args = json.loads(observed.read_text())
-        root = provider_args[provider_args.index('--dir') + 1]
+        observation = json.loads(observed.read_text())
+        provider_args = observation['args']
+        root = observation['cwd']
+        self.assertIn('--standalone', provider_args)
+        self.assertNotIn('--dir', provider_args)
+        self.assertNotIn('--variant', provider_args)
         self.assertNotEqual(root, str(self.tmp))
         self.assertEqual(provider_args[provider_args.index('--agent') + 1], 'direct')
 

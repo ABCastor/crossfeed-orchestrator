@@ -37,7 +37,7 @@ When a model has different controls on different tools, `harness_overrides.<harn
 | Codex | `--role` | `--reasoning`, or `-c model_reasoning_effort=...` | `-c model_reasoning_effort=...` |
 | Claude | `--role` | `--effort` | `--effort` |
 | Antigravity | `--role` | `--effort`, or a named Gemini or Claude selector suffix | selector suffix and `--effort` |
-| OpenCode | `--role`, or `--effort-role` for a named lane | `--variant` | `--variant` |
+| OpenCode | `--role`, or `--effort-role` for a named lane | `--variant` | `--model provider/model#variant` |
 | Copilot, OpenRouter | service chooses | none | one stderr notice |
 
 Codex resolves `-c model=...` before a console stand-in. `--model` wins over that config, and the last config model wins over earlier ones. `--reasoning` wins over config effort. The resolved effort flag is appended last. If no model is named, Crossfeed reads the configured model, then `policy.effort_defaults.codex` as a fallback. Stand-ins resolve their own role policy and clamp caller levels to their supported ceiling.

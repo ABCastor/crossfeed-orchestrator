@@ -327,6 +327,7 @@ class FleetPreflightTests(unittest.TestCase):
                 "printf '%s\\n' \"${OPENCODE_CONFIG_DIR:-}\" > \"$OPENCODE_STUB_CONFIG\"\n"
                 "printf '%s\\n' \"${OPENCODE_ENABLE_EXA:-}\" > \"$OPENCODE_STUB_EXA\"\n"
                 "{\n"
+                "printf 'cwd=%s\\n' \"$PWD\"\n"
                 "printf 'provider=%s\\n' \"${OPENCODE_WEBSEARCH_PROVIDER:-}\"\n"
                 "printf 'parallel_key=%s\\n' \"${PARALLEL_API_KEY:-}\"\n"
                 "printf 'exa_key=%s\\n' \"${EXA_API_KEY:-}\"\n"
@@ -383,7 +384,7 @@ class FleetPreflightTests(unittest.TestCase):
             self.assertTrue("\n".join(arguments[separator + 1:]).endswith("=== CROSSFEED TASK ===\nSENTINEL_PROMPT"))
             self.assertIn("Crossfeed selected model: kimi-k3", "\n".join(arguments[separator + 1:]))
             self.assertLess(arguments.index(str(attachment)), separator)
-            self.assertTrue(config_file.read_text(encoding="utf-8").strip().endswith("/fleet-worker"))
+            self.assertTrue(config_file.read_text(encoding="utf-8").strip().endswith("/config/opencode"))
             self.assertNotEqual(config_file.read_text(encoding="utf-8").strip(), str(hostile_config))
             self.assertEqual(exa_file.read_text(encoding="utf-8").strip(), "")
             clean_env = dict(
@@ -430,7 +431,7 @@ class FleetPreflightTests(unittest.TestCase):
                 },
             )
             self.assertEqual(shared.returncode, 0, shared.stderr)
-            self.assertEqual(config_file.read_text(encoding="utf-8").strip(), "")
+            self.assertTrue(config_file.read_text(encoding="utf-8").strip().endswith("/config/opencode"))
             self.assertEqual(exa_file.read_text(encoding="utf-8").strip(), "")
             shared_env = dict(
                 line.split("=", 1)
@@ -475,8 +476,12 @@ class FleetPreflightTests(unittest.TestCase):
             self.assertEqual(research.returncode, 0, research.stderr)
             research_args = args_file.read_text(encoding="utf-8").splitlines()
             self.assertEqual(research_args[research_args.index("--agent") + 1], "fleet-research")
-            self.assertEqual(research_args[research_args.index("--model") + 1], "opencode-go/kimi-k3")
-            research_dir = Path(research_args[research_args.index("--dir") + 1])
+            self.assertEqual(research_args[research_args.index("--model") + 1].split("#")[0], "opencode-go/kimi-k3")
+            research_dir = Path(dict(line.split("=", 1) for line in search_env_file.read_text().splitlines())["cwd"])
+            self.assertNotIn("--dir", research_args)
+            self.assertNotIn("--pure", research_args)
+            self.assertNotIn("--variant", research_args)
+            self.assertIn("--standalone", research_args)
             self.assertNotEqual(research_dir, work_dir)
             self.assertNotEqual(research_dir.parent, hostile_tmp)
             self.assertFalse(research_dir.exists())
@@ -621,8 +626,8 @@ class FleetPreflightTests(unittest.TestCase):
             self.assertNotIn("--file", arguments)
             self.assertTrue("\n".join(arguments[arguments.index("--") + 1:]).endswith("=== CROSSFEED TASK ===\nCLASSIFY_THIS"))
             direct_config = json.loads(config_file.read_text(encoding="utf-8"))
-            self.assertEqual(direct_config["agent"]["direct"]["tools"], {"*": False})
-            self.assertEqual(direct_config["agent"]["direct"]["permission"], {"*": "deny"})
+            self.assertTrue(all(rule["effect"] == "deny" for rule in direct_config["agents"]["direct"]["permissions"]))
+            self.assertEqual(direct_config["permissions"][0], {"action": "*", "resource": "*", "effect": "deny"})
             run_env = dict(line.split("=", 1) for line in env_file.read_text(encoding="utf-8").splitlines())
             isolated_home = Path(run_env["xdg_data_home"])
             self.assertEqual(isolated_home.parent, state_dir / "oc-homes")

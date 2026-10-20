@@ -20,7 +20,7 @@ python3 scripts/fleetctl.py release-paths --token <returned-token>
 
 Claims reject equal/ancestor overlaps, even for the same owner. They name holder and expiry; PID reaping/TTL are backstops, not permission to race a living writer. Fanout claims before launch, exits 3 on conflict and releases on exit. Direct wrappers and custom writers are not all protected automatically: the lead must claim and release their paths, and verify continuing ownership across long work. A fixed TTL is not indefinite mutual exclusion.
 
-OpenCode writes require `--write` and a clean git tree. Its plan agent denies edits, shell, nested agents and external directories; shared skills cannot override denied tools. Build can execute shell inside its root and still needs caller-owned isolation/review. Wrapper runs use isolated XDG data homes and databases; raw concurrent opencode calls bypass that protection.
+OpenCode writes require `--write` and a clean git tree. Its plan agent denies edits, shell, nested agents and external directories; shared skills cannot override denied tools. Build can execute shell inside its root and still needs caller-owned isolation/review. V2 wrapper runs use --standalone, private native permission profiles and isolated XDG data/config/cache/state roots and databases; raw concurrent opencode calls bypass that protection.
 
 Codex read-only/workspace-write are enforced sandbox boundaries, with workspace-write allowing its work root and configured temporary roots. `.git` remains protected; the lead commits and runs full suites outside the sandbox. Managed execution can block process inspection or hang thread-dependent tests. Targeted worker checks are evidence only for what actually ran.
 
