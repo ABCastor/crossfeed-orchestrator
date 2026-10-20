@@ -26,9 +26,11 @@ import urllib.request
 from pathlib import Path
 try:
     import daily_model_refresh as daily
+    import decide
     from evidence import current_aa_variants, load_lmarena, write_evidence
 except ModuleNotFoundError:
     from scripts import daily_model_refresh as daily
+    from scripts import decide
     from scripts.evidence import current_aa_variants, load_lmarena, write_evidence
 
 STATE_DIR = Path(
@@ -141,7 +143,8 @@ def entitled_models() -> set[str]:
     }
     try:
         proc = subprocess.run(
-            ["opencode", "models", "--standalone", "opencode-go"],
+            # OpenCode v2 rejects a provider argument and lists every provider.
+            ["opencode", "models", "--standalone"],
             text=True,
             capture_output=True,
             timeout=60,
@@ -156,7 +159,7 @@ def entitled_models() -> set[str]:
         return set()
     if proc.returncode != 0:
         return set()
-    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip().startswith("opencode-go/")}
 
 
 def fetch(url: str, timeout: int = 60) -> str | None:
@@ -265,6 +268,25 @@ def extract_swebench(raw: str | None, tokens: dict[str, list[str]]) -> dict:
                         }
                     )
     return scores
+
+
+def second_opinion(lane: str, changes: dict, overlay: dict) -> str:
+    """Shadow review of the applied refresh by a cheap decision lane: a report line, never a gate."""
+    by_id = {l["lane_id"]: l for l in overlay.get("lanes", [])}
+    holders = {}
+    for role in daily.CHEAP_ROLES:
+        ranking = overlay.get("routing", {}).get("roles", {}).get(role, {}).get("quality_first", [])
+        holders[role] = [
+            f"{x} (AA {by_id.get(x, {}).get('market_scores', {}).get('aa_intelligence')}, "
+            f"price {by_id.get(x, {}).get('price_1m')}, data {by_id.get(x, {}).get('data_policy', 'default')})"
+            for x in ranking]
+    text = (daily.summary(changes) + "\nChanges: " + json.dumps(changes)
+            + "\nCheap roles after the refresh: " + json.dumps(holders))
+    verdict = decide.decide("refresh-review", {"Refresh result": text}, lane=lane, data_class="public")
+    if not verdict:
+        return f"Second opinion ({lane}, shadow): unavailable."
+    return (f"Second opinion ({lane}, shadow): {verdict['answer']} "
+            f"(confidence {verdict['confidence']}): {verdict['reason']}")
 
 
 # BR-REFRESH-001
@@ -401,6 +423,13 @@ def main() -> int:
         refresh_failed = True
         # Do not print external exception text or credentials in the report.
         report_lines.append("Daily roster: update refused; overlay retained or restored. Check catalog/roster validation.")
+
+    review_lane = overlay.get("policy", {}).get("model_refresh", {}).get("review_lane")
+    if isinstance(review_lane, str) and review_lane and not refresh_failed:
+        try:
+            report_lines.append(second_opinion(review_lane, changes, overlay))
+        except Exception:  # noqa: BLE001 - a shadow comment must never fail the refresh
+            report_lines.append(f"Second opinion ({review_lane}, shadow): unavailable.")
 
     catalog_path.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     write_evidence(STATE_DIR.parent, overlay, catalog)
