@@ -58,16 +58,24 @@ def cli_catalog(command, *, prefix=None):
         if not line:
             continue
         if prefix:
-            if not re.fullmatch(re.escape(prefix) + r'/[\w.:-]+', line):
+            # OpenCode v2 lists every connected provider in one call (it rejects a
+            # provider argument); keep this provider's rows, fail on anything else.
+            if not re.fullmatch(r'[\w.-]+/[\w.:/-]+', line):
                 return None
-            rows.append({'selector': line, 'model_key': line.split('/', 1)[1]})
+            if line.startswith(prefix + '/'):
+                rows.append({'selector': line, 'model_key': line.split('/', 1)[1]})
         else:
             # AGY lists one selector per row, optionally with a display name.
             match = re.match(r'^([a-z][\w.]*-[\w.-]+)(?:\s+.*)?$', line)
             if not match:
                 return None
             rows.append({'selector': match[1], 'model_key': model_key(match[1])})
+    # A provider missing from a successful listing is unknown, never empty:
+    # an expired login must not retire every route of that provider.
     return rows or None
+
+
+OPENCODE_LISTING = ['opencode', 'models', '--standalone']
 
 
 def discover(roster):
@@ -77,10 +85,15 @@ def discover(roster):
     for provider in sorted({l['provider'] for l in lanes if l.get('harness') == 'opencode'} | (
             {'opencode'} if any(l.get('provider') == 'opencode-go' for l in lanes) else set())):
         # v2 supports --standalone, avoiding the owner's background service.
-        rows = cli_catalog(['opencode', 'models', '--standalone', provider], prefix=provider)
+        rows = cli_catalog(OPENCODE_LISTING, prefix=provider)
         # Zen's paid catalog is not a Go entitlement. Only free promotions enter
         # a separate zero-cost pool; disappearing promotions retire that pool only.
         if provider == 'opencode':
+            # v2 lists free promotions under opencode-go too; an unconnected Zen
+            # with no lanes in its pool has nothing to reconcile, so it is not
+            # reported as an unknown catalog every day.
+            if rows is None and not any(l.get('quota_pool') == 'opencode-free' for l in lanes):
+                continue
             pool = 'opencode-free'
         else:
             pools = {l['quota_pool'] for l in lanes if l.get('harness') == 'opencode'
@@ -89,7 +102,7 @@ def discover(roster):
                 continue
             pool = pools.pop()
         catalogs.append({'harness': 'opencode', 'provider': provider, 'pool': pool,
-                         'models': rows, 'source': f'opencode models --standalone {provider}', 'free_only': provider == 'opencode',
+                         'models': rows, 'source': f'opencode models --standalone ({provider})', 'free_only': provider == 'opencode',
                          'known_promos': [l['selector'] for l in lanes if l.get('quota_pool') == 'opencode-free']})
     if any(l.get('harness') == 'agy' for l in lanes):
         rows = cli_catalog(['agy', 'models'])
@@ -113,9 +126,9 @@ def discover(roster):
         # github-copilot catalog is a different route and cannot grant admission.
         catalogs.append({'harness': 'copilot', 'provider': 'github-copilot',
                          'pool': 'github-copilot-student',
-                         'models': cli_catalog(['opencode', 'models', '--standalone', 'github-copilot'], prefix='github-copilot'),
+                         'models': cli_catalog(OPENCODE_LISTING, prefix='github-copilot'),
                          'dynamic': True,
-                         'source': 'opencode models --standalone github-copilot; native Auto identity/entitlement unconfirmed'})
+                         'source': 'opencode models --standalone (github-copilot); native Auto identity/entitlement unconfirmed'})
     # Reuse the gateway's own validated discovery, including provider instances.
     try:
         from . import chatgpt_transport as chat
@@ -178,7 +191,7 @@ def reconcile(source, catalogs, market, *, today=None):
     # BR-REFRESH-001, BR-BENCH-001
     roster = copy.deepcopy(source)
     today = today or dt.datetime.now().astimezone().date().isoformat()
-    changes = {'added': [], 'retired': [], 'prices': [], 'roles': [], 'unknown': []}
+    changes = {'added': [], 'retired': [], 'prices': [], 'roles': [], 'unknown': [], 'held': []}
     all_lanes = roster['lanes']
     fresh = set()
     successful = set()
@@ -265,6 +278,11 @@ def rerank(roster, changes, today, fresh, successful):
     if (number(floor) is None or number(cap) is None or type(limit) is not int or not 0 <= limit <= 2
             or floor < DEFAULT_BOUNDS['aa_floor'] or cap > DEFAULT_BOUNDS['helper_usd_cap']):
         raise patcher.PatchError('model_refresh bounds can only tighten the fixed defaults')
+    # Lanes the owner pinned to their cheap roles: a move that would demote one
+    # is held for review instead of applied (BR-REFRESH-002).
+    keep = bounds.get('keep_roles', [])
+    if not isinstance(keep, list) or not all(isinstance(x, str) for x in keep):
+        raise patcher.PatchError('model_refresh keep_roles must be a list of lane ids')
     counter = roster.get('model_refresh_day', {})
     used = counter.get('roles_changed', 0) if counter.get('date') == today else 0
     if type(used) is not int or not 0 <= used <= 2:
@@ -312,6 +330,11 @@ def rerank(roster, changes, today, fresh, successful):
         lane_delta = any((role in l.get('roles', [])) != (l['lane_id'] in selected) for l in managed)
         if candidate == bands and not lane_delta:
             continue
+        demoted = sorted(l['lane_id'] for l in managed if l['lane_id'] in keep
+                         and role in l.get('roles', []) and l['lane_id'] not in selected)
+        if demoted:
+            changes['held'].append(f"{role} (would demote {', '.join(demoted)})")
+            continue
         role_rules[role] = candidate
         for lane in managed:
             roles = [r for r in lane.get('roles', []) if r != role]
@@ -353,5 +376,8 @@ def apply_refresh(overlay, catalogs, market, *, today=None):
 
 
 def summary(changes):
-    return ('Daily roster: ' + ', '.join(f'{len(changes[k])} {k}' for k in
+    text = ('Daily roster: ' + ', '.join(f'{len(changes[k])} {k}' for k in
             ('added', 'retired', 'prices', 'roles', 'unknown')) + '.')
+    if changes.get('held'):
+        text += ' Held for review: ' + '; '.join(changes['held']) + '.'
+    return text

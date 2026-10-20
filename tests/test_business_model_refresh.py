@@ -144,6 +144,35 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(changes['roles'], [])
         self.assertEqual(unknown['routing'], r['routing'])
 
+    def test_pinned_lane_demotion_is_held_not_applied(self):
+        # BR-REFRESH-002: a role move that would demote an owner-pinned lane is held for review.
+        r, free = self._active_free()
+        r, _ = daily.reconcile(r, [catalog(FIXTURE['after'])], market(), today='2026-10-20')
+        held_roles = [role for role in daily.CHEAP_ROLES if role in next(
+            l for l in r['lanes'] if l['lane_id'] == free['lane_id'])['roles']]
+        self.assertTrue(held_roles)
+        rows = copy.deepcopy(FIXTURE['after'])
+        for row in rows:
+            if 'price_1m' in row:
+                row['price_1m'] = {'input': 100, 'output': 100}
+        r.setdefault('policy', {})['model_refresh'] = {'keep_roles': [free['lane_id']]}
+        self.overlay.write_text(patcher.dump(r))
+        changes = daily.apply_refresh(self.overlay, [catalog(rows)], market(), today='2026-10-21')
+        result = json.loads(self.overlay.read_text())
+        self.assertFalse(set(changes['roles']) & set(held_roles))
+        self.assertEqual(len(changes['held']), len(held_roles))
+        for role in held_roles:
+            self.assertIn(free['lane_id'], result['routing']['roles'][role]['quality_first'])
+        self.assertIn('Held for review', daily.summary(changes))
+        # Control: without the pin the same refresh demotes it.
+        r['policy']['model_refresh'] = {}
+        _, unpinned = daily.reconcile(r, [catalog(rows)], market(), today='2026-10-21')
+        self.assertTrue(unpinned['roles'])
+        self.assertEqual(unpinned['held'], [])
+        r['policy']['model_refresh'] = {'keep_roles': 'not-a-list'}
+        with self.assertRaises(patcher.PatchError):
+            daily.reconcile(r, [catalog(rows)], market(), today='2026-10-21')
+
     def test_bounds_cannot_expand_or_reset_same_day(self):
         # BR-REFRESH-001
         for settings in ({'max_roles_per_day': 3}, {'aa_floor': 0}, {'helper_usd_cap': 1}):
@@ -213,6 +242,11 @@ class RefreshTests(unittest.TestCase):
                 self.assertIsNone(daily.cli_catalog(['fixture'], prefix='opencode-go'))
         with patch.object(daily.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'opencode-go/beam-free\n', '')):
             self.assertEqual(daily.cli_catalog(['fixture'], prefix='opencode-go')[0]['model_key'], 'beam-free')
+        listing = 'google/gemini-x\nopencode-go/beam-free\nopenrouter/vendor/model\n'
+        with patch.object(daily.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, listing, '')):
+            self.assertEqual([r['selector'] for r in daily.cli_catalog(['fixture'], prefix='opencode-go')], ['opencode-go/beam-free'])
+            # A provider absent from a successful listing (expired login) is unknown, not empty.
+            self.assertIsNone(daily.cli_catalog(['fixture'], prefix='opencode'))
 
     def test_discovery_and_market_listing_use_v2_standalone(self):
         # BR-REFRESH-001: provider listing is injectable through PATH, with no server.
@@ -221,10 +255,12 @@ class RefreshTests(unittest.TestCase):
         executable = bin_dir / 'opencode'
         executable.write_text('#!' + sys.executable + '\n' +
             "import sys\n" +
-            "assert sys.argv[1:3] == ['models', '--standalone'], sys.argv\n" +
-            "assert len(sys.argv) == 4, sys.argv\n" +
-            "assert sys.argv[3] in ('opencode-go', 'opencode', 'github-copilot'), sys.argv\n" +
-            "print(sys.argv[3] + '/fixture-model')\n")
+            # OpenCode v2.0.32: `opencode models <provider>` fails with
+            # 'Unexpected positional argument'; one call lists every provider.
+            "assert sys.argv[1:] == ['models', '--standalone'], sys.argv\n" +
+            "for p in ('opencode-go', 'opencode', 'github-copilot', 'openrouter'):\n" +
+            "    print(p + '/fixture-model')\n" +
+            "print('openrouter/vendor/nested-model')\n")
         executable.chmod(0o755)
         roster = {'lanes': [
             {'harness': 'opencode', 'provider': 'opencode-go', 'quota_pool': 'opencode-go'},
@@ -236,6 +272,16 @@ class RefreshTests(unittest.TestCase):
             provider: [{'selector': provider + '/fixture-model', 'model_key': 'fixture-model'}]
             for provider in ('opencode-go', 'opencode', 'github-copilot')})
         self.assertEqual(entitled, {'opencode-go/fixture-model'})
+
+    def test_unconnected_zen_without_lanes_is_not_an_unknown_catalog(self):
+        listing = 'opencode-go/beam-free\nopencode-go/mimo-v2.6-flash\n'
+        roster = {'lanes': [{'harness': 'opencode', 'provider': 'opencode-go', 'quota_pool': 'opencode-go'}]}
+        with patch.object(daily.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, listing, '')):
+            self.assertEqual([c['provider'] for c in daily.discover(roster)], ['opencode-go'])
+            roster['lanes'].append({'harness': 'opencode', 'provider': 'opencode', 'quota_pool': 'opencode-free', 'selector': 'opencode/x-free'})
+            zen = [c for c in daily.discover(roster) if c['provider'] == 'opencode']
+            self.assertEqual(len(zen), 1)
+            self.assertIsNone(zen[0]['models'])
 
     def test_failed_go_catalog_preserves_go_order_when_promos_succeed(self):
         r, free = self._active_free()
@@ -322,6 +368,34 @@ class RefreshTests(unittest.TestCase):
         persisted = json.loads(self.overlay.read_text())
         self.assertTrue(any(l['model_key'] == 'new-helper' for l in persisted['lanes']))
 
+
+    def test_second_opinion_is_a_shadow_report_line_only(self):
+        # Shadow review: a cheap decision lane comments on the applied refresh; it never gates or fails it.
+        def run(review_lane, verdict):
+            r = json.loads(self.overlay.read_text())
+            r.setdefault('policy', {})['model_refresh'] = {'review_lane': review_lane} if review_lane else {}
+            self.overlay.write_text(patcher.dump(r))
+            with patch.object(market_refresh, 'OVERLAY', self.overlay), patch.object(market_refresh, 'STATE_DIR', self.tmp / 'market'), \
+                    patch.object(daily, 'discover', return_value=[catalog(FIXTURE['after'])]), \
+                    patch.object(market_refresh, 'fetch', return_value='{}'), \
+                    patch.object(market_refresh, 'fetch_artificial_analysis', return_value=market()['artificial_analysis']), \
+                    patch.object(market_refresh, 'write_evidence'), patch.object(market_refresh, 'load_lmarena', return_value={}), \
+                    patch.object(market_refresh.decide, 'decide', return_value=verdict) as judge:
+                self.assertEqual(market_refresh.main(), 0)
+            return (self.tmp / 'market/market-report.md').read_text(), judge
+        report, judge = run(None, None)
+        judge.assert_not_called()
+        self.assertNotIn('Second opinion', report)
+        report, judge = run('opencode-go:deepseek-v4.1-flash:low',
+                            {'answer': 'FLAG', 'confidence': 80, 'reason': 'listing failed'})
+        self.assertEqual(judge.call_args.kwargs['data_class'], 'public')
+        self.assertIn('Daily roster:', judge.call_args.args[1]['Refresh result'])
+        self.assertIn('Second opinion (opencode-go:deepseek-v4.1-flash:low, shadow): FLAG', report)
+        report, _ = run('opencode-go:deepseek-v4.1-flash:low', None)
+        self.assertIn('shadow): unavailable', report)
+        with patch.object(market_refresh, 'second_opinion', side_effect=RuntimeError('boom')):
+            report, _ = run('opencode-go:deepseek-v4.1-flash:low', None)
+        self.assertIn('shadow): unavailable', report)
 
 if __name__ == '__main__':
     unittest.main()
