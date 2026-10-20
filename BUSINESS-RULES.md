@@ -53,3 +53,11 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Implemented-by: `scripts/patch_opencode_go_roles.py:migrate`.
 - Tested-by: `tests/test_opencode_value.py:OpenCodeValuePatchTests.test_migration_is_idempotent_and_only_routes_shortlisted_go_models`, `test_shortlist_routes_automatically_and_nonshortlist_stays_explicit`, `test_dry_run_writes_patch_validates_candidate_and_preserves_source_bytes`, `test_apply_on_temp_overlay_creates_backup_and_validates_result`, `test_failed_post_apply_validation_restores_the_backup`, and `test_symlink_source_is_refused_without_changing_target`.
 - Review when: the owner changes the allowed pool spend, AA quality or price inputs change enough to alter the shortlist, or OpenCode Go changes model availability/route semantics.
+
+## BR-OPENCODE-WORKER-001 — Preserve the worker boundary during the v2 port [DECIDED · owner brief supplied 20 Oct 2026]
+
+- RULE: Read-only OpenCode workers deny writes, shell execution, nested agents and external-directory access. Write workers require explicit --write and a clean git worktree, retain external-directory and nested-agent denials, and run in caller-owned isolation. Direct calls expose no tools or project context. Every run uses a private server and state. The port must not edit live owner configuration.
+- Authority: supplied r18/opencode-v2 brief, goals 1, 2 and 4; existing isolation and lane contracts. This records supplied policy, without granting a new write, spend or deployment permission.
+- implemented-by: `scripts/opencode-agent.sh:main`, `scripts/opencode_v2.py:worker_config`, `scripts/migrate_opencode_v2.py:main`.
+- tested-by: `tests/test-opencode.sh:test_v2_boundary` (read-only prohibition, persisted write control, external denial in build, direct and shared boundaries), `test_write_cleanliness_gate`, `test_v2_account_snapshot`; `tests/test_opencode_v2.py:test_no_external_plugins_skills_or_mcp_in_lean_and_direct`, `test_profile_imports_only_named_instructions_and_shared_skill_paths`, `test_migration_cli_writes_separate_candidates_for_both_config_formats`. Boundary execution uses an independent rule-evaluating test double; native v2 acceptance is explicitly unverified where a sandbox prevents server binding.
+- Review when: OpenCode changes tool names, permissions, discovery, auto-approval or standalone semantics.
