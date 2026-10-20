@@ -525,6 +525,18 @@ h1{margin-top:calc(17px + var(--line-w))}
 /* Provider setup uses the same paper, rules and reading type as the console. */
 .pool-title{display:block;min-width:0;overflow-wrap:anywhere}
 .pool-title small{display:block;margin-top:.2rem;font:400 13.5px/1.4 var(--face);letter-spacing:0;color:var(--quiet)}
+/* One subscription row; its independent allowances retain the existing pool controls. */
+.pool.provider-group{display:block;padding:1.15rem 0 .7rem}
+.allowance-summary{margin:.6rem 0 .35rem;font-size:16px;line-height:1.5;overflow-wrap:anywhere}
+.allowances>summary{display:flex;align-items:center;gap:.5rem;min-height:44px;width:fit-content;max-width:100%;cursor:pointer;list-style:none;color:var(--machine-text);font-size:14px;line-height:1.45}
+.allowances>summary::-webkit-details-marker{display:none}
+.allowances>summary::before{content:'+';font:500 18px/1 var(--mono);flex:none}
+.allowances[open]>summary::before{content:'−'}
+.allowance-note{margin:.35rem 0 .7rem;color:var(--quiet);font-size:14px}
+.allowances>.pool{padding:1rem 0 .35rem;border-top:1px solid var(--rule);border-bottom:0}
+.allowances .who h3{font:600 16.5px/1.25 var(--face);letter-spacing:-.005em;margin:0}
+.allowances .lvl-off h3{text-decoration:line-through;text-decoration-thickness:1px}
+@media(max-width:760px){.allowances>.pool{padding:1rem 0}.pool.provider-group{padding:1rem 0}}
 .provider-setup{margin:1.25rem 0 1.5rem;padding:1rem 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
 .provider-open{display:flex;align-items:center;gap:.6rem;width:fit-content;min-height:44px;padding:.65rem 1rem;border:1px solid var(--rule-strong);border-radius:4px;color:var(--ink);font:500 15px/1.4 var(--face);cursor:pointer;list-style:none}
 .provider-open::-webkit-details-marker{display:none}

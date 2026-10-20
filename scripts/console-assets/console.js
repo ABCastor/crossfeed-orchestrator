@@ -100,7 +100,8 @@ const Crossfeed = (() => {
     const stop = () => { for (const animation of active.values()) animation.cancel(); active.clear(); };
     preference?.addEventListener?.('change', event => { if (event.matches) stop(); });
     function change(mutate) {
-      const nodes = [...doc.querySelectorAll('.pool, .opt')];
+      const nodes = [...doc.querySelectorAll('.pool, .opt')]
+        .filter(node => !node.matches('.pool') || !node.parentElement?.closest('.pool'));
       const before = new Map(nodes.map(node => [node, node.getBoundingClientRect?.()]));
       stop();
       const anchor = doc.documentElement;
@@ -125,7 +126,8 @@ const Crossfeed = (() => {
         if (!first?.height || !last?.height || !node.animate) continue;
         let x = first.left - last.left, y = first.top - last.top;
         // Model rows inherit their card's motion. Animate only the remainder to avoid moving twice.
-        const parent = node.matches('.opt') ? node.closest('.pool') : null;
+        const modelPool = node.matches('.opt') ? node.closest('.pool') : null;
+        const parent = modelPool?.closest('[data-pool-members]') || modelPool;
         if (parent && before.get(parent)?.height && after.get(parent)?.height && parent.animate) {
           x -= before.get(parent).left - after.get(parent).left;
           y -= before.get(parent).top - after.get(parent).top;
@@ -343,6 +345,15 @@ function boot(document, window) {
     try { window.localStorage.setItem('crossfeed-theme', choice); } catch (_) {}
   });
 
+  // A native disclosure works without JS; remember only this browser's presentation choice.
+  for (const details of document.querySelectorAll('details.allowances')) {
+    const key = `crossfeed-disclosure:${details.id}`;
+    try { details.open = window.localStorage.getItem(key) === 'open'; } catch (_) {}
+    details.addEventListener('toggle', () => {
+      try { window.localStorage.setItem(key, details.open ? 'open' : 'closed'); } catch (_) {}
+    });
+  }
+
   // ---- search: the lens, "/" and Cmd-K / Ctrl-K; Esc closes and gives focus back ----
   const lens = document.querySelector('.find-lens');
   const panel = document.querySelector('#find');
@@ -531,9 +542,13 @@ function boot(document, window) {
     const mutate = () => {
       const focused = document.activeElement;
       const poolList = document.querySelector('.pools');
+      const moved = new Set();
       for (const key of order.ranks.pools[order.sort.pools]) {
         const row = document.getElementById(`pool-${key}`);
-        if (row && poolList) poolList.append(row);
+        const provider = row?.closest('[data-pool-members]') || row;
+        if (provider && poolList && !moved.has(provider)) {
+          poolList.append(provider); moved.add(provider);
+        }
       }
       for (const [pool, ranking] of Object.entries(order.ranks.models)) {
         const pick = picks.get(pool);
@@ -615,6 +630,8 @@ function boot(document, window) {
     }
   }
   function update(data, skip = () => false) {
+    const agySummary = document.querySelector('.allowance-summary');
+    if (agySummary && data.agy_summary !== undefined) agySummary.textContent = data.agy_summary;
     for (const pool of data.pools || []) {
       // What the server confirmed is always remembered (a failed newer click puts it back); the
       // page only follows it when no newer click of ours is still on its way.
@@ -682,6 +699,7 @@ function boot(document, window) {
     const isModel = row.matches('.opt');
     const pool = row.closest('.pool').dataset.pool;
     const keyOf = item => isModel ? item.dataset.model : item.dataset.pool;
+    const membersOf = item => item.dataset.poolMembers ? JSON.parse(item.dataset.poolMembers) : [keyOf(item)];
     function begin() {
       if (orderDraft?.handle === handle) return;
       cancelOrder();
@@ -701,7 +719,7 @@ function boot(document, window) {
         order.models[pool] = order.ranks.models[pool][order.sort.models[pool]].map(key => keys.has(key) ? changed.shift() : key);
         order.ranks.models[pool].your = [...order.models[pool]]; order.sort.models[pool] = 'your';
       } else {
-        order.pools = reordered.map(keyOf); order.ranks.pools.your = [...order.pools]; order.sort.pools = 'your';
+        order.pools = reordered.flatMap(membersOf); order.ranks.pools.your = [...order.pools]; order.sort.pools = 'your';
       }
       orderDraft.dirty = true; applyOrder(); handle.focus({preventScroll: true});
       say(`${row.dataset.searchLabel} moved to ${next + 1} of ${siblings.length}. Enter saves; Escape cancels.`);

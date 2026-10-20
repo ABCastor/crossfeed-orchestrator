@@ -209,6 +209,118 @@ function start({fetchImpl, prepare, platform = 'MacIntel', clipboard, motion = f
 const reply = (request, data) => request.resolve({ok: true, json: async () => data});
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+function addAntigravity(env) {
+  const ids = ['antigravity-gemini', 'antigravity-3p', 'antigravity-argon'];
+  const subpools = ids.map((key, i) => h('article', {class: 'pool lvl-normal', id: `pool-${key}`,
+    'data-pool': key, 'data-search-label': ['Antigravity Gemini', 'Antigravity Claude/GPT', 'Antigravity Argon'][i],
+    tabindex: '-1'}, h('div', {class: 'gauge'})));
+  const disclosure = h('details', {class: 'allowances', id: 'antigravity-allowances'},
+    h('summary'), ...subpools);
+  const summary = h('p', {class: 'allowance-summary'});
+  const group = h('article', {class: 'pool provider-group', id: 'provider-antigravity',
+    'data-pool': ids[0], 'data-pool-members': JSON.stringify(ids), 'data-search-label': 'Antigravity (Google AI Pro)'},
+    h('div', {class: 'who'}, h('button', {class: 'order-handle', type: 'button'})), summary, disclosure);
+  env.document.querySelector('.pools').append(group);
+  const state = env.document.querySelector('.order-state'), order = JSON.parse(state.dataset.order);
+  order.pools.push(...ids);
+  for (const rank of Object.values(order.ranks.pools)) rank.push(...ids);
+  order.ranks.pools.quota = [ids[2], 'codex', ids[1], ids[0]];
+  state.dataset.order = JSON.stringify(order);
+  Object.assign(env, {group, disclosure, subpools, summary});
+}
+
+test('Antigravity allowances start closed, persist both choices across reload, and tolerate blocked storage', () => {
+  const saved = new Map();
+  const options = {prepare: addAntigravity, configureWindow(window) {
+    window.localStorage = {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value)};
+  }};
+  let env = start(options);
+  assert.equal(env.disclosure.open, false);
+  env.disclosure.open = true; env.disclosure.dispatch('toggle');
+  env = start(options);
+  assert.equal(env.disclosure.open, true);
+  env.disclosure.open = false; env.disclosure.dispatch('toggle');
+  assert.equal(start(options).disclosure.open, false);
+  env = start({prepare: addAntigravity, configureWindow(window) {
+    window.localStorage = {getItem() { throw Error('blocked'); }, setItem() { throw Error('blocked'); }};
+  }});
+  env.disclosure.open = true;
+  assert.doesNotThrow(() => env.disclosure.dispatch('toggle'));
+  assert.equal(env.disclosure.open, true);
+});
+
+test('Antigravity search and direct links reveal a collapsed allowance', () => {
+  let env = start({prepare: addAntigravity});
+  env.lens.click(); env.input.value = 'Argon'; env.input.dispatch('input');
+  env.document.querySelector('#search-results a').click();
+  assert.equal(env.disclosure.open, true);
+  assert.equal(env.document.activeElement, env.subpools[2]);
+  env = start({prepare: addAntigravity, configureWindow(window) { window.location.hash = '#pool-antigravity-3p'; }});
+  assert.equal(env.disclosure.open, true);
+  assert.equal(env.document.activeElement, env.subpools[1]);
+});
+
+test('sort and refresh keep Antigravity together and update its summary without closing it', async () => {
+  const env = start({prepare: addAntigravity});
+  env.disclosure.open = true;
+  const sort = env.document.querySelector('[data-sort="pools"]');
+  sort.value = 'quota'; sort.dispatch('change');
+  await flush();
+  const list = env.document.querySelector('.pools');
+  assert.equal(list.children.length, 2);
+  assert.equal(list.children[0], env.group);
+  for (const pool of env.subpools) assert.equal(pool.parentElement, env.disclosure);
+  const summary = 'Gemini used up until 26 Oct · Claude/GPT 8% used · Argon used up until 23 Oct';
+  reply(env.requests[0], {agy_summary: summary, pools: [{pool: 'antigravity-argon', gauge: 'EXHAUSTED'}]});
+  await flush();
+  assert.equal(env.summary.textContent, summary);
+  assert.equal(env.subpools[2].querySelector('.gauge').innerHTML, 'EXHAUSTED');
+  assert.equal(env.disclosure.open, true);
+});
+
+test('reordering the subscription retains every underlying pool ID and Escape restores it', async () => {
+  const env = start({prepare: addAntigravity});
+  const handle = env.group.querySelector('.order-handle');
+  handle.dispatch('keydown', {key: 'ArrowUp'});
+  assert.equal(env.document.querySelector('.pools').children[0], env.group);
+  handle.dispatch('keydown', {key: 'Escape'});
+  assert.equal(env.document.querySelector('.pools').children[1], env.group);
+  assert.equal(env.requests.length, 0);
+  handle.dispatch('keydown', {key: 'ArrowUp'});
+  handle.dispatch('keydown', {key: 'Enter'});
+  await flush();
+  const saved = JSON.parse(env.requests[0].options.body.get('order'));
+  assert.deepEqual(saved.pools, ['antigravity-gemini', 'antigravity-3p', 'antigravity-argon', 'codex']);
+  for (const pool of env.subpools) assert.equal(pool.parentElement, env.disclosure);
+});
+
+test('nested Antigravity level and model saves still address only their own pool', async () => {
+  const env = start({prepare(env) {
+    addAntigravity(env);
+    const codex = env.document.getElementById('pool-codex');
+    env.subpools[0].append(codex.querySelector('.lv'), codex.querySelector('.means'), env.pick);
+    env.pick.dataset.pool = 'antigravity-gemini';
+    for (const input of env.subpools[0].querySelectorAll('[name="pool"]')) input.value = 'antigravity-gemini';
+    const state = env.document.querySelector('.order-state'), order = JSON.parse(state.dataset.order);
+    order.models['antigravity-gemini'] = order.models.codex;
+    order.ranks.models['antigravity-gemini'] = order.ranks.models.codex;
+    order.sort.models['antigravity-gemini'] = 'your';
+    state.dataset.order = JSON.stringify(order);
+  }});
+  env.stops[3].click();
+  await flush();
+  assert.equal(env.requests[0].options.body.get('pool'), 'antigravity-gemini');
+  assert.equal(env.subpools[0].classList.contains('lvl-high'), true);
+  assert.equal(env.subpools[1].classList.contains('lvl-normal'), true);
+  reply(env.requests[0], {}); await flush();
+  env.sol.querySelector('.sw').click();
+  await flush();
+  assert.equal(env.requests[1].options.body.get('pool'), 'antigravity-gemini');
+  assert.equal(env.requests[1].options.body.get('switch'), 'gpt-6.1-sol=off');
+  assert.equal(env.sol.querySelector('.sw').getAttribute('aria-checked'), 'false');
+  for (const pool of env.subpools) assert.equal(pool.parentElement, env.disclosure);
+});
+
 // ---- pure parts ----------------------------------------------------------------------------------
 test('slash opens search only when not typing; Cmd-K and Ctrl-K always', () => {
   const field = {matches: s => s.includes('input')}, page = {matches: () => false};

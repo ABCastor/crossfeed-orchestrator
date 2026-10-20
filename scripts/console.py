@@ -212,6 +212,31 @@ class Console:
 # ---- rendering ------------------------------------------------------------------------------
 POOL_SORTS = {'your': 'Your order', 'quota': 'Quota left', 'reset': 'Resets soonest', 'name': 'Name'}
 MODEL_SORTS = {'your': 'Your order', 'quality': 'Quality', 'cheapest': 'Cheapest', 'name': 'Name'}
+AGY_ALLOWANCES = {'antigravity-gemini': 'Gemini', 'antigravity-3p': 'Claude/GPT', 'antigravity-argon': 'Argon'}
+
+
+def _agy_summary(pools: list[dict[str, Any]]) -> str:
+    """Summarize independent allowances without inventing a subscription-wide quota."""
+    by_pool = {p['pool']: p for p in pools}
+    words = []
+    for key, label in AGY_ALLOWANCES.items():
+        if key not in by_pool:
+            continue
+        pool = by_pool[key]
+        if pool['state'] == 'EXHAUSTED':
+            state = 'used up'
+            if pool.get('until'):
+                reset = fleetctl.parse_iso(pool['until']).astimezone()
+                state += f' until {reset.day} {reset:%b}'
+        else:
+            readings = [_number(limit.get('used_percent')) for limit in pool.get('limits') or []]
+            readings = [value for value in readings if value is not None]
+            reading = _number((pool.get('quota') or {}).get('used_percent'))
+            if reading is not None:
+                readings.append(reading)
+            state = f'{max(readings):.0f}% used' if readings else 'no reading'
+        words.append(f'{label} {state}')
+    return ' · '.join(words)
 
 
 def validate_order(order: Any) -> None:
@@ -545,7 +570,8 @@ def _gauge(pool: dict[str, Any]) -> str:
     exhausted = ""
     if state == "EXHAUSTED" and pool.get("until"):
         until = fleetctl.reset_words(pool["until"])
-        exhausted = f'<p class="q hot"><b>Used up</b>, back {html.escape(until)}</p>'
+        label = 'EXHAUSTED' if pool['pool'] in AGY_ALLOWANCES else 'Used up'
+        exhausted = f'<p class="q hot"><b>{label}</b>, back {html.escape(until)}</p>'
         if not limits:
             return exhausted
     if limits:
@@ -564,6 +590,29 @@ def _gauge(pool: dict[str, Any]) -> str:
     if pool.get("measured"):
         return '<p class="q quiet">No reading yet, so Crossfeed treats this plan as full.</p>'
     return '<p class="q quiet">This plan reports no limits Crossfeed can read.</p>'
+
+
+def _provider_gauge(pool: dict[str, Any], overview: dict[str, Any]) -> str:
+    # A provider refusal deliberately hides gauges from routing evidence. The console can
+    # still show the last observed windows beside that refusal, without changing pool data.
+    unreported = ('<p class="allowance-note">Usage percentage is not reported for this individual allowance.</p>'
+                  if pool['pool'] == 'antigravity-argon'
+                  and not any(limit['kind'] == 'window' for limit in pool.get('limits') or []) else '')
+    if pool['pool'] not in AGY_ALLOWANCES or pool['state'] != 'EXHAUSTED':
+        return _gauge(pool) + unreported
+    runtime = overview.get('_brief_context', {}).get('runtime', {})
+    snapshot = runtime.get('quota_snapshots', {}).get(pool['pool']) or {}
+    now = fleetctl.parse_iso(overview['generated_at'])
+    existing = {limit['name'] for limit in pool.get('limits') or []}
+    windows = {name: window for name, window in snapshot.get('windows', {}).items()
+               if name not in existing and window.get('reset_at') and fleetctl.parse_iso(window['reset_at']) > now}
+    if not windows:
+        return _gauge(pool) + unreported
+    limits, _ = fleetctl.pool_limits(pool, windows, None, [], now)
+    age = max(0, int((now - fleetctl.parse_iso(snapshot['observed_at'])).total_seconds()))
+    note = f'Last gauge reading {fleetctl.format_duration(age)} ago; provider refusal still applies.'
+    return (_gauge({**pool, 'limits': limits + (pool.get('limits') or [])})
+            + f'<p class="allowance-note">{html.escape(note)}</p>')
 
 
 def _pro_usage(pool: dict[str, Any]) -> str:
@@ -1085,9 +1134,10 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
     for p in overview["pools"]:
         state, label, note = models_summary(p, by_key)
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
-                      "gauge": _gauge(p), "on": (p.get("models") or {}).get("on", []),
+                      "gauge": _provider_gauge(p, overview), "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
+            "agy_summary": _agy_summary(overview['pools']),
             "console_order": overview.get('console_order') or display_order(overview), "stamp": _stamp(overview)}
 
 
@@ -1235,16 +1285,40 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
     rows = []
     order = overview.get('console_order') or display_order(overview)
     ranking = order['ranks']['pools'][order['sort']['pools']]
-    for pool in sorted(overview["pools"], key=lambda p: ranking.index(p['pool'])):
+    def pool_row(pool, *, allowance=False):
         pool_id = html.escape(pool["pool"])
-        rows.append(
+        title = AGY_ALLOWANCES[pool['pool']] if allowance else pool['label']
+        tag = 'h3' if allowance else 'h2'
+        handle = '' if allowance else _handle(title)
+        plan = '' if allowance else _plan_lines(pool)
+        return (
             f'<article class="pool lvl-{pool["level"]}" id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{html.escape(pool["label"])}" tabindex="-1">'
-            f'<div class="who"><h2>{_handle(pool["label"])}{_pool_heading(pool["label"])}</h2>{_plan_lines(pool)}</div>'
-            f'<div class="gauge">{_gauge(pool)}{_pro_usage(pool)}</div>'
+            f'<div class="who"><{tag}>{handle}{_pool_heading(title)}</{tag}>{plan}</div>'
+            f'<div class="gauge">{_provider_gauge(pool, overview)}{_pro_usage(pool)}</div>'
             f'<div class="ctl">{_slider(pool, form_token)}</div>'
             f'{_picker(pool, by_key, form_token, order)}{_pins_note(pool, by_key)}'
             "</article>"
         )
+    agy = [p for key in AGY_ALLOWANCES for p in overview['pools'] if p['pool'] == key]
+    grouped = False
+    for pool in sorted(overview["pools"], key=lambda p: ranking.index(p['pool'])):
+        if pool['pool'] not in AGY_ALLOWANCES:
+            rows.append(pool_row(pool))
+        elif not grouped:
+            grouped = True
+            title = 'Antigravity (Google AI Pro)'
+            members = html.escape(json.dumps([p['pool'] for p in agy]))
+            rows.append(
+                f'<article class="pool provider-group" id="provider-antigravity" data-pool="{agy[0]["pool"]}" '
+                f'data-pool-members="{members}" data-search-label="{title}" tabindex="-1">'
+                f'<div class="who"><h2>{_handle(title)}{_pool_heading(title)}</h2>{_plan_lines(agy[0])}</div>'
+                f'<p class="allowance-summary">{html.escape(_agy_summary(agy))}</p>'
+                '<details class="allowances" id="antigravity-allowances">'
+                f'<summary>Separate allowances: {", ".join(AGY_ALLOWANCES[p["pool"]] for p in agy)}</summary>'
+                '<p class="allowance-note">One Google plan, separate limits and spend settings.</p>'
+                + ''.join(pool_row(p, allowance=True) for p in agy)
+                + '</details></article>'
+            )
     body = (
         "<h1>Models and spend</h1>"
         '<p class="lede">Enable models for agents to choose from. Each provider shows its default or how Crossfeed picks. '
