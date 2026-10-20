@@ -50,6 +50,18 @@ if [ "$PROFILE" = "media-review" ] && { [ "$MODALITY" = "audio" ] || [ "$MODALIT
       exit 2
     fi
     mkdir -p "$OUT"
+  fi
+  # Profile workers are gated by fanout; this direct media worker bypasses it.
+  resource_gate="${FLEET_RESOURCE_GATE:-$HOME/.claude/scripts/resource-gate}"
+  if [ -x "$resource_gate" ] && [ "${RESOURCE_GATE:-}" != "off" ]; then
+    if [ -n "$OUT" ]; then
+      echo "swarm: gemini-media checking for room" | tee -a "$OUT/dispatch.log" >&2
+    else
+      echo "swarm: gemini-media checking for room" >&2
+    fi
+    /usr/bin/python3 "$resource_gate"
+  fi
+  if [ -n "$OUT" ]; then
     "$HERE/gemini-media.sh" "${media_args[@]}" | tee "$OUT/gemini-media.out"
   else
     "$HERE/gemini-media.sh" "${media_args[@]}"

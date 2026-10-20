@@ -31,9 +31,11 @@ One JSON object per line; explicit mode makes scope reviewable:
 | effort, variant | Supported thinking-level override |
 | timeout | Intentional per-task wall budget, never an outer timeout |
 
-Preflight checks IDs, wrapper allowlists, role/modality/attachment admission, switches/circuits, lane caps and disjoint write roots. An inadmissible row rejects the whole campaign before launch. Maximum campaign size is 32, `--parallel` is 1-16, and admitted lane caps can be lower. Fix the reported rejection and validate again; do not silently drop a lens.
+Preflight checks IDs, wrapper allowlists, role/modality/attachment admission, switches/circuits, lane caps and disjoint write roots. An inadmissible row rejects the whole campaign before launch. Maximum campaign size is 32, `--parallel` defaults to 8 and is 1-16, and admitted lane caps can be lower. Fix the reported rejection and validate again; do not silently drop a lens.
 
 Fanout claims write paths across sessions/campaigns, exits 3 on conflict and releases on exit. Direct/manual writers must claim their scopes too; see [isolation](isolation.md). Different artifact paths and ignored databases are part of the partition.
+
+Before each worker launch, fanout (including swarm profiles) and swarm's direct media path wait for the executable `~/.claude/scripts/resource-gate`, recording "checking for room" once per admission in the run's `dispatch.log` (stderr when no output directory is used); a missing gate is a no-op, `RESOURCE_GATE=off` bypasses it, and `FLEET_RESOURCE_GATE` overrides its path.
 
 Batches are fixed: with `--parallel 4`, task 5 waits for every task in the first batch to return. A slow worker can therefore delay the next batch even when quota is available. Put long jobs in the first batch or a separate campaign. Write claims last the whole campaign; run repair passes after it exits.
 

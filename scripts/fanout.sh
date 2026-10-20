@@ -30,7 +30,7 @@ ROSTER="${ACCESS_OVERLAY:-${XDG_CONFIG_HOME:-$HOME/.config}/orchestrator/access-
 . "$HERE/outcome-taxonomy.sh"
 
 TASKS="${1:-}"; shift || true
-DEFAULT_AGENT="codex"; PARALLEL=4; DEFAULT_TIMEOUT=""; OUT=""; DRY_RUN=0
+DEFAULT_AGENT="codex"; PARALLEL=8; DEFAULT_TIMEOUT=""; OUT=""; DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent)    DEFAULT_AGENT="$2"; shift 2;;
@@ -461,6 +461,13 @@ echo "fanout: ${#IDS[@]} task(s), fixed batches up to $PARALLEL -> $OUT" >&2
 pids=()
 running=0
 for id in "${IDS[@]}"; do
+  # Check in the launcher, not concurrent children, so blocked admissions cannot
+  # queue a whole batch of workers behind the same resource snapshot.
+  resource_gate="${FLEET_RESOURCE_GATE:-$HOME/.claude/scripts/resource-gate}"
+  if [ -x "$resource_gate" ] && [ "${RESOURCE_GATE:-}" != "off" ]; then
+    echo "fanout: $id checking for room" | tee -a "$OUT/dispatch.log" >&2
+    /usr/bin/python3 "$resource_gate"
+  fi
   (
     dir="$(cat "$OUT/tasks/$id.dir")"
     agent="$(cat "$OUT/tasks/$id.agent")"
