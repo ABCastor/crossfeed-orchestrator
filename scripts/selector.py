@@ -127,7 +127,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         # BR-MIMO-001: paid pools require an explicit allow-list entry.
         elif (lane.get("paid_mimo") or roster.get("quota_pools", {}).get(pool, {}).get("explicit_only")) and pool not in (explicit_pools or set()):
             why = "paid pool requires explicit --allow"
-        elif fleet.data_policy_refusal(lane, "private") and (harness != "opencode" or mode != "read-only"):
+        elif fleet.data_policy_refusal(lane, "code") and (harness != "opencode" or mode != "read-only"):
             why = "public-only lane requires prompt-contained OpenCode read-only call"
         elif allowed is not None and pool not in allowed:
             why = "pool forbidden for role"
@@ -186,7 +186,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
         if "price_1m" in lane:
             option["source_price_1m"] = lane["price_1m"]
-        if fleet.data_policy_refusal(lane, "private"):
+        if fleet.data_policy_refusal(lane, "code"):
             option["public_only"] = True
         if lane.get("paid_mimo") is True:
             option["paid_mimo"] = True

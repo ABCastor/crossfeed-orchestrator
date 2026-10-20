@@ -89,7 +89,7 @@ PYSELECTOR
           (.selector | type != "string") or
           (.access_status | type != "string") or
           (.admission_status as $s | ["active", "candidate", "rejected", "retired"] | index($s) | not) or
-          (has("data_policy") and (.data_policy as $p | ["public-only", "private-ok"] | index($p) | not)) or
+          (has("data_policy") and (.data_policy as $p | ["public-only", "code-ok", "private-ok"] | index($p) | not)) or
           (.quality_tier | type != "string") or
           (.capabilities.input | type != "array") or
           (.allowed_modes | type != "array") or
