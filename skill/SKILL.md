@@ -104,7 +104,7 @@ Never detach: no `nohup`, trailing `&`, `disown` or `setsid`. Run foreground ins
 
 ## Isolation and writers
 
-Writes need a clean git worktree (required for OpenCode `--write`). One writer per root, disjoint write roots; fanout exit 3 when held. Ignored databases collide across worktrees: use separate databases. `/tmp` does not isolate workers. No secrets in a worker folder. If a harness sandbox blocks `.git` writes or local sockets, the lead commits and runs full suites outside that sandbox.
+Writes need a clean git worktree (required for OpenCode `--write`). One writer per root, disjoint write roots; fanout exit 3 when held. Ignored databases collide across worktrees: use separate databases. `/tmp` does not isolate workers. No secrets in a worker folder. Workers never write in the owner's vault: every wrapper refuses a vault `--dir`, output file or write-target brief (exit 5) and runs tool-using CLIs under a Seatbelt write block (`references/isolation.md`). If a harness sandbox blocks `.git` writes or local sockets, the lead commits and runs full suites outside that sandbox.
 
 ## Load on demand
 

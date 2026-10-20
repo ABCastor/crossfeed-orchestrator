@@ -258,7 +258,7 @@ def supervise(args, command, env, events_file, key, interrupted):
         events_file.flush()
 
     try:
-        child = subprocess.Popen(command, cwd=args.dir, env=env, stdin=subprocess.PIPE,
+        child = subprocess.Popen([*getattr(args, "jail", []), *command], cwd=args.dir, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         # Communicate prompt over stdin; argv contains neither prompt nor key.
         os.set_blocking(child.stdin.fileno(), False)
@@ -480,8 +480,26 @@ def run(args, interrupted):
         return status
 
 
+def vault_guard(args):
+    """No worker writes into the owner's notes (vault_guard.py); returns the Seatbelt launch prefix."""
+    sys.path.insert(0, str(HERE))
+    import vault_guard as guard
+    reasons = guard.check("pi", args.mode, str(args.dir), args.prompt, [str(p) for p in (args.events, args.last) if p])
+    if guard.refuse_or_pass(reasons):
+        raise Rejected(guard.REFUSED, "refused by the vault guard")
+    state, value = guard.jail_status()
+    if state == "refuse":
+        raise Rejected(guard.REFUSED, "vault guard: " + value)
+    return [guard.SANDBOX_EXEC, "-p", value] if state == "ok" else []
+
+
 def main():
     args = arguments()
+    try:
+        args.jail = vault_guard(args)
+    except Rejected as error:
+        diagnostic(error.message)
+        return error.code
     interrupted, previous = [], {}
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         previous[signum] = signal.signal(signum, lambda signum, frame: interrupted.append(signum))

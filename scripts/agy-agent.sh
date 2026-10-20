@@ -92,6 +92,7 @@ if ! command -v agy >/dev/null 2>&1; then
     exit 127
   fi
 fi
+crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
 mkdir -p "$DIR"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -222,7 +223,7 @@ fi
 crossfeed_prepare agy
 
 # --add-dir is the actual workspace grant. Merely changing directory is not.
-agy_args=( agy --print "$PROMPT" --add-dir "$DIR" --dangerously-skip-permissions )
+agy_args=( ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} agy --print "$PROMPT" --add-dir "$DIR" --dangerously-skip-permissions )
 [ -n "$MODEL" ] && agy_args+=( --model "$MODEL" )
 [ "$EFFORT" = provider-default ] || agy_args+=( --effort "$EFFORT" )
 [ "$SANDBOX" = "1" ] && agy_args+=( --sandbox )

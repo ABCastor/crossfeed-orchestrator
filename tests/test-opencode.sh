@@ -17,7 +17,7 @@ FLEET_STATE="$TEST_ROOT/fleet-state"
 mkdir -p "$FIXTURE_DIR" "$FAKE_BIN" "$CLOCK_BIN" "$TEST_HOME" "$TEST_TMP" "$FLEET_STATE"
 cp "$SOURCE_WRAPPER" "$FIXTURE_DIR/opencode-agent.sh"
 cp "$SCRIPT_DIR/scripts/opencode_v2.py" "$FIXTURE_DIR/"
-cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$FIXTURE_DIR/"
+cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$SCRIPT_DIR/scripts/vault_guard.py" "$FIXTURE_DIR/"
 export FLEET_STATE_DIR="$TEST_ROOT/model-state"
 # Ordinary receipts must work even with an optional gateway configured but down.
 # A supplied overlay still exercises the caller's reproducer; the default is

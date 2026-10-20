@@ -101,6 +101,7 @@ selectors=0
 
 command -v jq >/dev/null || { echo "openrouter-agent: jq is required" >&2; exit 127; }
 command -v python3 >/dev/null || { echo "openrouter-agent: python3 is required" >&2; exit 127; }
+crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 # OUTER-CAP DETECTION. A file scanner cannot see call sites, so `timeout 900 ./openrouter-agent.sh`
 # sits outside any static check, and that outer clock overrides the watchdog while knowing nothing

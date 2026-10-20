@@ -182,6 +182,8 @@ case "${_parent_comm##*/}" in
     ;;
 esac
 
+crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+
 # Creating the caller's workspace silently turns a mistyped, deleted, or renamed worktree path into
 # a fresh empty directory, and the agent then does its work somewhere nobody is looking. Still
 # create it (callers rely on that), but refuse a path whose PARENT is missing, which is what a real
@@ -530,9 +532,9 @@ LAUNCHED=1
 CROSSFEED_STARTED=1
 set -m
 if [ -n "$EVENTS" ]; then
-  codex "${args[@]}" "$PROMPT" </dev/null >"$EVENTS" 2>"$RUNOUT" &
+  ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} codex "${args[@]}" "$PROMPT" </dev/null >"$EVENTS" 2>"$RUNOUT" &
 else
-  codex "${args[@]}" "$PROMPT" </dev/null >"$RUNOUT" 2>&1 &
+  ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} codex "${args[@]}" "$PROMPT" </dev/null >"$RUNOUT" 2>&1 &
 fi
 CHILD_PID=$!
 if [ -n "$PENDING_SIGNAL_CODE" ]; then

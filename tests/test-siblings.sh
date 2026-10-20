@@ -42,7 +42,7 @@ done
 cp "$CLAUDE_SOURCE" "$FIXTURE_DIR/claude-agent.sh"
 cp "$AGY_SOURCE" "$FIXTURE_DIR/agy-agent.sh"
 cp "$COPILOT_SOURCE" "$FIXTURE_DIR/copilot-agent.sh"
-cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$FIXTURE_DIR/"
+cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$SCRIPT_DIR/scripts/vault_guard.py" "$FIXTURE_DIR/"
 export FLEET_STATE_DIR="$TEST_ROOT/model-state"
 chmod +x "$FIXTURE_DIR/claude-agent.sh" "$FIXTURE_DIR/agy-agent.sh" "$FIXTURE_DIR/copilot-agent.sh"
 CLAUDE_WRAPPER="$FIXTURE_DIR/claude-agent.sh"

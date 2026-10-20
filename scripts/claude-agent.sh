@@ -163,6 +163,8 @@ if [ "$EFFORT" != provider-default ]; then
   args+=( --effort "$EFFORT" )
 fi
 
+crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+
 if [ "$DRY_RUN" = 1 ]; then
   # The very array the run below would start claude with, so the two cannot drift apart.
   echo "claude-agent: dry run, nothing started. The command:" >&2
@@ -492,7 +494,7 @@ set -m
 (
   [ -z "$_oauth_token" ] || export CLAUDE_CODE_OAUTH_TOKEN="$_oauth_token"
   unset _oauth_token
-  cd "$DIR" && exec claude "${args[@]}" -- "$PROMPT" </dev/null >"$RUNOUT" 2>"$RUNERR_PIPE"
+  cd "$DIR" && exec ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} claude "${args[@]}" -- "$PROMPT" </dev/null >"$RUNOUT" 2>"$RUNERR_PIPE"
 ) &
 CHILD_PID=$!
 unset _oauth_token

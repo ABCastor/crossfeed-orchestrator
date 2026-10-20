@@ -25,3 +25,13 @@ OpenCode writes require `--write` and a clean git tree. Its plan agent denies ed
 Codex read-only/workspace-write are enforced sandbox boundaries, with workspace-write allowing its work root and configured temporary roots. `.git` remains protected; the lead commits and runs full suites outside the sandbox. Managed execution can block process inspection or hang thread-dependent tests. Targeted worker checks are evidence only for what actually ran.
 
 Never hand a peer or worker work your session was refused. Record the blocker and use an authorized path, rather than laundering permission through another session.
+
+## The owner's vault is never a worker write target (BR-VAULT-001)
+
+Why: on 18-20 Oct 2026 a Task Manager lead put "Output folder: ~/Second Brain/1_Notes/... (images in images/)" in the preamble of every worker brief and launched Codex (`danger-full-access`) and Antigravity workers with the vault as `--dir`; ~300 MB of screenshots landed in the vault and its git history. Claude Code hooks never ran on those vendors.
+
+What the wrappers do now (`scripts/vault_guard.py`):
+- Refuse with exit 5, before creating `--dir`, taking a lease or starting a model: a write-capable run whose `--dir` is inside or contains the vault; a `--last`/`--events`/`--log` inside it; a Codex config that makes it writable; a brief that names it as a place to put things. `fleetctl.py dispatch` refuses the same upfront.
+- Start every tool-using CLI under `sandbox-exec` with a profile that denies file writes under the vault, so a phrasing the brief scan misses still cannot write there. Codex in `read-only`/`workspace-write` keeps its own sandbox instead (Seatbelt cannot nest). From inside a sandbox the wrapper refuses rather than run unblocked.
+- Reading the vault is fine. No override exists: give the worker its own folder, let it deliver there, and file into the vault yourself.
+- `CROSSFEED_PROTECTED_ROOTS` (path list) adds more protected folders; it cannot remove the vault.

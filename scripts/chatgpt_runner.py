@@ -550,7 +550,14 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
 
 def main():
     try:
-        return run(arguments())
+        args = arguments()
+        # Text-only lane: its one way into the owner's notes is the file this wrapper writes.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import vault_guard
+        outputs = [str(p) for p in (args.events, args.last) if p]
+        if vault_guard.refuse_or_pass(vault_guard.check("chatgpt", "read-only", None, "", outputs)):
+            return vault_guard.REFUSED
+        return run(args)
     except Rejected as error:
         print("chatgpt-agent: " + error.message, file=sys.stderr)
         return error.code

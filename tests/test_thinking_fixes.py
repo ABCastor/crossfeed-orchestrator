@@ -224,7 +224,7 @@ class ThinkingFixTests(unittest.TestCase):
         farm = self.root / 'scripts'
         farm.mkdir()
         (farm / 'openrouter-agent.sh').symlink_to(SCRIPTS / 'openrouter-agent.sh')
-        for helper in ('run-identity.sh', 'run_identity.py'):
+        for helper in ('run-identity.sh', 'run_identity.py', 'vault_guard.py'):
             (farm / helper).symlink_to(SCRIPTS / helper)
         roster = farm / 'roster.sh'
         roster.write_text('#!/bin/bash\ncase "$1" in\n'
