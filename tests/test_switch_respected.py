@@ -278,7 +278,7 @@ class ModelGateCliTests(Sandbox):
         refused = self.fleet("model-gate", "gemini-3.6-flash-high", "--harness", "agy", check=False)
         self.assertEqual(refused.returncode, 5)
         self.assertIn("Name gemini-3.1-pro-high instead", refused.stderr)
-        self.assertIn("Only the owner can switch it back on", refused.stderr)
+        self.assertIn("recorded owner limits", refused.stderr)  # BR-SWITCH-001 replaces blanket prohibition
         self.assertNotIn("model-toggle", refused.stderr)           # no command an agent could run to undo it
         bare = self.fleet("model-gate", "gemini-3.6-flash-high", "--harness", "agy", "--reason-only", check=False)
         self.assertEqual(bare.returncode, 5)
@@ -433,6 +433,12 @@ class HookTests(Sandbox):
         self.assertIn("Write --model claude-sonnet-5-5", self.bash("claude-agent.sh --prompt x"))
         self.assertIsNone(self.bash("codex-agent.sh --model gpt-6.1-sol --prompt x"))
 
+    def test_an_agent_cannot_speak_as_the_owner(self):
+        reason = self.bash("python3 scripts/fleetctl.py level codex high --owner")
+        self.assertIn("only the owner, through the Crossfeed console", reason)
+        self.assertIn("only the owner", self.bash("python3 scripts/fleetctl.py level codex high --owner 2>&1 | tail -1"))
+        self.assertIsNone(self.bash("python3 scripts/fleetctl.py level codex off"))
+
     def test_raw_clis_are_refused_too(self):
         self.assertIn("Write -m gpt-6.1-sol", self.bash('codex exec -m gpt-6-astra "hi"'))
         self.assertIn("codex exec with no -m runs gpt-6-astra", self.bash('codex exec -s read-only "hi"'))
@@ -457,10 +463,14 @@ class HookTests(Sandbox):
         self.assertIn("unit-1", reason)
         self.assertNotIn("unit-2", reason)
 
-    def test_an_agent_may_not_switch_a_model_back_on(self):
-        self.assertIn("switches are the owner's", self.bash("python3 scripts/fleetctl.py model-toggle codex gpt-6-astra on"))
-        self.assertIn("switches are the owner's", self.bash("fleetctl.py level codex normal"))
-        self.assertIsNone(self.bash("fleetctl.py model-toggle codex gpt-6.1-sol off"))    # off is always fine
+    def test_an_agent_may_not_release_owner_off_but_can_release_agent_off(self):
+        # BR-SWITCH-001: replaces the retired blanket prohibition with owner provenance.
+        self.assertIsNone(self.bash("fleetctl.py model-toggle codex gpt-6-astra on"))
+        self.fleet("model-toggle", "codex", "gpt-6-astra", "off", "--owner")
+        self.fleet("level", "codex", "off", "--owner")
+        self.assertIn("the owner switched this off on", self.bash("python3 scripts/fleetctl.py model-toggle codex gpt-6-astra on"))
+        self.assertIn("ask the owner", self.bash("fleetctl.py level codex normal"))
+        self.assertIsNone(self.bash("fleetctl.py model-toggle codex gpt-6.1-sol off"))
         self.assertIsNone(self.bash("FLEET_STATE_DIR=/tmp/fixture fleetctl.py model-toggle codex gpt-6-astra on"))
 
     def test_text_that_only_mentions_a_command_is_not_refused(self):

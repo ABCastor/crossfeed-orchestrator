@@ -1478,3 +1478,22 @@ test('benchmark links open model drawers and collapsed parents under the externa
   f.window.location.hash = '#model-%not-valid';
   for (const listener of f.windowListeners.hashchange) listener();
 });
+
+test('BR-SWITCH-001 actor labels follow confirmed saves and later snapshots', async () => {
+  const f = start({prepare(env) {
+    env.document.getElementById('pool-codex').append(h('span', {class: 'level-actor'}));
+    env.astra.append(h('span', {class: 'model-actor'}));
+  }});
+  sw(f, 'gpt-6-astra').click();
+  await flush();
+  reply(f.requests[0], {pools: [{pool: 'codex', level: 'normal', means: 'm',
+    on: ['gpt-6.1-sol', 'gpt-6-luna'], state: 'some', label: '2 on', note: 'n',
+    control_actor: 'agent, 20 Oct 10:15', model_actors: {'gpt-6-astra': 'you, 20 Oct 11:02'}}]});
+  await flush(); await flush();
+  assert.equal(f.document.querySelector('.level-actor').textContent, 'agent, 20 Oct 10:15');
+  assert.equal(f.astra.querySelector('.model-actor').textContent, 'you, 20 Oct 11:02');
+  f.api.update({pools: [{pool: 'codex', level: 'normal', means: 'm',
+    control_actor: 'you, 20 Oct 11:05', model_actors: {'gpt-6-astra': 'agent, 20 Oct 11:06'}}]});
+  assert.equal(f.document.querySelector('.level-actor').textContent, 'you, 20 Oct 11:05');
+  assert.equal(f.astra.querySelector('.model-actor').textContent, 'agent, 20 Oct 11:06');
+});

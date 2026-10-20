@@ -14,7 +14,7 @@ What it checks (read-only, stdlib only):
          claude --model, opencode run -m, agy --model). A codex-agent.sh or `codex exec` with no
          model runs Codex's configured default, which is checked too. An agent switching a model or
          provider back on (fleetctl.py model-toggle ... on, model-choice, level, switch, pins undo)
-         is refused as well: the switches belong to whoever runs the fleet.
+         is checked against recorded owner restrictions.
   Agent  a subagent `model` (opus, sonnet, haiku, fable) that is off on the Claude pool.
 A refusal names what to write instead. Nothing else is ever blocked.
 
@@ -96,9 +96,55 @@ def unquoted_newlines_to_semicolons(command: str) -> str:
     return "".join(out)
 
 
+def strip_redirections(command: str) -> str:
+    """Remove shell redirects and their operands, preserving quoted arguments and pipes."""
+    out, index, quote = [], 0, None
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'" and index + 1 < len(command):
+            out.append(command[index:index + 2])
+            index += 2
+            continue
+        if quote:
+            out.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        match = re.match(r"(?:[0-9]+|&)?(?:>>|>\||<>|<<-?|[<>])(?:&)?", command[index:])
+        if match and (char in "<>" or index == 0 or command[index - 1].isspace() or command[index - 1] in ";&|()"):
+            index += len(match.group())
+            while index < len(command) and command[index] in " \t":
+                index += 1
+            target_quote = None
+            while index < len(command):
+                part = command[index]
+                if part == "\\" and target_quote != "'":
+                    index += 2
+                    continue
+                if target_quote:
+                    if part == target_quote:
+                        target_quote = None
+                elif part in "\"'":
+                    target_quote = part
+                elif part.isspace() or part in ";&|()<>":
+                    break
+                index += 1
+            out.append(" ")
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def segments(command: str) -> list[list[str]]:
     """Simple commands, as token lists, split at ; & && || | ( )."""
-    lexer = shlex.shlex(unquoted_newlines_to_semicolons(strip_heredocs(command)), posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(unquoted_newlines_to_semicolons(strip_redirections(strip_heredocs(command))), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     lexer.commenters = ""   # comments are already gone; a # inside a word is part of the word
     found, current = [], []
@@ -232,7 +278,7 @@ def said(verdict: dict[str, Any], what: str, flag: str | None = None) -> str:
     if flag and verdict["instead"]:
         text = f"{what}: {verdict['reason']} Write {flag} {verdict['instead'][0]}, the model that runs in its place."
         if verdict["why"] != "retired":
-            text += " Only the owner can switch it back on, in the console."
+            text += " Check the recorded actor before changing this switch."
         return text
     return f"{what}: {verdict['message']}"
 
@@ -355,28 +401,45 @@ def check_fanout(args: list[str], env: dict[str, str], cwd: str, load) -> list[s
 
 
 def check_switch_change(args: list[str], env: dict[str, str]) -> list[str]:
-    """An agent must not turn back on what the person running the fleet turned off. Turning things off
-    is always fine, and a command aimed at another roster or state folder (a test fixture) is not
-    aimed at the live fleet."""
-    if env.get("__set_here__") or any(
-            arg in {"--overlay", "--state-dir"} or arg.startswith(("--overlay=", "--state-dir=")) for arg in args):
+    # BR-SWITCH-001
+    """Simulate the authoritative mutation against the command's actual roster and state."""
+    scoped = dict(env)
+    for flag, variable in (("--overlay", "ACCESS_OVERLAY"), ("--state-dir", "FLEET_STATE_DIR")):
+        if option(args, flag):
+            scoped[variable] = option(args, flag)
+    switches = Switches(scoped)
+    fleet = switches.fleet
+    try:
+        parsed = fleet.build_parser().parse_args(args)
+    except SystemExit:
+        return []  # fleetctl itself reports invalid commands
+    if parsed.command not in {"level", "switch", "model-toggle", "model-choice", "profile", "pins"}:
         return []
-    words = [arg for arg in args if not arg.startswith("-")]
-    if not words:
-        return []
-    command, rest = words[0], words[1:]
-    refused = (
-        (command == "model-toggle" and rest[-1:] == ["on"] and len(rest) == 3)
-        or (command == "model-choice" and len(rest) == 2)
-        or (command == "level" and len(rest) == 2 and rest[1] != "off")
-        or (command == "switch" and len(rest) == 2 and rest[1] != "off")
-        or (command == "pins" and rest[:1] == ["undo"])
-    )
-    if not refused:
-        return []
-    return [f"fleetctl.py {' '.join(words)}: the model and provider switches are the owner's, set in the Crossfeed "
-            "console. An agent may switch things off, never back on. Use a model that is on (fleetctl.py brief "
-            "names what is off and what runs instead), or ask the owner."]
+    if getattr(parsed, "owner", False):
+        # This hook only sees agents' commands: an agent may never speak as the owner. The console records owner changes.
+        return [f"fleetctl.py {parsed.command} --owner: only the owner, through the Crossfeed console, records owner switches. "
+                "Drop --owner; agents may change anything the owner did not switch off."]
+    overlay = Path(option(args, "--overlay") or env.get("ACCESS_OVERLAY") or fleet.DEFAULT_OVERLAY).expanduser()
+    state = Path(option(args, "--state-dir") or env.get("FLEET_STATE_DIR") or fleet.DEFAULT_STATE_DIR).expanduser()
+    roster = fleet.read_overlay(overlay)
+    runtime = fleet.load_json(state / "runtime.json", {}) or {}
+    actor = "owner" if parsed.owner else "agent"
+    try:
+        if parsed.command in {"level", "switch"}:
+            value = parsed.value if parsed.command == "level" else {"off": "off", "on": "forced", "auto": "normal"}.get(parsed.state)
+            if value and parsed.pool:
+                fleet.set_pool_level(runtime, parsed.pool, value, actor=actor)
+        elif parsed.command == "model-toggle" and parsed.state:
+            fleet.set_model_toggle(runtime, roster, parsed.pool, parsed.model, parsed.state == "on", actor=actor)
+        elif parsed.command == "model-choice" and parsed.model:
+            fleet.set_model_choice(runtime, roster, parsed.pool, parsed.model, actor=actor)
+        elif parsed.command == "profile":
+            fleet.apply_profile(roster, runtime, parsed.name, who="agent", because=parsed.because, actor=actor)
+        elif parsed.command == "pins" and parsed.action == "undo":
+            fleet.sync_pins(roster, state, write=False, undo=True, actor=actor)
+    except (fleet.FleetError, ValueError) as exc:
+        return [f"fleetctl.py: {exc}"]
+    return []
 
 
 def check_bash(command: str, cwd: str, env: dict[str, str], cache: dict[str, Any], depth: int = 0,
@@ -440,7 +503,7 @@ def check_agent(tool_input: dict[str, Any], cache: dict[str, Any]) -> list[str]:
     else:
         text += " Leave model out, or use a model that is switched on (fleetctl.py brief names them)."
     if verdict["why"] != "retired":
-        text += " Only the owner can switch it back on, in the console."
+        text += " Control changes must respect recorded owner limits (BR-SWITCH-001)."
     return [f'Agent model "{asked}": {text} Name the model that really runs when you report it.']
 
 

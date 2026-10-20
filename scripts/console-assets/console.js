@@ -639,6 +639,17 @@ function boot(document, window) {
       if (!skip(`level:${pool.pool}`)) showLevel(pool.pool, pool.level, pool.means);
       const row = document.getElementById(`pool-${pool.pool}`);
       if (row && pool.gauge !== undefined) row.querySelector('.gauge').innerHTML = pool.gauge;
+      if (row && !skip(`level:${pool.pool}`) && pool.control_actor !== undefined) {
+        const actor = row.querySelector('.level-actor');
+        if (actor) actor.textContent = pool.control_actor;
+      }
+      if (row && !skip(`model:${pool.pool}`) && pool.model_actors) {
+        for (const option of row.querySelectorAll('[data-model]')) {
+          const actor = option.querySelector('.model-actor');
+          if (actor && pool.model_actors[option.dataset.model] !== undefined)
+            actor.textContent = pool.model_actors[option.dataset.model];
+        }
+      }
       if (pool.on !== undefined) {
         confirmed.set(`model:${pool.pool}`, pool.on);
         if (!skip(`model:${pool.pool}`)) showModels(pool.pool, pool.on, pool.label === undefined ? undefined : pool);

@@ -351,9 +351,66 @@ def pool_level(runtime: dict[str, Any], pool: str | None) -> str:
     return _STORED_LEVEL.get(switches.get(pool), "normal")
 
 
-def set_pool_level(runtime: dict[str, Any], pool: str, level: str) -> None:
+# BR-SWITCH-001
+def control_record(runtime: dict[str, Any], key: str) -> dict[str, Any]:
+    return (runtime.get("control_records") or {}).get(key, {})
+
+
+# BR-SWITCH-001
+def check_control(runtime: dict[str, Any], key: str, value: Any, actor: str = "agent") -> None:
+    """An agent can tighten a limit but cannot release the owner's ceiling."""
+    if actor not in {"owner", "agent"}:
+        raise FleetError("actor must be owner or agent")
+    limit = (runtime.get("control_limits") or {}).get(key)
+    if actor == "owner" or not limit:
+        return
+    ceiling = limit["value"]
+    blocked = (LEVELS.index(value) > LEVELS.index(ceiling) if key.startswith("level:")
+               else bool(value) and ceiling is False)
+    if blocked:
+        action = "switched this off" if ceiling in (False, "off") else "lowered this"
+        raise FleetError(f"{key}: the owner {action} on {limit['when']}; ask the owner")
+
+
+# BR-SWITCH-001
+def check_legacy_owner_off(runtime: dict[str, Any], key: str, restricted_now: bool, loosening: bool,
+                           actor: str = "agent") -> None:
+    """A switch already off or lowered before actors were recorded (20 Oct 2026) counts as the owner's."""
+    if actor == "owner" or not (restricted_now and loosening):
+        return
+    if control_record(runtime, key) or (runtime.get("control_limits") or {}).get(key):
+        return
+    raise FleetError(f"{key}: it was switched off or lowered before the orchestrator recorded who did it, "
+                     "so it counts as the owner's; ask the owner")
+
+
+# BR-SWITCH-001
+def record_control(runtime: dict[str, Any], key: str, before: Any, after: Any,
+                   actor: str = "agent", reason: str | None = None, *, restrict: bool = False) -> None:
+    if actor not in {"owner", "agent"}:
+        raise FleetError("actor must be owner or agent")
+    entry = {"key": key, "before": before, "value": after, "actor": actor, "when": iso()}
+    if reason:
+        entry["reason"] = reason[:240]
+    runtime.setdefault("control_records", {})[key] = entry
+    runtime.setdefault("control_history", []).append(entry.copy())
+    if actor == "owner":
+        limits = runtime.setdefault("control_limits", {})
+        if restrict:
+            limits[key] = entry.copy()
+        else:
+            limits.pop(key, None)
+
+
+# BR-SWITCH-001
+def set_pool_level(runtime: dict[str, Any], pool: str, level: str, *, actor: str = "agent",
+                   reason: str | None = None) -> None:
     if level not in LEVELS:
         raise FleetError(f"unknown level {level}; levels: {', '.join(LEVELS)}")
+    before = pool_level(runtime, pool)
+    check_control(runtime, f"level:{pool}", level, actor)
+    check_legacy_owner_off(runtime, f"level:{pool}", before in ("off", "low"),
+                           LEVELS.index(level) > LEVELS.index(before), actor)
     switches = runtime.get("switches")
     if not isinstance(switches, dict):
         switches = runtime["switches"] = {}
@@ -361,6 +418,8 @@ def set_pool_level(runtime: dict[str, Any], pool: str, level: str) -> None:
         switches.pop(pool, None)
     else:
         switches[pool] = _LEVEL_STORED[level]
+    record_control(runtime, f"level:{pool}", before, level, actor, reason,
+                   restrict=level in {"off", "low"} or LEVELS.index(level) < LEVELS.index(before))
 
 
 PROFILES = ("save-claude", "save-codex", "balanced", "max-quality", "reset")
@@ -437,8 +496,10 @@ def _phrase_names_pool(phrase: str | None, pool: str, pools: dict[str, Any]) -> 
                for name in names)
 
 
+# BR-SWITCH-001
 def apply_profile(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
-                  who: str, because: str | None = None) -> dict[str, Any]:
+                  who: str, because: str | None = None, actor: str = "agent",
+                  reason: str | None = None) -> dict[str, Any]:
     if name not in PROFILES:
         raise FleetError(f"unknown profile {name}")
     pools = roster.get("quota_pools", {})
@@ -460,7 +521,7 @@ def apply_profile(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
         if before == "off" and not _phrase_names_pool(because, pool, pools):
             preserved.append(pool)
         elif before != level:
-            set_pool_level(runtime, pool, level)
+            set_pool_level(runtime, pool, level, actor=actor, reason=reason or because)
             change = {"pool": pool, "before": before, "after": level,
                       "who": who, "when": when, "phrase": because, "profile": name}
             runtime.setdefault("profile_changes", []).append(change)
@@ -1962,7 +2023,9 @@ def _store_off(runtime: dict[str, Any], pool: str, down: set[str]) -> None:
         toggles.pop(pool, None)
 
 
-def set_model_toggle(runtime: dict[str, Any], roster: dict[str, Any], pool: str, model: str, on: bool) -> None:
+# BR-SWITCH-001
+def set_model_toggle(runtime: dict[str, Any], roster: dict[str, Any], pool: str, model: str, on: bool, *,
+                     actor: str = "agent", reason: str | None = None) -> None:
     """Switch one model of a pool on or off. Switching all of a pool's models off turns the provider off."""
     if pool not in (roster.get("quota_pools") or {}):
         raise ValueError("unknown pool")
@@ -1970,11 +2033,17 @@ def set_model_toggle(runtime: dict[str, Any], roster: dict[str, Any], pool: str,
         raise ValueError("that model cannot run on this pool")
     if on and model_is_older(roster, pool, model) and not older_model_reason(roster, pool, model):
         raise ValueError("older model needs a roster reason it beats a current model for a named job")
+    check_control(runtime, f"model:{pool}:{model}", on, actor)
+    before = pool_switches(roster, runtime, pool).get(model, True)
+    check_legacy_owner_off(runtime, f"model:{pool}:{model}", before is False, bool(on), actor)
     down = _settle(runtime, roster, pool)
     _store_off(runtime, pool, down - {model} if on else down | {model})
+    record_control(runtime, f"model:{pool}:{model}", before, on, actor, reason, restrict=not on)
 
 
-def set_model_choice(runtime: dict[str, Any], roster: dict[str, Any], pool: str, model: str | None) -> None:
+# BR-SWITCH-001
+def set_model_choice(runtime: dict[str, Any], roster: dict[str, Any], pool: str, model: str | None, *,
+                     actor: str = "agent", reason: str | None = None) -> None:
     """Run only this model on the pool (every other one off); None or "auto" switches them all on."""
     if pool not in (roster.get("quota_pools") or {}):
         raise ValueError("unknown pool")
@@ -1983,10 +2052,18 @@ def set_model_choice(runtime: dict[str, Any], roster: dict[str, Any], pool: str,
         raise ValueError("that model cannot run on this pool")
     if model not in (None, "auto") and model_is_older(roster, pool, model) and not older_model_reason(roster, pool, model):
         raise ValueError("older model needs a roster reason it beats a current model for a named job")
-    _settle(runtime, roster, pool)
     unjustified = {key for key in choosable if model_is_older(roster, pool, key)
                    and not older_model_reason(roster, pool, key)}
-    _store_off(runtime, pool, unjustified if model in (None, "auto") else set(choosable) - {model})
+    down = unjustified if model in (None, "auto") else set(choosable) - {model}
+    before = pool_switches(roster, runtime, pool)
+    for key in choosable:
+        check_control(runtime, f"model:{pool}:{key}", key not in down, actor)
+    _settle(runtime, roster, pool)
+    _store_off(runtime, pool, down)
+    for key in choosable:
+        record_control(runtime, f"model:{pool}:{key}", before[key], key not in down,
+                       actor, reason, restrict=key in down)
+    record_control(runtime, f"choice:{pool}", None, model or "auto", actor, reason)
 
 
 def model_order(roster: dict[str, Any], pool: str, also: Iterable[str] = ()) -> list[str]:
@@ -2271,7 +2348,9 @@ def _write_text_atomic(path: Path, text: str) -> None:
             os.unlink(temporary)
 
 
-def sync_pins(roster: dict[str, Any], state_dir: Path, write: bool = True, undo: bool = False) -> list[dict[str, Any]]:
+# BR-SWITCH-001
+def sync_pins(roster: dict[str, Any], state_dir: Path, write: bool = True, undo: bool = False, *,
+              actor: str = "agent", reason: str | None = None) -> list[dict[str, Any]]:
     """Bring every managed pin in step with the switches, and report every pin.
 
     One row per pinned file: `value` is what the file names now, `on` whether that model is
@@ -2296,12 +2375,27 @@ def sync_pins(roster: dict[str, Any], state_dir: Path, write: bool = True, undo:
     # Reading never writes: `pins status`, `brief` and the console take no lock and create nothing.
     if write:
         state_dir.mkdir(parents=True, exist_ok=True)
-    with (state_dir / "pins.lock").open("a+", encoding="utf-8") if write else contextlib.nullcontext() as lock:
+    with (locked_runtime(state_dir) if write else contextlib.nullcontext(runtime)) as runtime, \
+            (state_dir / "pins.lock").open("a+", encoding="utf-8") if write else contextlib.nullcontext() as lock:
         if lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             store = load_json(state_dir / "pins.json", {}) or {}
             records = store.get("pins") if isinstance(store.get("pins"), dict) else {}
+            if undo:
+                for pin in pins:
+                    record = records.get(f"{pin['path']}::{pin['key']}")
+                    if record and pin["manage"]:
+                        try:
+                            current = read_pin(_read_text_exact(pin["path"]), pin["format"], pin["key"])
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                        if not current or current[0] != record.get("written"):
+                            continue  # owner edits have already superseded this saved restoration
+                        target = named_model(roster, pin["pool"], record["original"])
+                        if target:
+                            check_control(runtime, f"level:{pin['pool']}", "low", actor)
+                            check_control(runtime, f"model:{pin['pool']}:{target}", True, actor)
             before = json.dumps(records, sort_keys=True)
             backed_up: set[Path] = set()
             for pin in pins:
@@ -2349,6 +2443,8 @@ def sync_pins(roster: dict[str, Any], state_dir: Path, write: bool = True, undo:
                             backup.write_bytes(text.encode("utf-8"))
                             os.chmod(backup, 0o600)
                         _write_text_atomic(path, text[:start] + want + text[end:])
+                        record_control(runtime, f"pin:{ident}", value, want, actor, reason)
+                        row["control"] = control_record(runtime, f"pin:{ident}")
                         if want == own:
                             records.pop(ident, None)
                         else:
@@ -2370,10 +2466,11 @@ def sync_pins(roster: dict[str, Any], state_dir: Path, write: bool = True, undo:
     return rows
 
 
-def pins_after_switch(roster: dict[str, Any], state_dir: Path) -> list[dict[str, Any]]:
+def pins_after_switch(roster: dict[str, Any], state_dir: Path, *, actor: str = "agent",
+                      reason: str | None = None) -> list[dict[str, Any]]:
     """Called after every switch change. Never the reason a switch fails to save."""
     try:
-        return sync_pins(roster, state_dir)
+        return sync_pins(roster, state_dir, actor=actor, reason=reason)
     except Exception:  # noqa: BLE001 - a file Crossfeed cannot write must not undo the operator's click
         return []
 
@@ -2483,9 +2580,8 @@ def start_verdict(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
     elif first["why"] != "retired":
         message += " Nothing on that provider is switched on to run in its place."
     if first["why"] in {"off", "provider off"}:
-        # No command here on purpose: the switches belong to whoever runs the fleet, and an agent
-        # that reads a command in a refusal tends to run it.
-        message += " Only the owner can switch it back on, in the console."
+        # Execution admission and control mutation are separate checks.
+        message += " Control changes must respect recorded owner limits (BR-SWITCH-001)."
     return {"model": model, "pool": where, "why": first["why"], "instead": instead, "reason": first["text"],
             "message": message}
 
@@ -4649,6 +4745,7 @@ def fleet_overview(
             "pool": pool,
             "label": pool_label(pool, config),
             "level": level,
+            "control": control_record(runtime, f"level:{pool}"),
             "means": LEVEL_MEANING[level],
             "state": state,
             "until": evidence.get("until") if state == "EXHAUSTED" else None,
@@ -4690,6 +4787,8 @@ def fleet_overview(
         current = current_models(roster, pool)
         entry["direct"] = pool_is_direct(roster, pool)
         entry["options"] = pool_model_options(roster, runtime, pool, models)
+        for option in entry["options"]:
+            option["control"] = control_record(runtime, f"model:{pool}:{option['model']}")
         entry["models"] = {
             "state": models_state(switches, current),
             "current": current,
@@ -5486,6 +5585,9 @@ def build_parser() -> argparse.ArgumentParser:
                               help="remove benchmark imports by exact stored source path, then rebuild evidence")
     bench_import.add_argument("--measured-on", help="measurement date for legacy undated cells, YYYY-MM-DD")
 
+    for control_parser in (switch, level, toggle, choice, profile, pins):
+        control_parser.add_argument("--owner", action="store_true", help="explicit owner instruction; console actions use owner")
+        control_parser.add_argument("--reason", help="short reason recorded with this control change")
     return parser
 
 
@@ -5600,7 +5702,8 @@ def main() -> int:
             roster = read_overlay(args.overlay.expanduser(), state_dir)
             who = args.who or f"{detect_lead_pool() or 'fleetctl'}:{os.environ.get('USER') or os.getuid()}"
             with locked_runtime(state_dir) as runtime:
-                result = apply_profile(roster, runtime, args.name, who=who, because=args.because)
+                result = apply_profile(roster, runtime, args.name, who=who, because=args.because, actor="owner" if args.owner else "agent",
+                                       reason=args.reason)
             print(profile_report(result))
             return 0
         if args.command in {"switch", "level"}:
@@ -5614,7 +5717,7 @@ def main() -> int:
             show = legacy_switch_word if legacy else (lambda value: value)
             if wanted:
                 with locked_runtime(state_dir) as runtime:
-                    set_pool_level(runtime, args.pool, wanted)
+                    set_pool_level(runtime, args.pool, wanted, actor="owner" if args.owner else "agent", reason=args.reason)
             # Reading never writes: a query must not create or touch the runtime file.
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             if args.pool:
@@ -5651,10 +5754,11 @@ def main() -> int:
             if args.state:
                 with locked_runtime(state_dir) as runtime:
                     try:
-                        set_model_toggle(runtime, roster, args.pool, args.model, args.state == "on")
+                        set_model_toggle(runtime, roster, args.pool, args.model, args.state == "on",
+                                         actor="owner" if args.owner else "agent", reason=args.reason)
                     except ValueError as exc:
                         raise FleetError(f"{exc}: {args.model} (models on {args.pool}: {offered})") from exc
-                pins_after_switch(roster, state_dir)
+                pins_after_switch(roster, state_dir, actor="owner" if args.owner else "agent", reason=args.reason)
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             switches = pool_switches(roster, runtime, args.pool)
             if args.model not in switches:
@@ -5665,10 +5769,11 @@ def main() -> int:
             if args.model:
                 with locked_runtime(state_dir) as runtime:
                     try:
-                        set_model_choice(runtime, roster, args.pool, args.model)
+                        set_model_choice(runtime, roster, args.pool, args.model,
+                                         actor="owner" if args.owner else "agent", reason=args.reason)
                     except ValueError as exc:
                         raise FleetError(f"{exc}: {args.model} (choosable on {args.pool}: {offered}; or auto)") from exc
-                pins_after_switch(roster, state_dir)
+                pins_after_switch(roster, state_dir, actor="owner" if args.owner else "agent", reason=args.reason)
             # Reading never writes. What prints is the one model that is on, as a direct wrapper
             # would pass it to its CLI, and nothing while several or none are.
             runtime = load_json(state_dir / "runtime.json", {}) or {}
@@ -5711,7 +5816,8 @@ def main() -> int:
             return 0
         if args.command == "pins":
             roster = read_overlay(args.overlay.expanduser(), state_dir)
-            rows = sync_pins(roster, state_dir, write=args.action != "status", undo=args.action == "undo")
+            rows = sync_pins(roster, state_dir, write=args.action != "status", undo=args.action == "undo",
+                             actor="owner" if args.owner else "agent", reason=args.reason)
             if args.json:
                 print(json.dumps(rows, indent=2, sort_keys=True))
             elif not rows:

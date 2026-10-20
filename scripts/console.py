@@ -174,21 +174,24 @@ class Console:
             self._last_refresh = time.monotonic()
         return outcomes
 
-    def set_level(self, pool: str, level: str) -> None:
+    # BR-SWITCH-001
+    def set_level(self, pool: str, level: str, reason: str | None = None) -> None:
         pools = set(fleetctl.read_overlay(self.overlay_path, self.state_dir).get("quota_pools", {}))
         if pool not in pools or level not in LEVELS:
             raise ValueError("unknown pool or level")
         with fleetctl.locked_runtime(self.state_dir) as runtime:
-            fleetctl.set_pool_level(runtime, pool, level)
+            fleetctl.set_pool_level(runtime, pool, level, actor="owner", reason=reason)
 
-    def set_toggle(self, pool: str, model: str, on: bool) -> None:
+    # BR-SWITCH-001
+    def set_toggle(self, pool: str, model: str, on: bool, reason: str | None = None) -> None:
         """Switch one model of a provider on or off."""
         roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
         with fleetctl.locked_runtime(self.state_dir) as runtime:
-            fleetctl.set_model_toggle(runtime, roster, pool, model, on)
-        fleetctl.pins_after_switch(roster, self.state_dir)   # files that name a model follow the switch, as on the CLI
+            fleetctl.set_model_toggle(runtime, roster, pool, model, on, actor="owner", reason=reason)
+        fleetctl.pins_after_switch(roster, self.state_dir, actor="owner", reason=reason)   # files that name a model follow the switch, as on the CLI
 
-    def set_choice(self, pool: str, model: str) -> None:
+    # BR-SWITCH-001
+    def set_choice(self, pool: str, model: str, reason: str | None = None) -> None:
         """Run only one model on a provider (a model key), or switch every model on ("auto")."""
         roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
         with fleetctl.locked_runtime(self.state_dir) as runtime:
@@ -196,17 +199,27 @@ class Console:
                 # "Switch all on" is the list you see: the current models. An older model stays as you left it;
                 # it never stands in for another, and runs only when a task names it.
                 for key in fleetctl.current_models(roster, pool):
-                    fleetctl.set_model_toggle(runtime, roster, pool, key, True)
+                    fleetctl.set_model_toggle(runtime, roster, pool, key, True, actor="owner", reason=reason)
+                fleetctl.record_control(runtime, f"choice:{pool}", None, "auto", "owner", reason)
             else:
-                fleetctl.set_model_choice(runtime, roster, pool, model)
-        fleetctl.pins_after_switch(roster, self.state_dir)
+                fleetctl.set_model_choice(runtime, roster, pool, model, actor="owner", reason=reason)
+        fleetctl.pins_after_switch(roster, self.state_dir, actor="owner", reason=reason)
 
-    def set_preference(self, model: str, preference: str) -> None:
+    # BR-SWITCH-001
+    def set_preference(self, model: str, preference: str, reason: str | None = None) -> None:
         roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
         if model not in {item["model"] for item in fleetctl.model_overview(roster, {})}:
             raise ValueError("unknown model")
+        if preference not in fleetctl.MODEL_PREFERENCES:
+            raise ValueError("unknown model preference")
         with fleetctl.locked_runtime(self.state_dir) as runtime:
+            for pool in roster.get("quota_pools", {}):
+                if model in fleetctl.choosable_models(roster, pool):
+                    fleetctl.set_model_toggle(runtime, roster, pool, model, preference != "off", actor="owner", reason=reason)
+            before = fleetctl.model_preference(runtime, model)
             fleetctl.set_model_preference(runtime, model, preference)
+            fleetctl.record_control(runtime, f"preference:{model}", before, preference, "owner", reason)
+        fleetctl.pins_after_switch(roster, self.state_dir, actor="owner", reason=reason)
 
 
 # ---- rendering ------------------------------------------------------------------------------
@@ -663,6 +676,14 @@ LEVEL_PLAIN = {
 }
 
 
+def _control_text(record: dict[str, Any] | None) -> str:
+    if not record:
+        return "Actor not recorded"
+    actor = "you" if record.get("actor") == "owner" else "agent"
+    when = fleetctl.parse_iso(record["when"]).astimezone()
+    return f"{actor}, {when.day} {when:%b %H:%M}"
+
+
 def _level_meaning(level: str) -> str:
     return LEVEL_PLAIN[level] + " Ignore estimates still obeys actual limits."
 
@@ -693,6 +714,7 @@ def _slider(pool: dict[str, Any], form_token: str) -> str:
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
         f'<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
         f'<p class="means" id="means-{pool_id}">{html.escape(_level_meaning(current))}</p>'
+        f'<span class="control-actor level-actor">{html.escape(_control_text(pool.get("control")))}</span>'
     )
 
 
@@ -1053,6 +1075,9 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
         control = '<span class="na">Withdrawn</span>'   # its maker took it away: no switch could run it
     else:
         control = '<span class="na">Unavailable</span>'   # the router has no lane for it: nothing a switch could do
+    if option["run_as"]:
+        control = (f'<div class="switch-attribution">{control}<span class="control-actor model-actor">'
+                   f'{html.escape(_control_text(option.get("control")))}</span></div>')
     state = "" if not option["run_as"] else (" on" if on else " off")
     older_label = '<span class="older-label">Older model</span>' if older else ''
     active_badge = active_note = ''
@@ -1134,6 +1159,8 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
     for p in overview["pools"]:
         state, label, note = models_summary(p, by_key)
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
+                      "control_actor": _control_text(p.get("control")),
+                      "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
                       "gauge": _provider_gauge(p, overview), "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
@@ -1515,18 +1542,19 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 elif path == "/refresh":
                     outcomes = console.refresh_now()
                 elif path == "/level":
-                    console.set_level(pool, level)
+                    console.set_level(pool, level, reason=fields.get("reason", [None])[0])
                 elif path == "/model":
                     change = fields.get("switch", [""])[0]
                     if change:   # "<model>=on" or "<model>=off": the state to set, never a flip
                         model, _, state = change.rpartition("=")
                         if state not in {"on", "off"}:
                             raise ValueError("unknown state")
-                        console.set_toggle(pool, model, state == "on")
+                        console.set_toggle(pool, model, state == "on", reason=fields.get("reason", [None])[0])
                     else:
-                        console.set_choice(pool, fields.get("model", [""])[0])
+                        console.set_choice(pool, fields.get("model", [""])[0], reason=fields.get("reason", [None])[0])
                 else:
-                    console.set_preference(fields.get("model", [""])[0], fields.get("preference", [""])[0])
+                    console.set_preference(fields.get("model", [""])[0], fields.get("preference", [""])[0],
+                                           reason=fields.get("reason", [None])[0])
             except providers.ProviderError as exc:
                 if self.headers.get("Accept") == "application/json":
                     self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json; charset=utf-8")

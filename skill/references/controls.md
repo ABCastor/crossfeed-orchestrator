@@ -4,11 +4,13 @@ Load when the owner changes a spend level or model switch, a stand-in appears, o
 
 Run `python3 scripts/fleetctl.py brief` before planning. `brief --verbose` gives limits, resets, plan details, pins and effort warnings; `brief --json` retains the complete data. The compact table's binding window is the window the selector prices, not necessarily the largest used percentage. Price is quota scarcity (lambda), not subscription cost; `-` means the renderer lacks selection context, and a marked fallback means a projection is unknown.
 
-Spend levels and switches change only on the owner's word. Never switch a model on yourself. A shortage is not authorization to undo a limit.
+BR-SWITCH-001 in `BUSINESS-RULES.md` (checkout or installed root) is the authority for control changes. The CLI enforces it, and the hook gives an early refusal. Read the actor shown beside the console's switches and levels before changing them.
+
+CLI changes default to `agent`. Console changes use `owner`. An explicit owner instruction can use `--owner`; agents must not use that flag to impersonate an owner instruction. Add `--reason "short explanation"` to record context. Attribution and compact append-only history live in runtime.json beside switch state (`control_records`, `control_history`, `control_limits`). Existing state without attribution displays “Actor not recorded”; it is not retroactively assigned to anyone. The owner can reapply a control to establish attribution. An agent's later off/lower write does not erase the owner's limit. An owner write replaces or releases it. No history entries are truncated or rewritten.
 
 ## Owner spend profiles
 
-On the owner's instruction, apply the matching preset with `fleetctl.py profile NAME --because "<owner's words>" --who "<agent identity>"`, then report the command's exact changes in one line. Each changed pool records who, when and the phrase in local runtime `profile_changes`. No-op profiles report `no level changes`.
+Apply the matching preset with `fleetctl.py profile NAME --because "<owner's words>" --who "<agent identity>"`, use `--owner` only for an explicit owner instruction, then report the command's exact changes in one line. Each changed pool records who, when and the phrase in local runtime `profile_changes`. No-op profiles report `no level changes`.
 
 | Owner phrase or intent | Profile | Levels |
 |---|---|---|
