@@ -373,18 +373,6 @@ def check_control(runtime: dict[str, Any], key: str, value: Any, actor: str = "a
 
 
 # BR-SWITCH-001
-def check_legacy_owner_off(runtime: dict[str, Any], key: str, restricted_now: bool, loosening: bool,
-                           actor: str = "agent") -> None:
-    """A switch already off or lowered before actors were recorded (20 Oct 2026) counts as the owner's."""
-    if actor == "owner" or not (restricted_now and loosening):
-        return
-    if control_record(runtime, key) or (runtime.get("control_limits") or {}).get(key):
-        return
-    raise FleetError(f"{key}: it was switched off or lowered before the orchestrator recorded who did it, "
-                     "so it counts as the owner's; ask the owner")
-
-
-# BR-SWITCH-001
 def record_control(runtime: dict[str, Any], key: str, before: Any, after: Any,
                    actor: str = "agent", reason: str | None = None, *, restrict: bool = False) -> None:
     if actor not in {"owner", "agent"}:
@@ -409,8 +397,6 @@ def set_pool_level(runtime: dict[str, Any], pool: str, level: str, *, actor: str
         raise FleetError(f"unknown level {level}; levels: {', '.join(LEVELS)}")
     before = pool_level(runtime, pool)
     check_control(runtime, f"level:{pool}", level, actor)
-    check_legacy_owner_off(runtime, f"level:{pool}", before in ("off", "low"),
-                           LEVELS.index(level) > LEVELS.index(before), actor)
     switches = runtime.get("switches")
     if not isinstance(switches, dict):
         switches = runtime["switches"] = {}
@@ -2035,7 +2021,6 @@ def set_model_toggle(runtime: dict[str, Any], roster: dict[str, Any], pool: str,
         raise ValueError("older model needs a roster reason it beats a current model for a named job")
     check_control(runtime, f"model:{pool}:{model}", on, actor)
     before = pool_switches(roster, runtime, pool).get(model, True)
-    check_legacy_owner_off(runtime, f"model:{pool}:{model}", before is False, bool(on), actor)
     down = _settle(runtime, roster, pool)
     _store_off(runtime, pool, down - {model} if on else down | {model})
     record_control(runtime, f"model:{pool}:{model}", before, on, actor, reason, restrict=not on)

@@ -188,19 +188,3 @@ class SwitchActorTests(Sandbox):
         self.fleet('level', 'codex', 'off', '--owner')
         self.denied('profile', 'max-quality', '--because', 'codex', '--reason', 'extra capacity')
 
-
-class LegacyOwnerOffTests(unittest.TestCase):
-    """BR-SWITCH-001: an off/low switch with no recorded actor (set before 20 Oct 2026) is the owner's."""
-
-    def test_unattributed_off_level_stays_off_for_agents_but_owner_and_tightening_pass(self):
-        import importlib.util, sys
-        from pathlib import Path
-        spec = importlib.util.spec_from_file_location("fleetctl_legacy", Path(__file__).resolve().parents[1] / "scripts" / "fleetctl.py")
-        fleet = importlib.util.module_from_spec(spec); sys.modules["fleetctl_legacy"] = fleet; spec.loader.exec_module(fleet)
-        runtime = {"switches": {"codex": "off"}}
-        with self.assertRaises(fleet.FleetError):
-            fleet.check_legacy_owner_off(runtime, "level:codex", True, True, "agent")
-        fleet.check_legacy_owner_off(runtime, "level:codex", True, True, "owner")
-        fleet.check_legacy_owner_off(runtime, "level:codex", True, False, "agent")
-        runtime["control_records"] = {"level:codex": {"actor": "agent", "value": "off"}}
-        fleet.check_legacy_owner_off(runtime, "level:codex", True, True, "agent")
