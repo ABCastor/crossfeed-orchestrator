@@ -5355,7 +5355,7 @@ def build_parser() -> argparse.ArgumentParser:
     codexbar.add_argument("--json", action="store_true")
 
     route = sub.add_parser("route", help="select a quality-first lane")
-    route.add_argument("--data-class", choices=["public", "private"], default=None, help="classify all task material; defaults to private")
+    route.add_argument("--data-class", choices=["public", "code", "private"], default=None, help="classify all task material (public < code < private); defaults to private")
     route.add_argument("--role", default="default")
     route.add_argument("--mode", choices=["read-only", "write"], default="read-only")
     route.add_argument("--modality", choices=["text", "image", "audio", "video"], default="text")
@@ -5370,7 +5370,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "(keeps the quality order; the pool's one-slot cap still applies)")
 
     select = sub.add_parser("select", help="choose a pool, model and level from local evidence")
-    select.add_argument("--data-class", choices=["public", "private"], default=None, help="classify all task material; defaults to private")
+    select.add_argument("--data-class", choices=["public", "code", "private"], default=None, help="classify all task material (public < code < private); defaults to private")
     select.add_argument("--role", required=True)
     select.add_argument("--stakes", choices=["low", "normal", "high", "irreversible"], default="normal")
     select.add_argument("--family")
@@ -5383,7 +5383,7 @@ def build_parser() -> argparse.ArgumentParser:
     select.add_argument("--no-refresh", action="store_true", help=refresh_help)
 
     dispatch = sub.add_parser("dispatch", help="select and run a worker with runtime fallback")
-    dispatch.add_argument("--data-class", choices=["public", "private"], default=None, help="classify all task material; defaults to private")
+    dispatch.add_argument("--data-class", choices=["public", "code", "private"], default=None, help="classify all task material (public < code < private); defaults to private")
     dispatch.add_argument("--role", required=True)
     dispatch.add_argument("--stakes", choices=["low", "normal", "high", "irreversible"], default="normal")
     dispatch.add_argument("--family")

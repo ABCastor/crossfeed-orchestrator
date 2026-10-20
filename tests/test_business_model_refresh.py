@@ -308,6 +308,115 @@ class RefreshTests(unittest.TestCase):
         self.assertNotEqual(root, str(self.tmp))
         self.assertEqual(provider_args[provider_args.index('--agent') + 1], 'direct')
 
+    def test_code_class_ordering_across_lane_policies(self):
+        # BR-DATA-001: public < code < private; each policy accepts up to its ceiling.
+        from scripts import data_policy
+        policies = {'public-only': {'public'}, 'code-ok': {'public', 'code'}, 'private-ok': {'public', 'code', 'private'}}
+        for policy, accepted in policies.items():
+            lane = {'lane_id': 'x', 'data_policy': policy}
+            for material in ('public', 'code', 'private'):
+                reason = data_policy.refusal(lane, material)
+                if material in accepted:
+                    self.assertIsNone(reason, (policy, material))
+                else:
+                    self.assertIn(policy, reason)
+                    self.assertIn(material, reason)
+        self.assertIsNotNone(data_policy.refusal({'data_policy': 'code-ok'}, 'private'))
+        with self.assertRaises(ValueError):
+            data_policy.classification('notes')
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('FLEET_DATA_CLASS', None)
+            self.assertEqual(data_policy.classification(), 'private')
+        # Existing defaults unchanged: promo lanes public-only, ordinary lanes private-ok.
+        self.assertIn('public-only', data_policy.refusal({'free_promo': True}, 'private'))
+        self.assertIn('public-only', data_policy.refusal({'selector': 'x-free'}, 'code'))
+        self.assertIsNone(data_policy.refusal({}, 'private'))
+        self.assertEqual(data_policy.refusal({'data_policy': 'bogus'}, 'public'), 'invalid lane data_policy')
+
+    def test_code_ok_lane_routes_code_but_not_private_and_public_only_refuses_code(self):
+        # BR-DATA-001: selector, choose_lane and explicit acquisition observe the new class.
+        r, free = self._active_free()
+        r, _ = daily.reconcile(r, [catalog(FIXTURE['after'])], market(), today='2026-10-20')
+        lane = next(l for l in r['lanes'] if l['lane_id'] == free['lane_id'])
+        lid = free['lane_id']
+        # public-only (the promo default) refuses code material.
+        options, rejected = selector.enumerate_options(r, {}, 'default', fleet=fleetctl, data_class='code')
+        self.assertNotIn(lid, [o.get('lane_id') for o in options])
+        self.assertTrue(any('public-only' in why and 'code' in why for why in rejected))
+        with patch.dict(os.environ, {'FLEET_DATA_CLASS': 'code'}):
+            with self.assertRaisesRegex(fleetctl.FleetError, 'public-only'):
+                fleetctl.acquire_lease(self.tmp / 'state0', r, lid, 10)
+        # owner moves the lane to code-ok.
+        lane['data_policy'] = 'code-ok'
+        chosen = fleetctl.choose_lane(r, {}, 'default', 'read-only', 'text', harness='opencode', data_class='code')
+        self.assertEqual(chosen['lane_id'], lid)
+        options, _ = selector.enumerate_options(r, {}, 'default', fleet=fleetctl, data_class='code')
+        option = next(o for o in options if o.get('lane_id') == lid)
+        argv = selector._command(option, 'default', self.tmp / 'receipt', fleet=fleetctl)
+        self.assertIn('FLEET_DATA_CLASS=code', argv)
+        self.assertNotIn('--direct', argv)  # code-ok lanes may read the project workspace
+        with patch.dict(os.environ, {'FLEET_DATA_CLASS': 'code'}):
+            self.assertTrue(fleetctl.acquire_lease(self.tmp / 'state1', r, lid, 10))
+        # private material is still refused by code-ok, at selection and at acquisition.
+        options, rejected = selector.enumerate_options(r, {}, 'default', fleet=fleetctl, data_class='private')
+        self.assertNotIn(lid, [o.get('lane_id') for o in options])
+        self.assertTrue(any('code-ok' in why and 'private' in why for why in rejected))
+        self.assertNotEqual(fleetctl.choose_lane(r, {}, 'default', 'read-only', 'text', harness='opencode')['lane_id'], lid)
+        with patch.dict(os.environ, {'FLEET_DATA_CLASS': 'private'}):
+            with self.assertRaisesRegex(fleetctl.FleetError, 'code-ok'):
+                fleetctl.acquire_lease(self.tmp / 'state2', r, lid, 10)
+        # public material still reaches it, with the tool-less path unchanged only for public-only lanes.
+        options, _ = selector.enumerate_options(r, {}, 'default', fleet=fleetctl, data_class='public')
+        self.assertIn(lid, [o.get('lane_id') for o in options])
+
+    def test_wrapper_code_ok_lane_runs_without_direct_and_refuses_private(self):
+        # BR-DATA-001: real wrapper and roster validation accept the code-ok value.
+        r, free = self._active_free()
+        r.pop('chatgpt_gateway', None)
+        r.pop('provider_sources', None)
+        lane = next(l for l in r['lanes'] if l['lane_id'] == free['lane_id'])
+        lane['data_policy'] = 'code-ok'
+        self.overlay.write_text(patcher.dump(r))
+        home = self.tmp / 'home'
+        auth = home / '.local/share/opencode/auth.json'
+        auth.parent.mkdir(parents=True)
+        auth.write_text('{}')
+        profile = home / '.config/opencode/fleet-worker'
+        profile.mkdir(parents=True)
+        (profile / 'opencode.jsonc').write_text('{}\n')
+        (profile / 'AGENTS.md').write_text('# fake lean context\n')
+        bin_dir = self.tmp / 'bin'
+        bin_dir.mkdir()
+        executable = bin_dir / 'opencode'
+        observed = self.tmp / 'observed.json'
+        executable.write_text('#!' + sys.executable + '\n' +
+            "import json,os,sys\n" +
+            "from pathlib import Path\n" +
+            "Path(os.environ['R19_OBSERVED']).write_text(json.dumps({'args':sys.argv[1:],'cwd':os.getcwd()}))\n" +
+            "print(json.dumps({'type':'text','part':{'text':'CODE_OK'}}))\n" +
+            "print(json.dumps({'type':'step_finish','part':{'reason':'stop'}}))\n")
+        executable.chmod(0o755)
+        env = dict(os.environ, HOME=str(home), ACCESS_OVERLAY=str(self.overlay),
+                   FLEET_STATE_DIR=str(self.tmp / 'state'), FLEET_NO_AUTO_REFRESH='1',
+                   PATH=str(bin_dir) + os.pathsep + os.environ['PATH'], R19_OBSERVED=str(observed))
+        argv = ['bash', str(ROOT / 'scripts/opencode-agent.sh'), '--lane', free['lane_id'],
+                '--prompt', 'code fixture text', '--dir', str(self.tmp), '--timeout', '10']
+        run = subprocess.run(argv, env=dict(env, FLEET_DATA_CLASS='private'), text=True, capture_output=True)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('code-ok', run.stderr)
+        self.assertFalse(observed.exists())
+        run = subprocess.run(argv, env=dict(env, FLEET_DATA_CLASS='code'), text=True, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout.strip(), 'CODE_OK')
+        # The same lane as public-only still demands --direct and refuses code material.
+        lane['data_policy'] = 'public-only'
+        self.overlay.write_text(patcher.dump(r))
+        observed.unlink()
+        run = subprocess.run(argv, env=dict(env, FLEET_DATA_CLASS='code'), text=True, capture_output=True)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('public-only', run.stderr)
+        self.assertFalse(observed.exists())
+
     def test_market_main_calls_writer_after_fetch_and_reports_summary(self):
         # BR-REFRESH-001
         rows = [catalog(FIXTURE['after'])]

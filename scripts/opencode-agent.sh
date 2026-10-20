@@ -220,6 +220,8 @@ lane_setup() {
   [ "$(jq -r '.harness' <<<"$lane_json")" = "opencode" ] || { echo "opencode-agent: lane $LANE is not an OpenCode lane" >&2; exit 2; }
   # BR-DATA-001: only the tool-less direct path has a prompt-contained
   # boundary. Public text cannot authorize reading a private workspace.
+  # code-ok lanes may read a project workspace (code, never notes), so they
+  # do not require --direct; data_policy.py refuses private material for them.
   _data_policy="$(jq -r '.data_policy // (if (.free_promo == true or (.selector | endswith("-free"))) then "public-only" else "private-ok" end)' <<<"$lane_json")"
   if [ "$_data_policy" = "public-only" ] && [ "$DIRECT" != "1" ]; then
     echo "opencode-agent: public-only lane requires --direct with public prompt material" >&2
