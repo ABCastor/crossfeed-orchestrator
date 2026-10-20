@@ -25,8 +25,10 @@ import re
 import urllib.request
 from pathlib import Path
 try:
+    import daily_model_refresh as daily
     from evidence import current_aa_variants, load_lmarena, write_evidence
 except ModuleNotFoundError:
+    from scripts import daily_model_refresh as daily
     from scripts.evidence import current_aa_variants, load_lmarena, write_evidence
 
 STATE_DIR = Path(
@@ -174,18 +176,14 @@ def norm(name: str) -> str:
 
 def family_tokens(model_key: str) -> list[str]:
     # Whole normalized key only: loose family stems cross-match Pro with Flash.
-    return [norm(model_key)]
+    return [norm(re.sub(r"-free$", "", model_key))]
 
 
 def extract_models_dev(raw: str | None) -> dict:
     if not raw:
         return {}
     data = json.loads(raw)
-    provider = None
-    for key, value in data.items():
-        if "opencode" in key.lower():
-            provider = value
-            break
+    provider = data.get("opencode-go")
     if not provider:
         return {}
     models = {}
@@ -269,6 +267,7 @@ def extract_swebench(raw: str | None, tokens: dict[str, list[str]]) -> dict:
     return scores
 
 
+# BR-REFRESH-001
 def main() -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     overlay = json.loads(OVERLAY.read_text(encoding="utf-8"))
@@ -279,14 +278,26 @@ def main() -> int:
             if lane.get("harness") == "opencode"
         }
     )
-    tokens = {key: family_tokens(key) for key in lane_keys}
+    catalogs = daily.discover(overlay)
+    discovered = {row["model_key"] for c in catalogs for row in c.get("models") or []}
+    tokens = {re.sub(r"-free$", "", key): family_tokens(key) for key in set(lane_keys) | discovered}
 
     raws = {name: fetch(url) for name, url in SOURCES.items()}
+    try:
+        models_dev = json.loads(raws["models_dev"] or "{}")
+        if not isinstance(models_dev, dict):
+            models_dev = {}
+            raws["models_dev"] = None
+    except (TypeError, ValueError):
+        models_dev = {}
+        raws["models_dev"] = None
+    daily.enrich(catalogs, models_dev)
     catalog = {
         "schema": "fleet-market-catalog/v1",
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "sources_ok": {name: raws[name] is not None for name in SOURCES},
         "go_models": extract_models_dev(raws["models_dev"]),
+        "provider_catalogs": catalogs,
         "openrouter": extract_openrouter(raws["openrouter"], tokens),
         "aider_polyglot": extract_aider(raws["aider"], tokens),
         "swebench": extract_swebench(raws["swebench"], tokens),
@@ -310,7 +321,8 @@ def main() -> int:
     new_ids = set(catalog["go_models"].keys())
     appeared = sorted(new_ids - old_ids) if old_ids else []
     disappeared = sorted(old_ids - new_ids)
-    entitled = entitled_models()
+    entitled = {r["selector"] for c in catalogs if c["provider"] == "opencode-go"
+                for r in c.get("models") or []}
     entitled_keys = {selector.split("/", 1)[-1] for selector in entitled}
     entitled_not_admitted = sorted(
         model_id
@@ -348,7 +360,7 @@ def main() -> int:
         report_lines.append(f"GONE from the Go catalog: {', '.join(disappeared)}")
     if entitled_not_admitted:
         report_lines.append(
-            "ENTITLED on your plan but NOT in the overlay (real admission candidates): "
+            "LISTED by the provider CLI but NOT in the overlay (unverified admission candidates): "
             + ", ".join(entitled_not_admitted)
         )
     if catalog_only:
@@ -378,11 +390,23 @@ def main() -> int:
         "Scores are model priors, not route verdicts. Admission still requires the local smoke test.",
     ]
 
+    refresh_failed = False
+    try:
+        changes = daily.apply_refresh(OVERLAY, catalogs, catalog)
+        report_lines.append(daily.summary(changes))
+        if changes["unknown"]:
+            report_lines.append("Catalog checks unknown: " + "; ".join(changes["unknown"]))
+        overlay = json.loads(OVERLAY.read_text(encoding="utf-8"))
+    except (OSError, ValueError, daily.patcher.PatchError):
+        refresh_failed = True
+        # Do not print external exception text or credentials in the report.
+        report_lines.append("Daily roster: update refused; overlay retained or restored. Check catalog/roster validation.")
+
     catalog_path.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     write_evidence(STATE_DIR.parent, overlay, catalog)
     (STATE_DIR / "market-report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
     print("\n".join(report_lines))
-    return 0
+    return 1 if refresh_failed else 0
 
 
 if __name__ == "__main__":

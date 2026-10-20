@@ -48,6 +48,14 @@ except ImportError:
     canonical_model = _identity_module.canonical_model
 
 
+try:
+    import data_policy as _data_policy
+except ImportError:
+    _data_spec = importlib.util.spec_from_file_location("fleet_data_policy", Path(__file__).with_name("data_policy.py"))
+    _data_policy = importlib.util.module_from_spec(_data_spec)
+    _data_spec.loader.exec_module(_data_policy)
+
+
 def _xdg_config() -> str:
     return os.environ.get("XDG_CONFIG_HOME") or "~/.config"
 
@@ -2737,6 +2745,11 @@ def effort_problems(roster: dict[str, Any], state_dir: Path, now: dt.datetime | 
     return problems
 
 
+def data_policy_refusal(lane, data_class=None):
+    return _data_policy.refusal(lane, data_class)
+
+
+# BR-DATA-001
 def choose_lane(
     roster: dict[str, Any],
     runtime: dict[str, Any],
@@ -2745,6 +2758,7 @@ def choose_lane(
     modality: str,
     harness: str | None = None,
     one_shot: bool = False,
+    data_class: str | None = None,
 ) -> dict[str, Any]:
     # The primary pool sets the BAND (how tight the main subscription is, hence how
     # far to step down), but it must not gate lanes that spend a different budget.
@@ -2835,6 +2849,10 @@ def choose_lane(
                         continue
                     lane = replacement
                     lane_id = lane["lane_id"]
+        privacy_reason = data_policy_refusal(lane, data_class)
+        if privacy_reason:
+            rejected.append(f"{lane_id}: {privacy_reason}")
+            continue
         if model_preference(runtime, lane["model_key"]) == "off":
             rejected.append(f"{lane_id}: model switched off")
             continue
@@ -2919,6 +2937,7 @@ def select_option(
     exclude_lineage: str | None = None, mode: str | None = None, modality: str = "text",
     allow: str | Path | None = None, lead: str | None = None,
     target: tuple[str, str] | None = None,
+    data_class: str | None = None,
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -2928,7 +2947,7 @@ def select_option(
         roster, runtime, state_dir, role, stakes=stakes, family=family,
         exclude_lineage=exclude_lineage, mode=mode, modality=modality, allow=allow, lead=lead,
         fleet=types.SimpleNamespace(**globals()),
-        target=target,
+        target=target, data_class=data_class,
     )
 
 
@@ -2982,7 +3001,8 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         argv = dispatch_argv(option, prompt, directory, last)
         env = dict(os.environ, FLEET_STATE_DIR=str(state_dir.resolve()),
                    ACCESS_OVERLAY=str(args.overlay.expanduser().resolve()),
-                   CROSSFEED_DISPATCH_ID=dispatch_id)
+                   CROSSFEED_DISPATCH_ID=dispatch_id,
+                   FLEET_DATA_CLASS=getattr(args, "data_class", None) or os.environ.get("FLEET_DATA_CLASS", "private"))
         # The incoming API credential is never a worker/provider credential.
         env.pop("CROSSFEED_API_KEY", None)
         notice = (f"fleetctl: selected pool={option['pool']} model={option['model_key']} "
@@ -3127,6 +3147,10 @@ def acquire_lease(
         raise FleetError("Crossfeed Chat gateway admission closed: catalog selector is not currently admitted")
     if not lane:
         raise FleetError(f"unknown lane: {lane_id}")
+    # BR-DATA-001: explicit lanes and fanout also pass this execution gate.
+    privacy_reason = data_policy_refusal(lane)
+    if privacy_reason:
+        raise FleetError(privacy_reason)
     with locked_runtime(state_dir) as runtime:
         clean_leases(runtime)
         if chatgpt_pro.is_pro(lane):
@@ -3181,6 +3205,8 @@ def acquire_lease(
                     f"(estimated ${spent:.4f} spent since local midnight); refusing until the cap "
                     f"resets. Check authoritative spend with the provider."
                 )
+        if lane.get("access_status") != "verified" or lane.get("admission_status") != "active":
+            raise FleetError("lane access/admission is not verified/active")
         cap = effective_cap(lane, pool_state, pool_evidence, level)
         if len(active) >= cap:
             raise FleetError(f"lane {lane_id} has {len(active)} active lease(s), cap is {cap}")
@@ -5217,6 +5243,7 @@ def build_parser() -> argparse.ArgumentParser:
     codexbar.add_argument("--json", action="store_true")
 
     route = sub.add_parser("route", help="select a quality-first lane")
+    route.add_argument("--data-class", choices=["public", "private"], default=None, help="classify all task material; defaults to private")
     route.add_argument("--role", default="default")
     route.add_argument("--mode", choices=["read-only", "write"], default="read-only")
     route.add_argument("--modality", choices=["text", "image", "audio", "video"], default="text")
@@ -5231,6 +5258,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "(keeps the quality order; the pool's one-slot cap still applies)")
 
     select = sub.add_parser("select", help="choose a pool, model and level from local evidence")
+    select.add_argument("--data-class", choices=["public", "private"], default=None, help="classify all task material; defaults to private")
     select.add_argument("--role", required=True)
     select.add_argument("--stakes", choices=["low", "normal", "high", "irreversible"], default="normal")
     select.add_argument("--family")
@@ -5243,6 +5271,7 @@ def build_parser() -> argparse.ArgumentParser:
     select.add_argument("--no-refresh", action="store_true", help=refresh_help)
 
     dispatch = sub.add_parser("dispatch", help="select and run a worker with runtime fallback")
+    dispatch.add_argument("--data-class", choices=["public", "private"], default=None, help="classify all task material; defaults to private")
     dispatch.add_argument("--role", required=True)
     dispatch.add_argument("--stakes", choices=["low", "normal", "high", "irreversible"], default="normal")
     dispatch.add_argument("--family")
@@ -5762,7 +5791,7 @@ def main() -> int:
                 roster, runtime, state_dir, args.role, stakes=args.stakes,
                 family=args.family, exclude_lineage=args.exclude_lineage,
                 mode=args.mode, modality=getattr(args, "modality", "text"), allow=args.allow,
-                lead=resolve_lead_pool(roster, args.lead),
+                lead=resolve_lead_pool(roster, args.lead), data_class=args.data_class,
             )
             if args.command == "dispatch":
                 return dispatch_selection(selection, args, state_dir, prompt)
@@ -5782,7 +5811,7 @@ def main() -> int:
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             lane = choose_lane(
                 roster, runtime, args.role, args.mode, args.modality, args.harness,
-                one_shot=args.one_shot,
+                one_shot=args.one_shot, data_class=args.data_class,
             )
             if args.json:
                 print(json.dumps(lane, indent=2, sort_keys=True))

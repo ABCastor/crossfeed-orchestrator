@@ -11,6 +11,7 @@ import argparse
 import copy
 import difflib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -41,6 +42,19 @@ ROUTE_ORDER: dict[str, list[str]] = {
     "hard-reasoning": ["mimo-v2.6-pro"],
     "review": ["mimo-v2.6-pro", "glm-5.3-flash", "deepseek-v4.1-flash"],
 }
+
+
+# BR-REFRESH-001
+def helper_call_cost(price: dict[str, Any]) -> float | None:
+    """USD for the standard helper call: 8k input + 2k output tokens.
+
+    Catalog prices are per million tokens. Unknown/invalid is never free.
+    """
+    values = [price.get(key) for key in ("input", "output")]
+    if any(not isinstance(x, (int, float)) or isinstance(x, bool)
+           or not math.isfinite(x) or x < 0 for x in values):
+        return None
+    return (8000 * values[0] + 2000 * values[1]) / 1_000_000
 
 
 class PatchError(RuntimeError):

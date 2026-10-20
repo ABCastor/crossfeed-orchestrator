@@ -217,6 +217,13 @@ lane_setup() {
     echo "opencode-agent: unknown lane: $LANE (see roster message above; try 'roster.sh list opencode')" >&2
     exit 2; }
   [ "$(jq -r '.harness' <<<"$lane_json")" = "opencode" ] || { echo "opencode-agent: lane $LANE is not an OpenCode lane" >&2; exit 2; }
+  # BR-DATA-001: only the tool-less direct path has a prompt-contained
+  # boundary. Public text cannot authorize reading a private workspace.
+  _data_policy="$(jq -r '.data_policy // (if (.free_promo == true or (.selector | endswith("-free"))) then "public-only" else "private-ok" end)' <<<"$lane_json")"
+  if [ "$_data_policy" = "public-only" ] && [ "$DIRECT" != "1" ]; then
+    echo "opencode-agent: public-only lane requires --direct with public prompt material" >&2
+    exit 3
+  fi
   MODEL="$(jq -r '.selector' <<<"$lane_json")"
   effort_args=( effort "$MODEL" "${EFFORT_ROLE:-$ROLE}" --harness opencode --explain )
   [ -z "$CALLER_VARIANT" ] || effort_args+=( --level "$CALLER_VARIANT" )
@@ -320,6 +327,9 @@ if [ -f "$db_source" ] && command -v sqlite3 >/dev/null 2>&1; then
 fi
 if [ "$DIRECT" = "1" ]; then
   direct_config_dir="$(mktemp -d)"
+  if [ "$_data_policy" = "public-only" ]; then
+    RUN_DIR="$direct_config_dir"
+  fi
   cat >"$direct_config_dir/opencode.json" <<'JSON'
 {
   "agent": {

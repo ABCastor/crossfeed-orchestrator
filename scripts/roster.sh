@@ -89,6 +89,7 @@ PYSELECTOR
           (.selector | type != "string") or
           (.access_status | type != "string") or
           (.admission_status as $s | ["active", "candidate", "rejected", "retired"] | index($s) | not) or
+          (has("data_policy") and (.data_policy as $p | ["public-only", "private-ok"] | index($p) | not)) or
           (.quality_tier | type != "string") or
           (.capabilities.input | type != "array") or
           (.allowed_modes | type != "array") or
@@ -183,11 +184,21 @@ resolve_lane() {
   jq -r --arg key "$model_key" --arg harness "$harness" '.lanes[] | select(.model_key == $key and .harness == $harness) | .lane_id' "$ROSTER"
 }
 
+# BR-DATA-001
 check_lane() {
   lane_id="$1"; mode="$2"
   lane="$(jq -ce --arg lane "$lane_id" '.lanes[] | select(.lane_id == $lane)' "$ROSTER")" || {
     echo "roster: unknown lane $lane_id" >&2; exit 3;
   }
+  python3 - "$HERE" "$lane" <<'PYPOLICY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from data_policy import refusal
+reason = refusal(json.loads(sys.argv[2]))
+if reason:
+    print("roster: REJECTED " + reason, file=sys.stderr)
+    sys.exit(3)
+PYPOLICY
   access="$(jq -r '.access_status' <<<"$lane")"
   admission="$(jq -r '.admission_status' <<<"$lane")"
   if [ "$access" != "verified" ]; then

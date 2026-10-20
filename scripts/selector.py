@@ -87,9 +87,11 @@ def _lineage(roster: dict, option: dict) -> str:
     return str(option.get("provider") or "unknown").lower()
 
 
+# BR-DATA-001
 def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | None = None,
                       modality: str = "text", exclude_lineage: str | None = None,
-                      fleet: Any = None, explicit_pools: set[str] | None = None) -> tuple[list[dict], list[str]]:
+                      fleet: Any = None, explicit_pools: set[str] | None = None,
+                      data_class: str | None = None) -> tuple[list[dict], list[str]]:
     """Return admitted actual (pool, harness, model, level) options and refusals."""
     fleet = _fleet(fleet)
     policy = roster.get("policy", {}).get("selector", {})
@@ -117,15 +119,22 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         key, harness, pool = lane.get("model_key"), lane.get("harness"), lane.get("quota_pool")
         label = lane.get("lane_id") or f"{pool}/{key}"
         why = None
-        if not key or not pool or harness not in WRAPPERS:
+        privacy_reason = fleet.data_policy_refusal(lane, data_class)
+        if privacy_reason:
+            why = privacy_reason
+        elif not key or not pool or harness not in WRAPPERS:
             why = "missing model/pool or unsupported wrapper"
         # BR-MIMO-001: paid pools require an explicit allow-list entry.
         elif (lane.get("paid_mimo") or roster.get("quota_pools", {}).get(pool, {}).get("explicit_only")) and pool not in (explicit_pools or set()):
             why = "paid pool requires explicit --allow"
+        elif fleet.data_policy_refusal(lane, "private") and (harness != "opencode" or mode != "read-only"):
+            why = "public-only lane requires prompt-contained OpenCode read-only call"
         elif allowed is not None and pool not in allowed:
             why = "pool forbidden for role"
         elif lane.get("access_status") != "verified" or lane.get("admission_status") != "active":
             why = "access or admission not active/verified"
+        elif lane.get("value_routing_managed") and role not in lane.get("roles", []):
+            why = "role not declared for refreshed lane"
         elif not lane.get("direct") and not lane.get("roles"):
             why = "explicit-only lane (no routing roles)"
         elif fleet.retired_on(roster, key):
@@ -173,9 +182,12 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "model_identity": canonical_model(key, roster),
                   "run_as": lane.get("model") or lane.get("selector") or key,
                   "mode": mode, "band": band, "pool_state": state,
-                  "provider": lane.get("provider")}
+                  "provider": lane.get("provider"),
+                  "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
         if "price_1m" in lane:
             option["source_price_1m"] = lane["price_1m"]
+        if fleet.data_policy_refusal(lane, "private"):
+            option["public_only"] = True
         if lane.get("paid_mimo") is True:
             option["paid_mimo"] = True
         if lane.get("lane_id"):
@@ -376,6 +388,7 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
             "penalty_percent": percent if percent is not None else nominal}, flags
 
 
+# BR-DATA-001
 def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> list[str]:
     harness, level = option["harness"], option["level"]
     if harness == "chatgpt-chat" and ((level != "service-chosen" and
@@ -383,6 +396,7 @@ def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> li
                                or option["mode"] != "read-only"):
         raise _fleet(fleet).FleetError("Crossfeed Chat command requires read-only mode and owner-configured effort")
     argv = ["env", f"FLEET_SELECTION_FILE={receipt}",
+            "FLEET_DATA_CLASS=" + option.get("data_class", "private"),
             str(Path(__file__).resolve().parent / WRAPPERS[harness])]
     if harness in {"codex", "claude"}:
         argv += ["--model", option["run_as"], "--role", role]
@@ -394,6 +408,8 @@ def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> li
             argv += ["--paid-mimo"]
         if harness == "opencode":
             argv += ["--effort-role", role]
+            if option.get("public_only"):
+                argv += ["--direct"]
     elif harness == "copilot":
         argv += ["--model", "auto"]
     elif harness == "pi":
@@ -473,7 +489,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   exclude_lineage: str | None = None, mode: str | None = None,
                   modality: str = "text", allow: str | Path | None = None,
                   lead: str | None = None, fleet: Any = None,
-                  target: tuple[str, str] | None = None) -> dict:
+                  target: tuple[str, str] | None = None, data_class: str | None = None) -> dict:
     """Return choice/top3/lambdas and write an immutable replay receipt."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -487,7 +503,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     allow_list = parse_allow(allow, fleet)
     explicit_pools = {entry.split(":", 1)[0] for entry in allow_list or []}
     options, rejected = enumerate_options(roster, runtime, role, mode=mode, modality=modality,
-                                          exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools)
+                                          exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools, data_class=data_class)
     if target is not None:
         requested = next((lane for lane in roster.get("lanes", [])
                           if (lane.get("harness"), lane.get("model_key")) == target), {})

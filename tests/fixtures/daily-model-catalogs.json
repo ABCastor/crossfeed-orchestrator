@@ -1,0 +1,115 @@
+{
+  "before": [
+    {
+      "selector": "opencode-go/old-helper",
+      "model_key": "old-helper",
+      "price_1m": {
+        "input": 0.1,
+        "output": 0.5
+      }
+    }
+  ],
+  "after": [
+    {
+      "selector": "opencode-go/new-helper",
+      "model_key": "new-helper",
+      "price_1m": {
+        "input": 0.2,
+        "output": 0.8
+      }
+    },
+    {
+      "selector": "opencode-go/mimo-v2.6-flash",
+      "model_key": "mimo-v2.6-flash",
+      "price_1m": {
+        "input": 0.1,
+        "output": 0.5
+      }
+    },
+    {
+      "selector": "opencode-go/beam-free",
+      "model_key": "beam-free",
+      "free_promo": true,
+      "price_1m": {
+        "input": 0,
+        "output": 0
+      }
+    },
+    {
+      "selector": "opencode-go/deepseek-v4-flash",
+      "model_key": "deepseek-v4-flash"
+    },
+    {
+      "selector": "opencode-go/deepseek-v4-pro",
+      "model_key": "deepseek-v4-pro"
+    },
+    {
+      "selector": "opencode-go/minimax-m3",
+      "model_key": "minimax-m3"
+    },
+    {
+      "selector": "opencode-go/glm-5.2",
+      "model_key": "glm-5.2"
+    },
+    {
+      "selector": "opencode-go/qwen3.7-plus",
+      "model_key": "qwen3.7-plus"
+    },
+    {
+      "selector": "opencode-go/qwen3.7-max",
+      "model_key": "qwen3.7-max"
+    },
+    {
+      "selector": "opencode-go/grok-4.5",
+      "model_key": "grok-4.5"
+    },
+    {
+      "selector": "opencode-go/kimi-k2.7-code",
+      "model_key": "kimi-k2.7-code"
+    },
+    {
+      "selector": "opencode-go/kimi-k3",
+      "model_key": "kimi-k3"
+    },
+    {
+      "selector": "opencode-go/mimo-v2.5",
+      "model_key": "mimo-v2.5"
+    },
+    {
+      "selector": "opencode-go/mimo-v2.5-pro",
+      "model_key": "mimo-v2.5-pro"
+    },
+    {
+      "selector": "opencode-go/deepseek-v4.1-flash",
+      "model_key": "deepseek-v4.1-flash"
+    },
+    {
+      "selector": "opencode-go/glm-5.3-flash",
+      "model_key": "glm-5.3-flash"
+    },
+    {
+      "selector": "opencode-go/mimo-v2.6-pro",
+      "model_key": "mimo-v2.6-pro"
+    }
+  ],
+  "scores": {
+    "new-helper": {
+      "intelligence_index": 43,
+      "coding_index": 55
+    },
+    "mimo-v2.6-flash": {
+      "intelligence_index": 45,
+      "coding_index": 58,
+      "vals": 60
+    },
+    "beam": {
+      "intelligence_index": 44,
+      "coding_index": 51
+    },
+    "old-helper": {
+      "intelligence_index": 41,
+      "coding_index": 50
+    }
+  },
+  "source": "Synthetic complete Go catalog; invented prices and scores, never real AA data."
+}
