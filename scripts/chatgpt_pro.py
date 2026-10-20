@@ -119,7 +119,10 @@ def blocked(roster, runtime, lane, *, now=None):
     status = lane.get("gateway_status", {})
     if status.get("quota_blocked") or status.get("rate_limited"):
         return "Pro paused by Crossfeed Chat"
-    if roster.get("chatgpt_pro_usage", {}).get(pool, {}).get("spent"):
+    # The owner may treat the weekly number as a guide (20 Oct 2026): the real stop is ChatGPT's own
+    # downgrade or rate-limit report above, so a spent estimate only warns.
+    guide = roster.get("quota_pools", {}).get(pool, {}).get("pro_allowance_mode") == "guide"
+    if roster.get("chatgpt_pro_usage", {}).get(pool, {}).get("spent") and not guide:
         return "Pro rolling 7-day allowance estimate spent"
     return None
 

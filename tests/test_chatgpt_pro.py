@@ -136,6 +136,17 @@ class MeterTests(unittest.TestCase):
                 with self.assertRaises(fleetctl.FleetError):
                     fleetctl.choose_lane(self.roster, runtime, "hard-reasoning", "read-only", "text", "chatgpt-chat")
 
+    def test_guide_allowance_keeps_pro_when_estimate_spent(self):
+        ranked = ["chatgpt:latest-pro", "chatgpt:latest-medium", "chatgpt:latest-high"]
+        self.roster["routing"]["roles"]["hard-reasoning"] = {band: ranked for band in ("quality_first", "conserve", "critical")}
+        self.roster["chatgpt_pro_usage"] = {"chatgpt-work": {"spent": True}}
+        self.roster["quota_pools"]["chatgpt-work"]["pro_allowance_mode"] = "guide"
+        choice = fleetctl.choose_lane(self.roster, {}, "hard-reasoning", "read-only", "text", "chatgpt-chat")
+        self.assertEqual(choice["lane_id"], "chatgpt:latest-pro")
+        self.lanes["chatgpt:latest-pro"]["gateway_status"] = {"quota_blocked": True}
+        choice = fleetctl.choose_lane(self.roster, {}, "hard-reasoning", "read-only", "text", "chatgpt-chat")
+        self.assertEqual(choice["lane_id"], "chatgpt:latest-xhigh")
+
     def test_target_selector_prefers_extra_high_even_with_better_high_score(self):
         self.lanes["chatgpt:latest-pro"]["gateway_status"] = {"quota_blocked": True}
         self.roster["policy"]["selector"]["allowed_pools_by_role"] = {"hard-reasoning": ["chatgpt-work"]}
