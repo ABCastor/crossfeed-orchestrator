@@ -148,6 +148,7 @@ fi
 # shells out, so the checks are still ahead of every external call.
 command -v opencode >/dev/null || { echo "opencode-agent: opencode binary not on PATH" >&2; exit 127; }
 command -v jq >/dev/null || { echo "opencode-agent: jq is required" >&2; exit 127; }
+crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 # A static scanner cannot see `timeout ./opencode-agent.sh`, so detect the exact
 # layered-cap failure at runtime and make the outer wall clock explicit.
@@ -438,7 +439,7 @@ run_opencode() {
       OPENCODE_AUTO_SHARE=false \
       OPENCODE_CONFIG_DIR="$direct_config_dir" OPENCODE_DISABLE_PROJECT_CONFIG=1 \
       OPENCODE_DISABLE_EXTERNAL_SKILLS=1 OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
-      opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
+      ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
   elif [ "$CONTEXT" = "lean" ]; then
     if [ "$WEB_SEARCH" = "1" ]; then
       exec env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
@@ -451,7 +452,7 @@ run_opencode() {
         OPENCODE_ENABLE_EXA=1 OPENCODE_WEBSEARCH_PROVIDER=exa OPENCODE_AUTO_SHARE=false \
         OPENCODE_CONFIG_DIR="$direct_config_dir" OPENCODE_DISABLE_PROJECT_CONFIG=1 \
         OPENCODE_DISABLE_EXTERNAL_SKILLS=1 OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
-        opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
+        ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
     else
       exec env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
         -u XDG_DATA_HOME \
@@ -463,7 +464,7 @@ run_opencode() {
         OPENCODE_AUTO_SHARE=false \
         OPENCODE_CONFIG_DIR="$direct_config_dir" OPENCODE_DISABLE_PROJECT_CONFIG=1 \
         OPENCODE_DISABLE_EXTERNAL_SKILLS=1 OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
-        opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
+        ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
     fi
   else
     exec env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
@@ -477,7 +478,7 @@ run_opencode() {
       OPENCODE_AUTO_SHARE=false \
       OPENCODE_CONFIG_DIR="$direct_config_dir" OPENCODE_DISABLE_PROJECT_CONFIG=1 \
       OPENCODE_DISABLE_EXTERNAL_SKILLS=1 OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
-      opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
+      ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} opencode "${args[@]}" -- "$PROMPT" </dev/null >"$EVENTS" 2>"$stderr_file"
   fi
 }
 

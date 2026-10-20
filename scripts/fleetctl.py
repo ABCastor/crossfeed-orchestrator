@@ -3064,6 +3064,14 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
                        prompt: str, *, response: dict[str, Any] | None = None) -> int:
     directory = args.dir.expanduser().resolve()
     requested_last = args.last.expanduser().resolve() if args.last else None
+    # Refuse once, before any candidate or dry run, a dispatch that would put a worker's writes
+    # into the owner's notes; every wrapper repeats the check and blocks the writes themselves.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import vault_guard
+    if vault_guard.refuse_or_pass(vault_guard.check(
+            "dispatch", getattr(args, "mode", None) or "read-only", str(directory), prompt,
+            [str(requested_last)] if requested_last else [])):
+        return vault_guard.REFUSED
     options = [selection["choice"]]
     seen = {selection["choice"]["selection_file"]}
     for option in selection["top3"][:3]:

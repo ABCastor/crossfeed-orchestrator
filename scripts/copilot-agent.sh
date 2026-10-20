@@ -87,6 +87,7 @@ fi
 [ -d "$DIR" ] || _usage_error "work directory not found: $DIR"
 command -v copilot >/dev/null 2>&1 || { echo "copilot-agent: copilot binary not on PATH" >&2; exit 127; }
 command -v jq >/dev/null 2>&1 || { echo "copilot-agent: jq is required" >&2; exit 127; }
+crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 _parent_comm="$(ps -o comm= -p "$PPID" 2>/dev/null | tr -d '[:space:]' || true)"
 case "${_parent_comm##*/}" in
@@ -373,7 +374,7 @@ fi
 CROSSFEED_STARTED=1
 set -m
 env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
-  copilot "${args[@]}" </dev/null >"$EVENTS" 2>"$stderr_file" &
+  ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} copilot "${args[@]}" </dev/null >"$EVENTS" 2>"$stderr_file" &
 CHILD_PID=$!
 if [ -n "$PENDING_SIGNAL_CODE" ]; then
   _handle_signal "$PENDING_SIGNAL_NAME" "$PENDING_SIGNAL_CODE"

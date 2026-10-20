@@ -98,7 +98,7 @@ class PiTests(unittest.TestCase):
         self.bin = self.root / 'bin'
         self.scripts.mkdir()
         self.bin.mkdir()
-        for name in ('pi-agent.sh', 'pi_runner.py', 'run_identity.py'):
+        for name in ('pi-agent.sh', 'pi_runner.py', 'run_identity.py', 'vault_guard.py'):
             shutil.copy(ROOT / 'scripts' / name, self.scripts / name)
         for file, text in ((self.bin / 'pi', FAKE_PI), (self.scripts / 'roster.sh', FAKE_ROSTER), (self.scripts / 'fleetctl.py', FAKE_FLEET)):
             file.write_text(text)
