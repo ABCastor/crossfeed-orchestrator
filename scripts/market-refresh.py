@@ -40,7 +40,7 @@ OVERLAY = Path(
     os.environ.get("ACCESS_OVERLAY",
                    (os.environ.get("XDG_CONFIG_HOME") or "~/.config")
                    + "/orchestrator/access-overlay.json")
-).expanduser()
+).expanduser().resolve()  # the configured path is a link to the roster; the refresh refuses to write through links
 
 SOURCES = {
     "models_dev": "https://models.dev/api.json",

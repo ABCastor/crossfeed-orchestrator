@@ -506,5 +506,25 @@ class RefreshTests(unittest.TestCase):
             report, _ = run('opencode-go:deepseek-v4.1-flash:low', None)
         self.assertIn('shadow): unavailable', report)
 
+
+class OverlayLinkTests(unittest.TestCase):
+    def test_configured_overlay_link_resolves_to_the_real_file(self):
+        # 21 Oct 2026: ~/.config/orchestrator/access-overlay.json is a link, and apply_refresh refuses links,
+        # so every scheduled refresh was refused until the path was resolved at load.
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / 'roster' / 'access-overlay.json'
+            real.parent.mkdir()
+            real.write_text('{}')
+            link = Path(tmp) / 'config' / 'orchestrator' / 'access-overlay.json'
+            link.parent.mkdir(parents=True)
+            link.symlink_to(real)
+            with patch.dict(os.environ, {'ACCESS_OVERLAY': str(link)}):
+                spec = importlib.util.spec_from_file_location('market_link_test', ROOT / 'scripts/market-refresh.py')
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+            self.assertFalse(module.OVERLAY.is_symlink())
+            self.assertEqual(module.OVERLAY, real.resolve())
+
+
 if __name__ == '__main__':
     unittest.main()
