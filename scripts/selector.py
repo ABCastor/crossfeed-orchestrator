@@ -276,10 +276,11 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
         if name not in evidence.get("applicable_windows", evidence.get("windows", {})):
             continue
         value = _number(window.get("projected_used_percent_at_reset"))
+        forecast = window.get("surplus")
+        if not isinstance(forecast, dict):
+            forecast = fleet.window_surplus(window)
         if value is None:
-            value = _number(window.get("surplus", {}).get("projected_used_percent_at_reset"))
-        if value is None:
-            value = _number(fleet.window_surplus(window).get("projected_used_percent_at_reset"))
+            value = _number(forecast.get("projected_used_percent_at_reset"))
         if value is None:
             eta, used, left = (_number(window.get(k)) for k in ("eta_seconds", "used_percent", "seconds_to_reset"))
             if eta is not None and eta > 0 and used is not None and left is not None:
@@ -287,20 +288,32 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
         used = _number(window.get("used_percent")) or 0
         pressure = max(used, value) if value is not None else used
         price = pool_lambda(pressure, target, lambda0)
-        if value is None:
+        # An oracle pace that says the window lasts to its reset is a surplus,
+        # not an unknown projection. It carries no numeric projection, so
+        # without this the documented zero price for a surplus collapses into
+        # lambda_unknown and a barely-used monthly window is priced like a
+        # squeezed pool. A crude elapsed-window fallback is still not a
+        # projection; only the oracle's observed pace can make this claim.
+        pace_surplus = (value is None and forecast.get("basis") == "observed_pace"
+                        and forecast.get("surplus") is True)
+        if pace_surplus:
+            price = 0.0
+        elif value is None:
             price = max(unknown_price, price)
-        priced.append((name, window, value, pressure, price))
+        priced.append((name, window, value, pressure, price, pace_surplus))
     # Every applicable window contributes its own forecast/unknown-risk price.
     # Adding another window must never erase a more restrictive priced limit.
     binding = max(priced, key=lambda row: (row[4], row[3]),
-                  default=(None, {}, None, None, unknown_price))
-    name, window, value, pressure, price = binding
+                  default=(None, {}, None, None, unknown_price, False))
+    name, window, value, pressure, price, pace_surplus = binding
     return {"lambda": price, "state": state, "binding_window": name,
             "window": window,
             "window_minutes": window.get("window_minutes"),
             "projected_used_percent_at_reset": value,
             "pressure_percent": pressure,
-            "projection_unknown": value is None, "projection_basis": "snapshot_or_window_pace" if value is not None else "unknown"}
+            "projection_unknown": value is None and not pace_surplus,
+            "projection_basis": ("observed_pace" if pace_surplus else
+                                 "snapshot_or_window_pace" if value is not None else "unknown")}
 
 
 def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
