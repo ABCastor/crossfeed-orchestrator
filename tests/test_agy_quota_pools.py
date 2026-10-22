@@ -50,7 +50,7 @@ class QuotaPoolTests(unittest.TestCase):
         self.assertEqual(fleetctl.iso(fleetctl.parse_iso('2026-10-16T12:45:31Z') + dt.timedelta(seconds=fleetctl.quota_refusal(ARGON_ERROR,agy=True)['retry_after_seconds'])), '2026-10-23T09:17:51Z')
         self.assertIsNone(fleetctl.quota_refusal('ordinary error',agy=True))
         self.assertIsNone(fleetctl.quota_refusal('The quota feature is implemented.',agy=True))
-        self.assertIsNone(fleetctl.quota_refusal('AGY QUOTA EXHAUSTED (429) - empty output; marker in /tmp/agy-quota/home/cli.log',agy=True))
+        self.assertIsNone(fleetctl.quota_refusal('AGY QUOTA EXHAUSTED (429) - empty output; marker in /tmp/agy-quota/agy-home/cli.log',agy=True))
         self.assertEqual(fleetctl.quota_refusal('HTTP 429 retry-after: 42')['retry_after_seconds'],42)
 
     def test_argon_blocks_only_argon_and_recovers_at_exact_reset(self):

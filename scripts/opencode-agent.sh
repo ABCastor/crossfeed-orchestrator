@@ -298,7 +298,10 @@ if [ "$WEB_SEARCH" = "1" ] || [ "$DIRECT" = "1" ]; then
   if [ -x /usr/bin/getconf ]; then
     system_temp_root="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
   fi
-  if [ -z "$system_temp_root" ] || [ ! -d "$system_temp_root" ]; then system_temp_root="/private/tmp"; fi
+  # macOS: the per-user temp dir, else /private/tmp (the real path behind /tmp). Elsewhere: TMPDIR or /tmp.
+  if [ -z "$system_temp_root" ] || [ ! -d "$system_temp_root" ]; then
+    if [ -d /private/tmp ]; then system_temp_root="/private/tmp"; else system_temp_root="${TMPDIR:-/tmp}"; fi
+  fi
   search_root="${system_temp_root%/}/opencode-fleet-public-search"
   mkdir -p "$search_root"
   chmod 700 "$search_root"

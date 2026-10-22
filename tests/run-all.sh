@@ -16,6 +16,10 @@
 # Usage:  tests/run-all.sh
 # Exit:   0 = everything green. 1 = at least one suite failed.
 set -uo pipefail
+# The suites fake HOME to isolate config, state and sign-ins. A machine-wide XDG_* setting (GitHub's
+# Linux runners set XDG_CONFIG_HOME) outranks HOME in the wrappers and would point every suite back
+# at the real machine, so they run with the XDG defaults; a suite that needs one sets it itself.
+unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
