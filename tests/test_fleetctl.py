@@ -383,6 +383,35 @@ class FleetTelemetryTests(unittest.TestCase):
         self.assertEqual(rolling["fleet-research"]["tokens"]["total"], 10)
         self.assertEqual(rolling["unspecified"]["runs"], 1)
 
+    def test_ledger_usage_accepts_naive_and_aware_timestamps(self):
+        """Ledger lines written by older wrappers carry naive stamps; a mixed
+        ledger must still aggregate instead of raising on the first comparison."""
+        now = fleetctl.utc_now()
+        rows = [
+            {
+                "agent_profile": "aware",
+                "ended_at": fleetctl.iso(now),
+                "status": "ok",
+                "tokens": {"total": 1},
+                "cost": {"estimated_usd": 0.1},
+            },
+            {
+                "agent_profile": "naive",
+                "ended_at": now.replace(tzinfo=None).isoformat(),
+                "status": "ok",
+                "tokens": {"total": 2},
+                "cost": {"estimated_usd": 0.2},
+            },
+        ]
+        (self.root / "runs.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+        )
+        rolling = fleetctl.run_ledger_usage(self.root)["windows"]["rolling_5h"]
+        self.assertEqual(rolling["aware"]["runs"], 1)
+        self.assertEqual(rolling["naive"]["runs"], 1)
+        self.assertEqual(rolling["naive"]["tokens"]["total"], 2)
+        self.assertAlmostEqual(rolling["naive"]["estimated_cost_usd"], 0.2)
+
     def test_quota_record_opens_pool_circuit(self):
         stderr = self.root / "stderr"
         stderr.write_text('GoUsageLimitError limitName="weekly" retry-after: 120', encoding="utf-8")

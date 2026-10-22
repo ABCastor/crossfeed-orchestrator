@@ -96,7 +96,11 @@ def iso(value: dt.datetime | None = None) -> str:
 
 
 def parse_iso(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    # Older ledger and snapshot writers omitted the offset. A naive stamp is
+    # already UTC in every writer here, and returning it naive breaks every
+    # comparison against utc_now() (notably a mixed-age run ledger).
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=dt.timezone.utc)
 
 
 def load_json(path: Path, default: Any = None) -> Any:
@@ -212,6 +216,9 @@ SPEND_DOWN_MAX_S = 3600
 # How much of a window must have elapsed before its average burn rate is worth
 # extrapolating to the reset. Below this the sample is too short to mean anything.
 MIN_BURN_SAMPLE_FRACTION = 0.10
+# CodexBar lists a plan's renewal date among its rate windows (id "renewal", nothing used).
+# It is a date, not a limit, so it never constrains a pool's quota or its price.
+RENEWAL_WINDOW = "renewal"
 
 
 def format_duration(seconds: int) -> str:
@@ -539,7 +546,11 @@ def quota_window_applies(roster: dict[str, Any] | None, pool: str, name: str,
 
     A pool summary excludes model-only limits. They remain in the reported
     readings and are included when routing or admitting the matching model.
+    A plan renewal date is reported but is not a rate window: it has no length
+    and no percentage budget, so it cannot establish or price a constraint.
     """
+    if name == RENEWAL_WINDOW and not window.get("window_minutes"):
+        return False
     roster = roster or {}
     def words(text: str) -> set[str]:
         return set(re.findall(r"[a-z][a-z0-9]*", text.lower()))
@@ -4305,9 +4316,6 @@ def window_label(name: str, window: dict[str, Any]) -> str:
 _DURATION_WORDS = {300: "5-hour", 1440: "Daily", 10080: "Weekly"}
 _DURATION_IN_LABEL = re.compile(r"\b(5[- ]?h(?:ours?)?|session|weekly|week|monthly|month|daily|day)\b", re.I)
 _SLOT_NAMES = {"primary", "secondary", "tertiary"}
-# CodexBar lists a plan's renewal date among its rate windows (id "renewal", nothing used). It is
-# a date, not a limit, so it is shown as one.
-RENEWAL_WINDOW = "renewal"
 
 
 def _duration_word(minutes: Any) -> str | None:

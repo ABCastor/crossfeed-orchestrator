@@ -63,6 +63,27 @@ class UsageWindowTests(unittest.TestCase):
         self.assertEqual(fleetctl.task_band(state, evidence), "quality_first")
         self.assertEqual(evidence["spend_down"], ["primary", "secondary"])
 
+    def test_monthly_window_with_room_and_oracle_pace_is_priced_as_surplus(self):
+        """A monthly window at 5% with 26 days left is a surplus, not an unknown
+        projection. The oracle reports `will_last_to_reset`, and that verdict must
+        reach the price instead of falling back to lambda_unknown."""
+        runtime = {"quota_snapshots": {"opencode-go": {
+            "source": "fixture", "observed_at": fleetctl.iso(self.now), "windows": {
+                "primary": self.window(2, 300, left=600, label="5-hour"),
+                "secondary": self.window(3, 10080, left=3 * 86400, label="Weekly"),
+                "tertiary": self.window(5, 43200, left=26 * 86400, label="Monthly"),
+                # CodexBar also reports the plan's renewal date as an extra
+                # rate window. It has no length and no percentage to project,
+                # so it must not become the unknown-price binding window.
+                "renewal": {"used_percent": 0, "label": "Renews",
+                            "reset_at": fleetctl.iso(self.now + dt.timedelta(days=26))},
+            }}}}
+        price = selector._pool_price(self.roster, runtime, "opencode-go", {}, fleetctl)
+        self.assertEqual(price["binding_window"], "tertiary")
+        self.assertFalse(price["projection_unknown"])
+        self.assertEqual(price["projection_basis"], "observed_pace")
+        self.assertEqual(price["lambda"], 0)
+
     def test_projection_pressure_never_falls_below_actual_usage(self):
         for short, weekly, name in ((5, 99, "secondary"), (99, 5, "primary")):
             runtime = self.runtime(short, weekly)
@@ -87,7 +108,10 @@ class UsageWindowTests(unittest.TestCase):
     def test_unknown_window_price_cannot_be_erased_by_another_window(self):
         runtime = self.runtime(short=1, weekly=99)
         windows = runtime["quota_snapshots"]["claude"]["windows"]
+        # A genuinely unknown projection has neither a window length nor an
+        # oracle pace verdict; either one would be a rate signal to price.
         windows["primary"].pop("window_minutes")
+        windows["primary"].pop("will_last_to_reset")
         windows["secondary"]["projected_used_percent_at_reset"] = 99
         policy = {"lambda_unknown": 5}
         combined = selector._pool_price(self.roster, runtime, "claude", policy, fleetctl)
