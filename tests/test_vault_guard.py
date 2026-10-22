@@ -254,6 +254,12 @@ class EveryWrapperRefuses(Planted):
             with self.subTest(wrapper=wrapper):
                 result = self.run_script(SCRIPTS / wrapper, "--dry-run", "--prompt",
                                          f"Read {self.vault}/Projects/note.md and report here.", "--dir", str(self.work))
+                if wrapper == "claude-agent.sh" and not HAVE_SEATBELT:
+                    # Claude writes through the jail. Without Seatbelt (Linux) and with the notes on
+                    # disk, nothing can block its writes there, so the guard fails closed.
+                    self.assertEqual(result.returncode, 5, result.stderr[-600:])
+                    self.assertIn("sandbox-exec is missing", result.stderr)
+                    continue
                 self.assertEqual(result.returncode, 0, result.stderr[-600:])
                 self.assertIn("dry run, nothing started", result.stderr)
 
