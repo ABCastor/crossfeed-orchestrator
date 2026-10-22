@@ -7,7 +7,8 @@ import sys
 
 HOME = re.compile('/' + r'(?:Users|home)/[A-Za-z0-9_][A-Za-z0-9_.-]*(?=/|\b)')
 EMAIL = re.compile(r'[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})')
-# Reserved example domains are intentionally used by credential fixtures.
+# Reserved example domains are intentionally used by credential fixtures. GitHub's
+# noreply addresses are public commit identities, issued so a real email stays private.
 EXAMPLES = {'example.com', 'example.org', 'example.net'}
 
 
@@ -34,7 +35,7 @@ def main():
                 failures.append(f'{name}:{number}: absolute personal home path')
             for match in EMAIL.finditer(line):
                 domain = match.group(1).lower()
-                if domain not in EXAMPLES and not domain.endswith(('.test', '.invalid', '.example')):
+                if domain not in EXAMPLES and not domain.endswith(('.test', '.invalid', '.example', 'users.noreply.github.com')):
                     failures.append(f'{name}:{number}: non-placeholder email address')
     if failures:
         print('\n'.join(failures))  # Locations only, never the matching values.

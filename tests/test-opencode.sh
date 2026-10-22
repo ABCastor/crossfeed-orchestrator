@@ -2,6 +2,8 @@
 # Deterministic tests for scripts/opencode-agent.sh. The real opencode binary is never used.
 set -u
 set -o pipefail
+# Isolation is by HOME; a machine-wide XDG_* setting would outrank it (see run-all.sh).
+unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Works whether this file sits beside scripts/ (dev tree) or in tests/ (installed skill).
@@ -368,6 +370,7 @@ contains() {
 invoke() {
   local stdout_file="$1" stderr_file="$2"
   shift 2
+  LAST_STDERR="$stderr_file"
   HOME="$TEST_HOME" TMPDIR="$TEST_TMP" FLEET_STATE_DIR="$FLEET_STATE" \
     AGENT_SYNC_VERIFY="$FAKE_BIN/verify-end" PATH="$BASE_PATH" \
     FAKE_ROSTER_TIMEOUT="${FAKE_ROSTER_TIMEOUT:-999999}" \
@@ -728,13 +731,15 @@ run_test() {
   local name="$1" function_name="$2"
   selected "$name" || return 0
   RUN_COUNT=$((RUN_COUNT + 1))
-  DETAIL=""
+  DETAIL=""; LAST_STDERR=""
   if "$function_name"; then
     PASS_COUNT=$((PASS_COUNT + 1))
     printf 'PASS %s\n' "$name"
   else
     FAIL_COUNT=$((FAIL_COUNT + 1))
     printf 'FAIL %s: %s\n' "$name" "${DETAIL:-test returned non-zero}"
+    # The wrapper's own words are the diagnosis; a bare exit code is not.
+    [ -z "${LAST_STDERR:-}" ] || [ ! -s "$LAST_STDERR" ] || tail -n 3 "$LAST_STDERR" | sed 's/^/    stderr: /'
   fi
 }
 
