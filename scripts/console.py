@@ -1168,7 +1168,7 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
             "console_order": overview.get('console_order') or display_order(overview), "stamp": _stamp(overview)}
 
 
-SOURCE_WORDS = {"codexbar": "CodexBar"}
+SOURCE_WORDS = {"codexbar": "CodexBar", "opencode-go-api": "OpenCode"}
 
 
 def _stamp(overview: dict[str, Any]) -> str:

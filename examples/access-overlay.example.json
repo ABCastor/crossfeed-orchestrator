@@ -134,8 +134,7 @@
         "UNKNOWN": "no direct console snapshot or snapshot older than one hour"
       },
       "quota_refresh": {
-        "oracle": "codexbar",
-        "provider": "opencodego",
+        "oracle": "opencode-go",
         "ttl_s": 600
       },
       "balance_fallback": "disabled",

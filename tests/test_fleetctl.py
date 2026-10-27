@@ -1210,8 +1210,8 @@ class QuotaSourceRegistryTests(unittest.TestCase):
                 "quota_refresh", pools[pool], f"{pool} has no declared quota source"
             )
         sources = fleetctl.quota_sources(overlay)
-        self.assertEqual(sources["opencode-go"]["oracle"], "codexbar")
-        self.assertEqual(sources["opencode-go"]["provider"], "opencodego")
+        # OpenCode Go is read from its own usage endpoint, not through CodexBar.
+        self.assertEqual(sources["opencode-go"]["oracle"], "opencode-go")
         self.assertEqual(sources["github-copilot-student"]["provider"], "copilot")
         self.assertNotIn("gemini-metered", sources)
 

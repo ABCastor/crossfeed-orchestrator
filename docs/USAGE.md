@@ -141,6 +141,7 @@ Each pool's numbers come from the source you name in the `oracle` field of its `
 | `command` | any program that prints the JSON below; the portable choice |
 | `file` | a JSON file another process keeps fresh |
 | `http` | a self-hosted endpoint that reports its own usage |
+| `opencode-go` | OpenCode Go's own usage endpoint, read with your Go API key ([details](QUOTA-REFRESH.md)) |
 | `codexbar` | the optional third-party CodexBar reader (macOS app, Linux CLI) |
 
 ```json

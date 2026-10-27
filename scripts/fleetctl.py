@@ -40,6 +40,13 @@ except ImportError:
     _pro_spec.loader.exec_module(chatgpt_pro)
 
 try:
+    import opencode_go_usage
+except ImportError:
+    _go_spec = importlib.util.spec_from_file_location("fleet_opencode_go_usage", Path(__file__).with_name("opencode_go_usage.py"))
+    opencode_go_usage = importlib.util.module_from_spec(_go_spec)
+    _go_spec.loader.exec_module(opencode_go_usage)
+
+try:
     from run_identity import canonical_model
 except ImportError:
     _identity_spec = importlib.util.spec_from_file_location("fleet_run_identity", Path(__file__).with_name("run_identity.py"))
@@ -1023,11 +1030,22 @@ def oracle_http(config: dict[str, Any], timeout: int = REFRESH_TIMEOUT_S) -> dic
     return _validate_snapshot(data, source="http")
 
 
+def oracle_opencode_go(config: dict[str, Any], timeout: int = REFRESH_TIMEOUT_S) -> dict[str, Any]:
+    """OpenCode Go's own usage endpoint (5-hour, weekly, monthly), read with the Go API key.
+
+    `key` is an env name, absolute file path or op:// reference; without one the
+    reader uses $OPENCODE_API_KEY, then OpenCode's own auth.json. Rejected keys,
+    missing subscriptions and unreadable answers come back unavailable, never 0%.
+    """
+    return opencode_go_usage.observe(config, timeout=timeout)
+
+
 ORACLE_REGISTRY: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "codexbar": oracle_codexbar,
     "command": oracle_command,
     "file": oracle_file,
     "http": oracle_http,
+    "opencode-go": oracle_opencode_go,
 }
 
 
@@ -1044,6 +1062,8 @@ def _source_identity(config: dict[str, Any]) -> Any:
         return ("file", os.path.expanduser(p) if isinstance(p, str) else p)
     if oracle == "http":
         return ("http", config.get("url"))
+    if oracle == "opencode-go":
+        return ("opencode-go", config.get("url"), config.get("key"))
     return (oracle, id(config))
 
 
