@@ -206,8 +206,15 @@ class RefreshAndBriefTests(unittest.TestCase):
                 self.assertTrue(outcome["opencode-go"].startswith("unavailable:"), outcome)
                 runtime = json.loads((Path(d) / "runtime.json").read_text())
                 self.assertNotIn("opencode-go", runtime.get("quota_snapshots", {}))
-                state, _ = fleetctl.current_pool_state(runtime, "opencode-go", roster=r)
-                self.assertEqual(state, "UNKNOWN")
+                state, evidence = fleetctl.current_pool_state(runtime, "opencode-go", roster=r)
+                self.assertEqual(state, "GAUGE_ERROR")
+                self.assertEqual(evidence["gauge_error"],
+                                 runtime["quota_refresh_errors"]["opencode-go"]["reason"])
+                text = fleetctl.render_brief(
+                    fleetctl.fleet_overview(r, runtime, Path(d)), roster=r, runtime=runtime)
+                row = next(line for line in text.splitlines() if line.startswith("opencode-go |"))
+                self.assertIn("gauge error:", row)
+                self.assertNotIn("0%", row)
 
     def test_console_names_the_source(self):
         import importlib.util

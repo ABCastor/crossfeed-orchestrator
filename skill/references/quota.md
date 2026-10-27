@@ -16,6 +16,8 @@ A pool that has just reset is at its cheapest: front-load its expensive work rat
 
 A declared `quota_refresh` source can use `codexbar`, `command`, `file` or `http`, with TTL and optional window filtering; null means no percentage source by design. Lazy refresh occurs at consumption points. Fetch outside runtime locks, replace only with strictly newer observations, preserve honest age after failures, and never auto-clear a quota-error circuit. See engine `docs/QUOTA-REFRESH.md` before modifying this mechanism.
 
+A configured oracle failure is separate from UNKNOWN: reuse the last successful active reading for up to six hours, marked stale; otherwise report GAUGE_ERROR with its reason. Selection applies an uncertainty price (at least `lambda0`, default 1.00), retaining the pool as a fallback. `doctor` reports the oracle failure even when a stale reading is usable.
+
 One provider can fund several pools. Antigravity Gemini and third-party models have separate metering windows; never collapse them into one shortage. A healthy measured gauge cannot prove an unreported provider limit is open: before a multi-task agy campaign, run one bounded canary and confirm a real response.
 
 Go `step_finish.cost`, token totals and `opencode stats` are local equivalent-cost estimates, not authoritative Go debit. Do not reconstruct used percentages from them. Paid `gemini-metered` instead uses recorded estimated spend under its daily USD cap; its cap is a safety rail, not authoritative billing. Keep OpenCode Use balance off.

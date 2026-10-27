@@ -65,7 +65,7 @@ def _band(fleet: Any, roster: dict, runtime: dict, pool: str, state: str, eviden
     # to a different overlay when a caller supplies a synthetic/custom roster.
     policy = fleet.resolve_quota_policy(roster)[0]
     gated = fleet.gating_state(state, evidence, policy)
-    band = "quality_first" if policy == "off" or gated in {"UNKNOWN", "ABUNDANT", "HEALTHY"} else (
+    band = "quality_first" if policy == "off" or gated in {"UNKNOWN", "GAUGE_ERROR", "ABUNDANT", "HEALTHY"} else (
         "conserve" if gated == "CONSERVE" else "critical")
     return fleet.level_band(fleet.pool_level(runtime, pool), band)
 
@@ -264,14 +264,22 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
                 "projection_unknown": False, "projection_basis": "none-known"}
 
     state, _ = fleet.current_pool_state(runtime, pool, roster=roster, model_key=model_key)
-    _, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
-                                           roster=roster, model_key=model_key)
+    measured_state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
+                                                        roster=roster, model_key=model_key)
     priced = []
     target = policy.get("target", DEFAULTS["target"])
     lambda0 = policy.get("lambda0", DEFAULTS["lambda0"])
     unknown_price = float(policy.get("lambda_unknown", .5 * lambda0))
     if not math.isfinite(unknown_price) or unknown_price < 0:
         raise fleet.FleetError("lambda_unknown must be finite and nonnegative")
+    if measured_state == "GAUGE_ERROR":
+        # A broken configured gauge gets at least the full reference price
+        # (lambda0), rather than the half-price unmeasured fallback or surplus's
+        # zero: prefer similarly capable measured pools, but keep this eligible.
+        return {"lambda": max(unknown_price, lambda0), "state": state,
+                "binding_window": None, "window": {}, "window_minutes": None,
+                "projected_used_percent_at_reset": None, "projection_unknown": True,
+                "projection_basis": "gauge_error", "gauge_error": evidence["gauge_error"]}
     for name, window in evidence.get("windows", {}).items():
         if name not in evidence.get("applicable_windows", evidence.get("windows", {})):
             continue
