@@ -63,6 +63,8 @@ or `{"available": false, "reason": "not logged in"}` when there is nothing to re
 - **systemd:** copy `crossfeed-market-refresh.service` and `.timer` to `~/.config/systemd/user/`, point `ExecStart` at your clone, then `systemctl --user daemon-reload && systemctl --user enable --now crossfeed-market-refresh.timer`.
 - **cron:** add the line in `market-refresh.cron` with `crontab -e`.
 
+The refresh also reads each installed tool's model list: `opencode models --standalone`, `agy models` and the Codex CLI's own cache (`~/.codex/models_cache.json`, or `$CODEX_HOME`; `CODEX_MODELS_CACHE` overrides the path). A model that Codex lists (`visibility: list`) and the roster does not yet route enters the candidate-only `codex-catalog` pool, unverified and with no roles; admit it as a Codex model card to route it. A cache older than 14 days counts as unknown and retires nothing. Give the scheduler a `PATH` that reaches these CLIs: a check that stays unknown on two runs in a row (for example "opencode not found on PATH") becomes the report's first line and the job exits non-zero. The consecutive count lives in `market/catalog-unknown-streak.json` under the state directory.
+
 ## Running the tests
 
 ```bash

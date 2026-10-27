@@ -301,6 +301,11 @@ def main() -> int:
         }
     )
     catalogs = daily.discover(overlay)
+    # A check that stays unknown night after night hides every new model behind it;
+    # the second consecutive miss leads the report and fails the job.
+    unknown = daily.unknown_checks(catalogs)
+    streak = daily.record_unknown_streak(STATE_DIR / "catalog-unknown-streak.json", unknown)
+    loud = daily.loud_line(unknown, streak)
     discovered = {row["model_key"] for c in catalogs for row in c.get("models") or []}
     tokens = {re.sub(r"-free$", "", key): family_tokens(key) for key in set(lane_keys) | discovered}
 
@@ -385,6 +390,13 @@ def main() -> int:
             "LISTED by the provider CLI but NOT in the overlay (unverified admission candidates): "
             + ", ".join(entitled_not_admitted)
         )
+    codex_new = [f"{row.get('display_name') or row['selector']} ({row['selector']})"
+                 for c in catalogs if c.get("harness") == "codex" for row in c.get("models") or []]
+    if codex_new:
+        report_lines.append(
+            "LISTED by the Codex CLI but NOT routed (unverified candidates, pool codex-catalog): "
+            + ", ".join(codex_new)
+        )
     if catalog_only:
         report_lines.append(
             f"Catalog-only, entitlement unknown or absent ({len(catalog_only)} models): "
@@ -392,7 +404,7 @@ def main() -> int:
         )
     if price_changes:
         report_lines.append("Price changes: " + json.dumps(price_changes))
-    if not (appeared or disappeared or entitled_not_admitted or price_changes):
+    if not (appeared or disappeared or entitled_not_admitted or codex_new or price_changes):
         report_lines.append("No admission-relevant changes against the previous fetch.")
     aa = catalog["artificial_analysis"]
     lane_rows = sorted(
@@ -433,9 +445,11 @@ def main() -> int:
 
     catalog_path.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     write_evidence(STATE_DIR.parent, overlay, catalog)
+    if loud:
+        report_lines.insert(0, loud)
     (STATE_DIR / "market-report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
     print("\n".join(report_lines))
-    return 1 if refresh_failed else 0
+    return 1 if refresh_failed or loud else 0
 
 
 if __name__ == "__main__":

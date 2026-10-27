@@ -39,40 +39,134 @@ def score_key(key):
     return re.sub(r'[^a-z0-9]', '', re.sub(r'-free$', '', key).lower())
 
 
-def cli_catalog(command, *, prefix=None):
+def cli_listing(command):
+    """Run a catalog command: (cleaned output lines, None) or (None, plain-words reason)."""
     env = {k: v for k, v in os.environ.items() if k not in {
         'COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'OPENCODE_CONFIG',
         'OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG_DIR'}}
     env.update(OPENCODE_DISABLE_EXTERNAL_SKILLS='1', OPENCODE_DISABLE_CLAUDE_CODE_PROMPT='1')
     try:
         run = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except FileNotFoundError:
+        # A scheduler without the owner's PATH looks exactly like this; name it.
+        return None, f'{command[0]} not found on PATH'
+    except subprocess.TimeoutExpired:
+        return None, f'{command[0]} timed out after 60 s'
+    except OSError:
+        return None, f'{command[0]} could not be started'
     if run.returncode:
-        return None
+        return None, f"'{' '.join(command)}' exited with code {run.returncode}"
+    lines = [re.sub(r'\x1b\[[0-9;]*m', '', line).strip() for line in run.stdout.splitlines()]
+    return [line for line in lines if line], None
+
+
+def catalog_rows(command, *, prefix=None, listing=None):
+    """(rows, None) or (None, reason). `listing` reuses an earlier cli_listing result."""
+    lines, why = listing if listing is not None else cli_listing(command)
+    if lines is None:
+        return None, why
     rows = []
     # Fail the whole snapshot on diagnostics/truncation rather than retiring routes
     # against a partially parsed table. AGY's human table is handled separately.
-    for line in run.stdout.splitlines():
-        line = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
-        if not line:
-            continue
+    for line in lines:
         if prefix:
             # OpenCode v2 lists every connected provider in one call (it rejects a
             # provider argument); keep this provider's rows, fail on anything else.
             if not re.fullmatch(r'[\w.-]+/[\w.:/-]+', line):
-                return None
+                return None, f"'{' '.join(command)}' printed a line that is not a model id"
             if line.startswith(prefix + '/'):
                 rows.append({'selector': line, 'model_key': line.split('/', 1)[1]})
         else:
             # AGY lists one selector per row, optionally with a display name.
             match = re.match(r'^([a-z][\w.]*-[\w.-]+)(?:\s+.*)?$', line)
             if not match:
-                return None
+                return None, f"'{' '.join(command)}' printed a line that is not a model id"
             rows.append({'selector': match[1], 'model_key': model_key(match[1])})
     # A provider missing from a successful listing is unknown, never empty:
     # an expired login must not retire every route of that provider.
-    return rows or None
+    if not rows:
+        return None, f"'{' '.join(command)}' listed no {prefix + ' ' if prefix else ''}models"
+    return rows, None
+
+
+def cli_catalog(command, *, prefix=None):
+    return catalog_rows(command, prefix=prefix)[0]
+
+
+# Codex is a direct pool: its models are model cards run by codex-agent.sh, and
+# fleetctl.pool_is_direct() turns every card route off once any lane sits in pool
+# `codex`. Codex catalog candidates therefore live in their own candidate-only pool.
+CODEX_CATALOG_POOL = 'codex-catalog'
+CODEX_STALE_DAYS = 14
+
+
+def codex_cache_path():
+    explicit = os.environ.get('CODEX_MODELS_CACHE')
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path(os.environ.get('CODEX_HOME') or '~/.codex').expanduser() / 'models_cache.json'
+
+
+def _cache_time(value):
+    # Codex writes RFC 3339 with up to nine fraction digits; Python 3.9 reads six.
+    text = re.sub(r'(\.\d{6})\d+', r'\1', str(value or '')).replace('Z', '+00:00')
+    stamp = dt.datetime.fromisoformat(text)
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=dt.timezone.utc)
+
+
+def codex_known_models(roster):
+    """Models the roster already routes through the Codex CLI (cards, evidence, lanes)."""
+    cards = roster.get('model_cards') if isinstance(roster.get('model_cards'), dict) else {}
+    known = {key for key, card in cards.items() if isinstance(card, dict) and card.get('pool') == 'codex'}
+    evidence = roster.get('model_evidence') if isinstance(roster.get('model_evidence'), dict) else {}
+    known |= {key for key, item in evidence.items() if isinstance(item, dict)
+              and (item.get('quota_pool') or ('codex' if re.match(r'gpt-\d', key) else None)) == 'codex'}
+    known |= {l.get('model_key') for l in roster.get('lanes', [])
+              if l.get('harness') == 'codex' and l.get('quota_pool') != CODEX_CATALOG_POOL}
+    return known
+
+
+def codex_catalog(roster, *, now=None):
+    """Visible models from the Codex CLI's own cache, minus the ones already routed.
+
+    (rows, None) or (None, reason). Missing, unreadable or stale caches are unknown,
+    never empty: a Codex that has not run for a while must not retire anything.
+    """
+    path = codex_cache_path()
+    shown = str(path).replace(str(Path.home()), '~', 1)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return None, f'Codex model cache not found at {shown}'
+    except (OSError, ValueError, UnicodeError):
+        return None, f'Codex model cache at {shown} could not be read'
+    if not isinstance(data, dict) or not isinstance(data.get('models'), list):
+        return None, f'Codex model cache at {shown} has no model list'
+    try:
+        fetched = _cache_time(data.get('fetched_at'))
+    except (TypeError, ValueError):
+        return None, f'Codex model cache at {shown} has no valid fetch time'
+    age = ((now or dt.datetime.now(dt.timezone.utc)) - fetched).total_seconds() / 86400
+    if age > CODEX_STALE_DAYS:
+        return None, (f'Codex model cache is {age:.0f} days old (limit {CODEX_STALE_DAYS}); '
+                      'run Codex once to refresh it')
+    visible = []
+    for model in data['models']:
+        if not isinstance(model, dict):
+            return None, f'Codex model cache at {shown} has an invalid model entry'
+        # Codex's ModelVisibility is list | hide | none; its own picker shows `list` only.
+        if model.get('visibility') != 'list':
+            continue
+        slug = model.get('slug')
+        if not isinstance(slug, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,79}', slug):
+            return None, f'Codex model cache at {shown} has an invalid model entry'
+        name = model.get('display_name')
+        visible.append({'selector': slug, 'model_key': slug,
+                        'display_name': name if isinstance(name, str) and name else slug})
+    if not visible:
+        return None, f'Codex model cache at {shown} lists no visible models'
+    known = codex_known_models(roster)
+    return [row for row in visible if row['model_key'] not in known], None
 
 
 OPENCODE_LISTING = ['opencode', 'models', '--standalone']
@@ -82,10 +176,17 @@ def discover(roster):
     """Probe installed serving catalogs. Never infer native Copilot Auto's weights."""
     catalogs = []
     lanes = roster.get('lanes', [])
+    listings = {}
+
+    def listing(command):
+        # One OpenCode call lists every provider; run it once per refresh.
+        if tuple(command) not in listings:
+            listings[tuple(command)] = cli_listing(command)
+        return listings[tuple(command)]
     for provider in sorted({l['provider'] for l in lanes if l.get('harness') == 'opencode'} | (
             {'opencode'} if any(l.get('provider') == 'opencode-go' for l in lanes) else set())):
         # v2 supports --standalone, avoiding the owner's background service.
-        rows = cli_catalog(OPENCODE_LISTING, prefix=provider)
+        rows, why = catalog_rows(OPENCODE_LISTING, prefix=provider, listing=listing(OPENCODE_LISTING))
         # Zen's paid catalog is not a Go entitlement. Only free promotions enter
         # a separate zero-cost pool; disappearing promotions retire that pool only.
         if provider == 'opencode':
@@ -103,9 +204,10 @@ def discover(roster):
             pool = pools.pop()
         catalogs.append({'harness': 'opencode', 'provider': provider, 'pool': pool,
                          'models': rows, 'source': f'opencode models --standalone ({provider})', 'free_only': provider == 'opencode',
+                         'reason': why,
                          'known_promos': [l['selector'] for l in lanes if l.get('quota_pool') == 'opencode-free']})
     if any(l.get('harness') == 'agy' for l in lanes):
-        rows = cli_catalog(['agy', 'models'])
+        rows, why = catalog_rows(['agy', 'models'])
         # AGY models span different funding pools: only reconcile known selectors
         # or a new effort variant of a known model. Unknown pool stays a candidate
         # in the report rather than borrowing somebody else's allowance.
@@ -117,18 +219,31 @@ def discover(roster):
             keys = {l['model_key'] for l in lanes if l.get('harness') == 'agy' and l['quota_pool'] == pool}
             catalogs.append({'harness': 'agy', 'provider': 'antigravity', 'pool': pool,
                              'models': [r for r in rows if r['model_key'] in keys] if rows is not None else None,
-                             'source': 'agy models', 'unmapped': unknown})
+                             'source': 'agy models', 'reason': why, 'unmapped': unknown})
         catalogs.append({'harness': 'agy', 'provider': 'antigravity', 'pool': 'antigravity-catalog',
-                         'models': unknown if rows is not None else None,
+                         'models': unknown if rows is not None else None, 'reason': why,
                          'source': 'agy models (funding pool requires admission)'})
     if any(l.get('harness') == 'copilot' for l in lanes):
         # Native CLI currently exposes Auto only in this adapter. OpenCode's
         # github-copilot catalog is a different route and cannot grant admission.
-        catalogs.append({'harness': 'copilot', 'provider': 'github-copilot',
-                         'pool': 'github-copilot-student',
-                         'models': cli_catalog(OPENCODE_LISTING, prefix='github-copilot'),
-                         'dynamic': True,
-                         'source': 'opencode models --standalone (github-copilot); native Auto identity/entitlement unconfirmed'})
+        lines, _ = listing(OPENCODE_LISTING)
+        # It is visibility evidence only and never reconciled, so an OpenCode with
+        # no github-copilot provider connected has nothing to observe (like Zen).
+        # A failed listing is still unknown.
+        if lines is None or any(line.startswith('github-copilot/') for line in lines):
+            rows, why = catalog_rows(OPENCODE_LISTING, prefix='github-copilot', listing=listing(OPENCODE_LISTING))
+            catalogs.append({'harness': 'copilot', 'provider': 'github-copilot',
+                             'pool': 'github-copilot-student', 'models': rows, 'reason': why,
+                             'dynamic': True,
+                             'source': 'opencode models --standalone (github-copilot); native Auto identity/entitlement unconfirmed'})
+    cards = roster.get('model_cards') if isinstance(roster.get('model_cards'), dict) else {}
+    if (any(l.get('harness') == 'codex' for l in lanes) or 'codex' in (roster.get('quota_pools') or {})
+            or any(isinstance(c, dict) and c.get('pool') == 'codex' for c in cards.values())):
+        rows, why = codex_catalog(roster)
+        # Subscription routes: an API price for the same model is not this route's price.
+        catalogs.append({'harness': 'codex', 'provider': 'openai', 'pool': CODEX_CATALOG_POOL,
+                         'models': rows, 'reason': why, 'subscription': True,
+                         'source': 'Codex model cache'})
     # Reuse the gateway's own validated discovery, including provider instances.
     try:
         from . import chatgpt_transport as chat
@@ -148,6 +263,7 @@ def discover(roster):
             models = None
         catalogs.append({'harness': 'chatgpt-chat', 'provider': template['provider'],
                          'pool': template.get('quota_pool', 'chatgpt-work'), 'models': models,
+                         'reason': None if models is not None else 'the gateway did not answer /v1/models',
                          'source': 'gateway /v1/models; saved labels, underlying model unconfirmed',
                          'dynamic': True})
     return catalogs
@@ -156,6 +272,8 @@ def discover(roster):
 def enrich(catalogs, models_dev):
     """Join exact provider prices; never use another provider's price as a route price."""
     for catalog in catalogs:
+        if catalog.get('subscription'):
+            continue
         provider = models_dev.get(catalog['provider']) or {}
         provider = provider if isinstance(provider, dict) else {}
         provider_models = provider.get('models') or {}
@@ -191,7 +309,7 @@ def reconcile(source, catalogs, market, *, today=None):
     # BR-REFRESH-001, BR-BENCH-001
     roster = copy.deepcopy(source)
     today = today or dt.datetime.now().astimezone().date().isoformat()
-    changes = {'added': [], 'retired': [], 'prices': [], 'roles': [], 'unknown': [], 'held': []}
+    changes = {'added': [], 'retired': [], 'prices': [], 'roles': [], 'unknown': [], 'held': [], 'unfunded': []}
     all_lanes = roster['lanes']
     fresh = set()
     successful = set()
@@ -199,7 +317,9 @@ def reconcile(source, catalogs, market, *, today=None):
         rows = catalog.get('models')
         label = catalog['source']
         if rows is None:
-            changes['unknown'].append(label)
+            entry = label + (': ' + catalog['reason'] if catalog.get('reason') else '')
+            if entry not in changes['unknown']:
+                changes['unknown'].append(entry)
             continue
         # Dynamic gateway lanes already have their own live admission/retirement
         # path. Persisting them here would collide with that expansion.
@@ -230,6 +350,9 @@ def reconcile(source, catalogs, market, *, today=None):
                     roster.setdefault('quota_pools', {}).setdefault('antigravity-catalog', {'label': 'AGY catalog candidates; funding unassigned'})
                 if catalog['pool'] == 'opencode-free':
                     roster.setdefault('quota_pools', {}).setdefault('opencode-free', {'label': 'OpenCode free promotions'})
+                if catalog['pool'] == CODEX_CATALOG_POOL:
+                    roster.setdefault('quota_pools', {}).setdefault(CODEX_CATALOG_POOL, {
+                        'label': 'Codex catalog candidates; admit as a Codex model card to route'})
                 lane = {'lane_id': lane_id, 'harness': catalog['harness'], 'provider': catalog['provider'],
                         'quota_pool': catalog['pool'], 'selector': row['selector'], 'model_key': row['model_key'],
                         'access_status': 'unverified', 'admission_status': 'candidate', 'roles': [],
@@ -255,8 +378,11 @@ def reconcile(source, catalogs, market, *, today=None):
             lane['catalog_checked_on'] = today
             if isinstance(price, dict) and all(number(price.get(k)) is not None for k in ('input', 'output')):
                 fresh.add(lane['lane_id'])
+        # A listed model with no funding pool is a standing admission question,
+        # not a failed check; report it once, separately.
         for row in catalog.get('unmapped', []):
-            changes['unknown'].append('unmapped funding pool: ' + row['selector'])
+            if row['selector'] not in changes['unfunded']:
+                changes['unfunded'].append(row['selector'])
     # Retirement is a safety action, outside the value-churn allowance. Keep
     # references valid; never silently replace a vanished council member.
     retired = set(changes['retired'])
@@ -380,4 +506,41 @@ def summary(changes):
             ('added', 'retired', 'prices', 'roles', 'unknown')) + '.')
     if changes.get('held'):
         text += ' Held for review: ' + '; '.join(changes['held']) + '.'
+    if changes.get('unfunded'):
+        text += ' AGY models awaiting a funding pool: ' + ', '.join(changes['unfunded']) + '.'
     return text
+
+
+def unknown_checks(catalogs):
+    """{check label: reason} for every catalog check that returned no usable listing."""
+    found = {}
+    for catalog in catalogs:
+        if catalog.get('models') is None:
+            found.setdefault(catalog['source'], catalog.get('reason') or 'listing failed')
+    return found
+
+
+def record_unknown_streak(path, unknown):
+    """Count consecutive runs each check stayed unknown, in a one-line state file."""
+    path = Path(path)
+    try:
+        previous = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        previous = {}
+    previous = previous if isinstance(previous, dict) else {}
+    counts = {}
+    for label in sorted(unknown):
+        before = previous.get(label)
+        counts[label] = (before if type(before) is int and before > 0 else 0) + 1
+    patcher._atomic_write(path, (json.dumps(counts, sort_keys=True) + '\n').encode())
+    return counts
+
+
+def loud_line(unknown, counts, *, threshold=2):
+    """The report's first line when a check stayed unknown on consecutive runs, else None."""
+    failing = [f'{label} ({unknown[label]}), {counts[label]} runs in a row'
+               for label in sorted(unknown) if counts.get(label, 0) >= threshold]
+    if not failing:
+        return None
+    return ('CATALOG CHECK FAILING: ' + '; '.join(failing)
+            + '. New models from these catalogs are not being discovered until this is fixed.')

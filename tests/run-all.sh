@@ -20,6 +20,10 @@ set -uo pipefail
 # Linux runners set XDG_CONFIG_HOME) outranks HOME in the wrappers and would point every suite back
 # at the real machine, so they run with the XDG defaults; a suite that needs one sets it itself.
 unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
+# Likewise the machine's own launch gate (~/.claude/scripts/resource-gate): suites that keep the real
+# HOME would be refused on a full disk although their stub workers write almost nothing. The gate's
+# own suite, test_resource_gate.py, turns it back on explicitly.
+export RESOURCE_GATE=off
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"

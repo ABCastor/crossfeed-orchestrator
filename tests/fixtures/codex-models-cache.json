@@ -1,0 +1,16 @@
+{
+  "fetched_at": "2026-10-27T08:25:10.858208123Z",
+  "etag": "fixture-etag",
+  "client_version": "0.0.0-fixture",
+  "identity": {"note": "fixture only; the real file carries account identity, never read or printed"},
+  "models": [
+    {"slug": "gpt-known", "display_name": "GPT Known", "description": "already a Codex card", "visibility": "list", "priority": 1,
+     "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}], "context_window": 400000, "input_modalities": ["text"]},
+    {"slug": "gpt-new", "display_name": "GPT New", "description": "new on the Codex picker", "visibility": "list", "priority": 2,
+     "supported_reasoning_levels": [{"effort": "medium"}], "context_window": 400000, "input_modalities": ["text", "image"]},
+    {"slug": "gpt-hidden", "display_name": "GPT Hidden", "description": "hidden from the picker", "visibility": "hide", "priority": 3,
+     "supported_reasoning_levels": [{"effort": "low"}], "context_window": 400000, "input_modalities": ["text"]},
+    {"slug": "gpt-unlisted", "display_name": "GPT Unlisted", "description": "visibility none", "visibility": "none", "priority": 4,
+     "supported_reasoning_levels": [], "context_window": 400000, "input_modalities": ["text"]}
+  ]
+}
