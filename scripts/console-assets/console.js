@@ -908,7 +908,7 @@ function boot(document, window) {
     }
     const button = form.querySelector('button');
     if (button.getAttribute('aria-disabled') === 'true') return;
-    // The icon turns while CodexBar is asked again; the line beside it says so, then gives the new time.
+    // The icon turns while the providers are asked again; the line beside it says so, then gives the new time.
     const stamp = document.querySelector('.stamp');
     const before = stamp ? stamp.textContent : '';
     button.setAttribute('aria-disabled', 'true'); form.setAttribute('aria-busy', 'true'); form.classList.add('busy');

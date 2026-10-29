@@ -22,7 +22,7 @@ The coding lanes run through the vendor's official binary, signed in the way the
 
 An optional read-only ChatGPT route uses Crossfeed Chat, a separate local gateway at `http://127.0.0.1:4319/v1`. It relays requests through saved browser workers and requires the owner's dated acceptance of subscription-relay account risk. The server supplies the saved model rows and numeric thinking levels; Crossfeed Chat wakes sleeping workers through its paired Chrome extension, and the orchestrator records their selected labels. Set `chatgpt_gateway.pi_coding` to `true` to add Pi coding routes with local tools for current High and Extra High workers. These share the ChatGPT account and model switches; Pi's `provider-default` evidence stays separate from plain Chat requests. See [ChatGPT setup](CHATGPT.md).
 
-One optional exception: [CodexBar](https://github.com/steipete/CodexBar), a third-party app that reads how much of each plan you have used. Crossfeed can read its output. CodexBar gets those numbers by reusing your sign-ins or browser cookies, so use it at your own risk; the other quota sources below need nothing but files and commands you control.
+How much of each plan you have used is read from each provider through its own tool or the sign-in that tool already keeps: Codex's app server, Claude Code's sign-in, the Antigravity CLI's usage report, the GitHub CLI's sign-in and your OpenCode Go key. No third-party app is needed. [CodexBar](https://github.com/steipete/CodexBar), a third-party reader, remains an optional source for other setups.
 
 ## How routing works
 
@@ -142,6 +142,10 @@ Each pool's numbers come from the source you name in the `oracle` field of its `
 | `file` | a JSON file another process keeps fresh |
 | `http` | a self-hosted endpoint that reports its own usage |
 | `opencode-go` | OpenCode Go's own usage endpoint, read with your Go API key ([details](QUOTA-REFRESH.md)) |
+| `codex` | Codex's own app server (`codex app-server`), with Codex's sign-in |
+| `claude` | Anthropic's usage endpoint, with the sign-in Claude Code keeps (read only, never renewed here) |
+| `antigravity` | the Antigravity CLI's usage report (`agy -p /usage`): Gemini, Claude/GPT and Argon groups |
+| `copilot` | GitHub's Copilot entitlement, with the GitHub CLI's sign-in or a declared key |
 | `codexbar` | the optional third-party CodexBar reader (macOS app, Linux CLI) |
 
 ```json
@@ -149,6 +153,10 @@ Each pool's numbers come from the source you name in the `oracle` field of its `
 ```
 
 or `{"available": false, "reason": "not logged in"}`. `window_minutes` lets the router estimate a burn rate; `will_last_to_reset` and `eta_seconds` take precedence when your source computes them. `scripts/oracle-codex-local.py` is a working `command` source for Codex that needs no extra software: it reads the rate-limit records Codex already writes into its own session files.
+
+### Limits in the menu bar
+
+`fleetctl.py glance` prints one line (the lead pool, every pool at least 80% used, then the full ones) and every pool's limits with their resets, from the same snapshot routing reads. `scripts/menubar-plugin/crossfeed-limits.5m.sh` is a [SwiftBar](https://swiftbar.app) or xbar plugin around it: link it into the plugin folder and it refreshes every five minutes, reading a provider again only when its TTL has passed. `CROSSFEED_GLANCE_LEAD` names the pool always shown (default `claude`); a pool's optional `short_label` shortens its name in the line.
 
 ## Works with
 

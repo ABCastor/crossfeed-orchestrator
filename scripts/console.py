@@ -1168,7 +1168,8 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
             "console_order": overview.get('console_order') or display_order(overview), "stamp": _stamp(overview)}
 
 
-SOURCE_WORDS = {"codexbar": "CodexBar", "opencode-go-api": "OpenCode"}
+SOURCE_WORDS = {"codexbar": "CodexBar", "opencode-go-api": "OpenCode", "codex-app-server": "Codex",
+                "claude-oauth-usage": "Claude", "antigravity-cli": "Antigravity", "copilot-api": "GitHub"}
 
 
 def _stamp(overview: dict[str, Any]) -> str:
@@ -1176,7 +1177,7 @@ def _stamp(overview: dict[str, Any]) -> str:
     if readings["measured_pools"]:
         sources = ", ".join(SOURCE_WORDS.get(source, source) for source in readings["sources"])
         return f'Limits read {_ago(readings["newest_age_s"])} from {sources}'
-    return "No limits could be read (CodexBar is closed or signed out), so Crossfeed spends as if every plan had room"
+    return "No limits could be read (no provider answered: signed out or offline), so Crossfeed spends as if every plan had room"
 
 
 # ---- model names written in files Crossfeed does not own (fleetctl.sync_pins) ----------------------------

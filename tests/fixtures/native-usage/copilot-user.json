@@ -1,0 +1,10 @@
+{
+  "copilot_plan": "individual", "access_type_sku": "free_educational_quota", "token_based_billing": true,
+  "quota_reset_date": "2026-11-01", "quota_reset_date_utc": "2026-11-01T00:00:00.000Z",
+  "quota_snapshots": {
+    "chat": {"percent_remaining": 100.0, "quota_id": "chat", "unlimited": true, "entitlement": 0, "remaining": 0},
+    "completions": {"percent_remaining": 100.0, "quota_id": "completions", "unlimited": true},
+    "premium_interactions": {"percent_remaining": 98.8, "quota_id": "premium_interactions", "unlimited": false,
+                             "entitlement": 200, "remaining": 197, "credits_used": 2}
+  }
+}

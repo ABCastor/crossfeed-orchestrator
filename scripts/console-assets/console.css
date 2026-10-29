@@ -321,7 +321,7 @@ details.older{margin-top:.35rem}
 .lim.full .ln{color:var(--human-text)}
 .q.hot{color:var(--human-text);margin:0 0 .5rem}
 .q.renews{margin:.55rem 0 0;font-size:12.5px}
-/* The refresh is an icon beside the time it refreshes: it turns while CodexBar is asked again. */
+/* The refresh is an icon beside the time it refreshes: it turns while the providers are asked again. */
 .quota-reading{display:flex;align-items:center;gap:.15rem;flex-wrap:wrap;margin:.75rem 0 1.6rem}
 .quota-refresh{margin:0}
 .quota-refresh button{display:grid;place-items:center;width:44px;height:44px;margin:-.4rem 0;padding:0;border:0;border-radius:50%;background:none;color:var(--machine-text);cursor:pointer}

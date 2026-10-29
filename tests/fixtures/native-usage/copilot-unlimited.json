@@ -1,0 +1,2 @@
+{"copilot_plan": "business", "token_based_billing": true, "quota_reset_date_utc": "2026-11-01T00:00:00.000Z",
+ "quota_snapshots": {"chat": {"unlimited": true, "percent_remaining": 100.0}, "premium_interactions": {"unlimited": true, "percent_remaining": 100.0}}}
