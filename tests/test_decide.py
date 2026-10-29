@@ -59,5 +59,12 @@ class DecideTests(unittest.TestCase):
             self.assertIsNone(decide.decide('done', {'a': 'b'}))
 
 
+
+class DefaultLaneTest(unittest.TestCase):
+    def test_default_lane_has_a_fallback_in_another_pool(self):
+        # 28-29 Oct: the only default lane's pool was empty and 240/240 judge calls failed.
+        pools = {entry.split(':')[0] for entry in decide.DEFAULT_LANE.split(',')}
+        self.assertGreaterEqual(len(pools), 2)
+
 if __name__ == '__main__':
     unittest.main()
