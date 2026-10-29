@@ -136,7 +136,7 @@ def swiftbar(overview: dict[str, Any], lead: str | None, plugin: str | None = No
     lines = [_escape(title(overview, lead)), "---"]
     for row in rows(overview, lead):
         color = RED if row["full"] else (ORANGE if (row["used_percent"] or 0) >= HOT_PERCENT else None)
-        head = f"{row['label']}  {'full' if row['full'] else (str(row['used_percent']) + '%' if row['used_percent'] is not None else '?')}"
+        head = f"{row['label']}  {'full' if row['full'] else (str(row['used_percent']) + '%' if row['used_percent'] is not None else 'not read')}"
         if row["resets"]:
             head += f" · resets {row['resets']}"
         if row["level"] and row["level"] not in {"normal"}:
@@ -164,9 +164,8 @@ def swiftbar(overview: dict[str, Any], lead: str | None, plugin: str | None = No
 def text(overview: dict[str, Any], lead: str | None) -> str:
     lines = [title(overview, lead)]
     for row in rows(overview, lead):
-        lines.append(f"{row['label']}: {'full' if row['full'] else row['used_percent']}"
-                     f"{'' if row['full'] or row['used_percent'] is None else '%'}"
-                     + (f", resets {row['resets']}" if row["resets"] else ""))
+        used = "full" if row["full"] else ("not read" if row["used_percent"] is None else f"{row['used_percent']}%")
+        lines.append(f"{row['label']}: {used}" + (f", resets {row['resets']}" if row["resets"] else ""))
         for limit in row["limits"]:
             lines.append("  " + _limit_words(limit))
         error = _error_words(row)

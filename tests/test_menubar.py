@@ -26,16 +26,18 @@ def load_menubar():
 menubar = load_menubar()
 
 
-def window(used, reset_hours, minutes, label=None):
-    entry = {"used_percent": used, "reset_at": fleetctl.iso(NOW + dt.timedelta(hours=reset_hours)),
+def window(used, reset_hours, minutes, label=None, now=NOW):
+    entry = {"used_percent": used, "reset_at": fleetctl.iso(now + dt.timedelta(hours=reset_hours)),
              "window_minutes": minutes}
     if label:
         entry["label"] = label
     return entry
 
 
-def runtime():
-    observed = fleetctl.iso(NOW - dt.timedelta(minutes=3))
+def runtime(now=NOW):
+    observed = fleetctl.iso(now - dt.timedelta(minutes=3))
+    def window(*args):
+        return globals()["window"](*args, now=now)
     return {
         "quota_snapshots": {
             "claude": {"source": "claude-oauth-usage", "observed_at": observed, "windows": {
@@ -97,7 +99,8 @@ class GlanceTests(unittest.TestCase):
     def test_glance_command_reads_state_without_refreshing(self):
         state = Path(self.tmp.name) / "state"
         state.mkdir()
-        (state / "runtime.json").write_text(json.dumps(runtime()))
+        # The command reads the real clock, so the readings are as fresh as the moment it runs.
+        (state / "runtime.json").write_text(json.dumps(runtime(fleetctl.utc_now())))
         overlay = Path(self.tmp.name) / "overlay.json"
         overlay.write_text(json.dumps(self.roster))
         env = dict(os.environ, ACCESS_OVERLAY=str(overlay), FLEET_STATE_DIR=str(state), FLEET_NO_AUTO_REFRESH="1")
