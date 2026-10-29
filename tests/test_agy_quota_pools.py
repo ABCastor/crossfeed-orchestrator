@@ -102,7 +102,7 @@ class QuotaPoolTests(unittest.TestCase):
         window='antigravity-quota-summary-3p-5h'
         snapshot={'available':True,'source':'synthetic','observed_at':fleetctl.iso(NOW),
                   'windows':{window:{'used_percent':3,'reset_at':'2026-10-16T18:03:00Z','window_minutes':300}}}
-        with patch.dict(fleetctl.ORACLE_REGISTRY,{'codexbar':lambda *a,**kw: snapshot}), contextlib.redirect_stdout(io.StringIO()), patch.object(fleetctl,'utc_now',return_value=NOW):
+        with patch.dict(fleetctl.ORACLE_REGISTRY,{'antigravity':lambda *a,**kw: snapshot}), contextlib.redirect_stdout(io.StringIO()), patch.object(fleetctl,'utc_now',return_value=NOW):
             fleetctl.codexbar_snapshot_command(Namespace(provider='antigravity-3p',timeout=1,json=True),self.state,self.roster)
         runtime=json.loads((self.state/'runtime.json').read_text())
         self.assertEqual(runtime['pool_circuits']['antigravity-3p']['until'],'2026-10-16T14:21:27Z')

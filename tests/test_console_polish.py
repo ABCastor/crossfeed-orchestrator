@@ -137,7 +137,8 @@ print(json.dumps({'type':'agent_end','messages':[m]}))
             self.assertIn('daily spend cap', lease.stderr)
 
             gate = subprocess.run([str(ROOT / 'scripts/roster.sh'), 'validate'],
-                                  env={**os.environ, 'ACCESS_OVERLAY': str(path)}, capture_output=True, text=True)
+                                  env={**os.environ, 'ACCESS_OVERLAY': str(path), 'FLEET_STATE_DIR': str(state),
+                                       'FLEET_NO_AUTO_REFRESH': '1'}, capture_output=True, text=True)
             self.assertEqual(gate.returncode, 0, gate.stderr)
 
     def test_openrouter_keeps_each_models_price_and_omits_unknown_prices(self):
@@ -232,13 +233,14 @@ class ResearchSeatTests(unittest.TestCase):
             band: {'parallel': 2, 'workers': [copy.deepcopy(pro), {'id': 'critic', 'lane_id': critic['lane_id'], 'angle': 'Challenge.'}]}
             for band in ['quality_first', 'unknown', 'conserve', 'critical']}}}
         self.fixture.save()
+        env = {**self.fixture.env, 'FLEET_NO_AUTO_REFRESH': '1'}   # no real quota reader runs
         args = [str(ROOT / 'scripts/swarm.sh'), 'research', '--prompt', 'Review excerpts.', '--dir', str(self.work),
                 '--dry-run', '--out', str(self.work / 'swarm')]
-        result = subprocess.run(args, env=self.fixture.env, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('chatgpt:latest-pro', result.stdout)
         args[-1] = str(self.work / 'swarm-excluded')
-        result = subprocess.run(args + ['--exclude-lineage', 'openai'], env=self.fixture.env, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(args + ['--exclude-lineage', 'openai'], env=env, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('chatgpt:latest-pro', result.stdout)
         self.assertIn('excluded lead lineage', result.stderr)

@@ -88,13 +88,14 @@ class AntigravityPresentationTests(unittest.TestCase):
             self.assertEqual(shown['level'], self.runtime['switches'][key])
             self.assertIn('EXHAUSTED', shown['gauge'])
             self.assertIn(pool['until'], shown['gauge'])
+            self.assertIn('Weekly', shown['gauge'])
+            self.assertIn(str(3 + list(console.AGY_ALLOWANCES).index(key)) + '%', shown['gauge'])
             if key != 'antigravity-argon':
-                self.assertIn('Weekly', shown['gauge'])
                 self.assertIn('5-hour', shown['gauge'])
-                self.assertIn(str(3 + list(console.AGY_ALLOWANCES).index(key)) + '%', shown['gauge'])
             else:
-                self.assertNotIn('%', shown['gauge'])  # Argon's refusal is not a measured percentage.
-                self.assertIn('Usage percentage is not reported', shown['gauge'])
+                # Argon is measured in its own weekly bucket; the refusal still shows beside it.
+                self.assertNotIn('5-hour', shown['gauge'])
+                self.assertIn('individual quota', shown['gauge'])
 
     def test_summary_prioritizes_refusals_over_low_gauges_and_refreshes(self):
         expected = 'Gemini used up until 26 Oct · Claude/GPT used up until 23 Oct · Argon used up until 23 Oct'

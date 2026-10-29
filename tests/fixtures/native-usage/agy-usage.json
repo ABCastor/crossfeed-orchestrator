@@ -1,0 +1,15 @@
+{
+  "conversation_id": "", "status": "SUCCESS", "response": "Gemini Models\tWeekly Limit Remaining\t99%\n", "duration_seconds": 0, "num_turns": 0,
+  "command": {"name": "usage", "data": {
+    "description": "Within each group, models share a weekly limit and a 5-hour limit.",
+    "groups": [
+      {"name": "Gemini Models", "description": "Models within this group: Gemini Flash, Gemini Pro", "buckets": [
+        {"id": "gemini-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.9947237968444824, "reset_time": "2026-11-03T07:44:50Z"},
+        {"id": "gemini-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 1, "reset_time": "2026-10-30T02:07:07Z"}]},
+      {"name": "Claude and GPT models", "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS", "buckets": [
+        {"id": "3p-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.49380001425743103, "reset_time": "2026-11-03T07:01:27Z"},
+        {"id": "3p-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 1, "reset_time": "2026-10-30T02:07:07Z"}]},
+      {"name": "Gemini 4 Argon", "description": "For paid Pro plans, Argon quota is separate.", "buckets": [
+        {"id": "gemini-argon-wtu-weekly", "name": "Gemini 4 Argon Weekly Limit", "window": "weekly", "remaining_fraction": 0, "reset_time": "2026-10-30T09:35:40Z"}]}
+    ]}}
+}

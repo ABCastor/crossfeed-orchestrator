@@ -1210,9 +1210,11 @@ class QuotaSourceRegistryTests(unittest.TestCase):
                 "quota_refresh", pools[pool], f"{pool} has no declared quota source"
             )
         sources = fleetctl.quota_sources(overlay)
-        # OpenCode Go is read from its own usage endpoint, not through CodexBar.
-        self.assertEqual(sources["opencode-go"]["oracle"], "opencode-go")
-        self.assertEqual(sources["github-copilot-student"]["provider"], "copilot")
+        # Every shipped pool is read from its provider's own tool or sign-in, never through CodexBar.
+        self.assertEqual({pool: cfg["oracle"] for pool, cfg in sources.items()}, {
+            "opencode-go": "opencode-go", "claude": "claude", "codex": "codex",
+            "antigravity-gemini": "antigravity", "antigravity-3p": "antigravity",
+            "antigravity-argon": "antigravity", "github-copilot-student": "copilot"})
         self.assertNotIn("gemini-metered", sources)
 
 
@@ -2028,7 +2030,8 @@ class EffortTests(unittest.TestCase):
             root = Path(d); r = self.overlay(); del r['effort']['kimi-k3']
             overlay = root / 'overlay.json'; overlay.write_text(json.dumps(r))
             out = io.StringIO()
-            with patch('sys.stdout', out):
+            # No quota reader runs: this test is about effort evidence, not the machine's sign-ins.
+            with patch('sys.stdout', out), patch.dict(os.environ, {'FLEET_NO_AUTO_REFRESH': '1'}):
                 self.assertEqual(fleetctl.doctor_command(overlay, root), 1)
             self.assertIn('kimi-k3: missing effort', out.getvalue())
             self.assertIn('Effort evidence needs recheck:', fleetctl.render_brief(fleetctl.fleet_overview(r, {}, root), verbose=True))

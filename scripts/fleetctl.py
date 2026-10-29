@@ -47,6 +47,13 @@ except ImportError:
     _go_spec.loader.exec_module(opencode_go_usage)
 
 try:
+    import native_usage
+except ImportError:
+    _native_spec = importlib.util.spec_from_file_location("fleet_native_usage", Path(__file__).with_name("native_usage.py"))
+    native_usage = importlib.util.module_from_spec(_native_spec)
+    _native_spec.loader.exec_module(native_usage)
+
+try:
     from run_identity import canonical_model
 except ImportError:
     _identity_spec = importlib.util.spec_from_file_location("fleet_run_identity", Path(__file__).with_name("run_identity.py"))
@@ -1054,12 +1061,23 @@ def oracle_opencode_go(config: dict[str, Any], timeout: int = REFRESH_TIMEOUT_S)
     return opencode_go_usage.observe(config, timeout=timeout)
 
 
+def _native_oracle(name: str) -> Callable[[dict[str, Any], int], dict[str, Any]]:
+    def oracle(config: dict[str, Any], timeout: int = REFRESH_TIMEOUT_S) -> dict[str, Any]:
+        return native_usage.OBSERVERS[name](config, timeout=timeout)
+    oracle.__name__ = f"oracle_{name}"
+    oracle.__doc__ = f"{name}: read from the provider's own tool or sign-in (scripts/native_usage.py)."
+    return oracle
+
+
+# The provider's own readers (codex, claude, antigravity, copilot, opencode-go) need no
+# third-party app. `codexbar` stays available as an optional reader for other setups.
 ORACLE_REGISTRY: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "codexbar": oracle_codexbar,
     "command": oracle_command,
     "file": oracle_file,
     "http": oracle_http,
     "opencode-go": oracle_opencode_go,
+    **{name: _native_oracle(name) for name in native_usage.OBSERVERS},
 }
 
 
@@ -1078,6 +1096,9 @@ def _source_identity(config: dict[str, Any]) -> Any:
         return ("http", config.get("url"))
     if oracle == "opencode-go":
         return ("opencode-go", config.get("url"), config.get("key"))
+    if oracle in native_usage.OBSERVERS:
+        # One fetch per provider per refresh: the Antigravity pools share a single CLI report.
+        return (oracle, config.get("binary"), config.get("key"))
     return (oracle, id(config))
 
 
@@ -4319,10 +4340,15 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
         oracle = cfg.get("oracle", "codexbar")
         # CodexBar is an optional third-party reader (macOS app, Linux CLI). Whether it is
         # installed is the question, not which platform this is.
+        native_tool = {"codex": cfg.get("binary") or "codex", "antigravity": cfg.get("binary") or "agy",
+                       "copilot": None if cfg.get("key") else (cfg.get("gh") or "gh")}.get(oracle)
         if oracle == "codexbar" and not shutil.which(CODEXBAR_BIN):
             problems += 1
             print(f"  MISSING  {pool:24s} oracle `codexbar` not on PATH "
                   "(optional third-party reader; or use a `command` oracle)")
+        elif native_tool and not shutil.which(str(native_tool)):
+            problems += 1
+            print(f"  MISSING  {pool:24s} oracle `{oracle}` needs `{native_tool}` on PATH")
         elif pool in gauge_errors:
             problems += 1
             print(f"  FAIL     {pool:24s} oracle `{oracle}`: "
@@ -4814,6 +4840,7 @@ def fleet_overview(
         entry = {
             "pool": pool,
             "label": pool_label(pool, config),
+            "short_label": config.get("short_label") if isinstance(config.get("short_label"), str) else None,
             "level": level,
             "control": control_record(runtime, f"level:{pool}"),
             "means": LEVEL_MEANING[level],
@@ -5204,7 +5231,8 @@ def show_usage(
             "No percentage is being observed, so none of the bands below are real. "
             "Declare a `quota_refresh` source per pool in the access overlay to get "
             "measurement back: `command` and `file` oracles work anywhere, `http` suits a "
-            "self-hosted endpoint, and `codexbar` needs the optional third-party CodexBar reader."
+            "self-hosted endpoint, `codex`, `claude`, `antigravity`, `copilot` and `opencode-go` read "
+            "each provider's own sign-in, and `codexbar` needs the optional third-party CodexBar reader."
         )
     for pool, info in quota_pools.items():
         pct = info.get("bottleneck_used_percent")
@@ -5655,6 +5683,13 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--verbose", action="store_true", help="every limit, plan, pin and evidence warning")
     brief.add_argument("--no-refresh", action="store_true", help=refresh_help)
 
+    glance = sub.add_parser("glance", help="the limits at a glance: one line plus every pool's limits and resets")
+    glance.add_argument("--format", choices=("text", "swiftbar", "json"), default="text")
+    glance.add_argument("--lead", metavar="POOL", help="pool always named in the one-line summary")
+    glance.add_argument("--force", action="store_true", help="read every provider again now, ignoring TTLs")
+    glance.add_argument("--plugin", help="menu-bar plugin path, for its own 'read again' item")
+    glance.add_argument("--no-refresh", action="store_true", help=refresh_help)
+
     console = sub.add_parser("console", help="open the local console page (127.0.0.1 only, signed-in link)")
     console.add_argument("--port", type=int, default=8768, help="preferred port; the next free one is used if taken")
     console.add_argument("--no-open", action="store_true", help="print the sign-in link instead of opening a browser")
@@ -5919,6 +5954,25 @@ def main() -> int:
                 overview["lead"] = {"pool": lead, "pressure": lead_pressure(runtime, lead, roster)}
             print(json.dumps(overview, indent=2, sort_keys=True) if args.json else
                   render_brief(overview, verbose=args.verbose, roster=roster, runtime=runtime, lead=lead))
+            return 0
+        if args.command == "glance":
+            _menubar_spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
+            menubar = importlib.util.module_from_spec(_menubar_spec)
+            _menubar_spec.loader.exec_module(menubar)
+            roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
+            if args.force and not args.no_refresh:
+                refresh_stale_pools(state_dir, quota_sources(roster), roster=roster, force=True)
+            else:
+                refresh(quota_sources(roster), roster)
+            runtime = load_json(state_dir / "runtime.json", {}) or {}
+            overview = fleet_overview(roster, runtime, state_dir)
+            lead = resolve_lead_pool(roster, args.lead)
+            if args.format == "json":
+                print(json.dumps(menubar.as_json(overview, lead), indent=2, sort_keys=True))
+            elif args.format == "swiftbar":
+                sys.stdout.write(menubar.swiftbar(overview, lead, args.plugin))
+            else:
+                sys.stdout.write(menubar.text(overview, lead))
             return 0
         if args.command == "import-bench":
             sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

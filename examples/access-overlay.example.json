@@ -168,7 +168,8 @@
           "manage": false,
           "what": "OpenCode fleet-worker small model"
         }
-      ]
+      ],
+      "short_label": "Go"
     },
     "claude": {
       "label": "Claude",
@@ -182,8 +183,7 @@
       "billing": "Configure for your own plan and admitted transport.",
       "role": "<describe this pool's role>",
       "quota_refresh": {
-        "oracle": "codexbar",
-        "provider": "claude",
+        "oracle": "claude",
         "ttl_s": 1800
       },
       "quota_source": "<describe this pool's quota_source>"
@@ -200,8 +200,7 @@
       "billing": "Configure for your own plan and admitted transport.",
       "role": "<describe this pool's role>",
       "quota_refresh": {
-        "oracle": "codexbar",
-        "provider": "codex",
+        "oracle": "codex",
         "ttl_s": 1800
       },
       "quota_source": "<describe this pool's quota_source>",
@@ -234,8 +233,7 @@
       "billing": "Configure for your own plan and admitted transport.",
       "role": "<describe this pool's role>",
       "quota_refresh": {
-        "oracle": "codexbar",
-        "provider": "antigravity",
+        "oracle": "antigravity",
         "ttl_s": 1800,
         "windows": [
           "antigravity-quota-summary-gemini-5h",
@@ -256,8 +254,7 @@
       "billing": "Configure for your own plan and admitted transport.",
       "role": "<describe this pool's role>",
       "quota_refresh": {
-        "oracle": "codexbar",
-        "provider": "antigravity",
+        "oracle": "antigravity",
         "ttl_s": 1800,
         "windows": [
           "antigravity-quota-summary-3p-5h",
@@ -289,8 +286,7 @@
       "additional_paid_usage": "disabled",
       "source": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals",
       "quota_refresh": {
-        "oracle": "codexbar",
-        "provider": "copilot",
+        "oracle": "copilot",
         "ttl_s": 1800
       },
       "quota_source": "<describe this pool's quota_source>"
@@ -366,8 +362,14 @@
         "name": "Antigravity · Argon individual allowance",
         "billing": "subscription"
       },
-      "quota_refresh": null,
-      "quota_source": "AGY individual quota refusals; the shared Gemini gauge does not measure this allowance."
+      "quota_refresh": {
+        "oracle": "antigravity",
+        "ttl_s": 1800,
+        "windows": [
+          "antigravity-quota-summary-argon-weekly"
+        ]
+      },
+      "quota_source": "Antigravity CLI usage report, Argon bucket; individual quota refusals still block until their reset."
     }
   },
   "model_evidence": {
