@@ -71,7 +71,12 @@ class TuningTests(SelectorTests):
         self.evidence(rows)
         allowed = 'codex:gpt-6.1-sol:high,codex:gpt-6-luna:high'
         self.assertEqual(self.select(stakes='normal', allow=allowed)['choice']['model_key'], 'gpt-6.1-sol')
-        self.assertEqual(self.select(stakes='high', allow=allowed)['choice']['model_key'], 'gpt-6-luna')
+        # BR-SELECT-002: at high stakes the two are within the variety band, so the choice is
+        # varied; completion time still ranks Luna first and tilts the draw towards it.
+        high = self.select(stakes='high', allow=allowed)
+        self.assertEqual(high['top3'][0]['model_key'], 'gpt-6-luna')
+        odds = {item['model_key']: item['probability'] for item in high['variety']['candidates']}
+        self.assertGreater(odds['gpt-6-luna'], odds['gpt-6.1-sol'])
 
 
 if __name__ == '__main__':

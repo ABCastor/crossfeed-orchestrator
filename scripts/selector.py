@@ -30,6 +30,20 @@ DEFAULTS = {"target": 90.0, "lambda0": 1.0, "mu": .001, "explore": .1,
             "uncertainty_weight": 1.0,
             "high_cost_cap": 1.0,
             "stakes_weights": {"low": 1.0, "normal": 2.0, "high": 40.0}}
+# BR-SELECT-002: variety among near-equal options. Defaults pending the owner's decision.
+#   quality_band  how much estimated quality (0..1) a varied choice may give up against the
+#                 option plain scoring would pick, per stakes; 0 keeps that pick
+#   pace_weight   preference per unit of pool pace (+1 = a whole allowance about to be
+#                 destroyed unused, -1 = a whole allowance ahead of pace)
+#   recency_half_life_s  how fast a lane's recent use stops counting against it
+#   temperature   softness of the random draw over preferences (lower = more decisive)
+VARIETY = {"quality_band": {"low": .05, "normal": .03, "high": .01, "irreversible": 0.0},
+           "pace_weight": 2.0, "recency_half_life_s": 3600.0, "temperature": .5}
+# A deficit smaller than this (allowance fraction) does not outweigh another window's surplus:
+# one task at the start of a short window reads as a small deficit and must not flip the pool.
+PACE_DEFICIT_DEAD_ZONE = .05
+# Recent use is read from the tail of runs.jsonl and from in-flight dispatch receipts.
+RECENT_RUNS_TAIL_BYTES = 1 << 20
 FAMILIES = {"coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
 WRAPPERS = {name: name + "-agent.sh" for name in
             ("codex", "claude", "opencode", "agy", "copilot", "openrouter", "pi")}
@@ -324,6 +338,199 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
                                  "snapshot_or_window_pace" if value is not None else "unknown")}
 
 
+def window_routing_pace(window: dict, fleet: Any) -> dict | None:
+    """The CodexBar pace of one window plus the signed value routing uses for it.
+
+    Without an oracle projection the value is the pace itself, (elapsed% - used%) / 100. With
+    one (a projected total at reset, or an ETA to exhaustion), the value is the same quantity
+    computed from that better estimate: elapsed fraction * (1 - projected / 100). Both are the
+    allowance the reset destroys at the expected rate (+) or the shortfall before it (-),
+    weighted by how much of the window the estimate has seen.
+    """
+    pace = fleet.window_pace(window)
+    if not pace:
+        return None
+    elapsed = pace["elapsed_percent"] / 100
+    used = pace["used_percent"]
+    projected = _number(window.get("projected_used_percent_at_reset"))
+    if projected is None:
+        eta, left = _number(window.get("eta_seconds")), _number(window.get("seconds_to_reset"))
+        if eta is not None and eta > 0 and left is not None:
+            projected = used + (100 - used) * left / eta
+    if projected is None:
+        value, projected_basis = pace["delta_percent"] / 100, False
+    else:
+        value, projected_basis = elapsed * (1 - max(projected, used) / 100), True
+    return dict(pace, value=max(-1.0, min(1.0, value)), projected=projected_basis)
+
+
+# BR-SELECT-002
+def pool_pace(roster: dict, runtime: dict, pool: str, fleet: Any, *,
+              model_key: str | None = None) -> dict:
+    """One signed pace for a pool, in allowance fractions: + surplus, - deficit.
+
+    A task spends from every applicable window at once, so any window running out before its
+    reset makes the pool one to avoid: the worst deficit is the pool's pace. Otherwise the
+    largest surplus is, since that is the allowance the next reset destroys. Deficits within
+    PACE_DEFICIT_DEAD_ZONE count as on pace. Unknown, stale or unlimited pools are neutral (0).
+    """
+    if fleet.pool_has_no_known_limit(roster, pool):
+        return {"value": 0.0, "basis": "none-known", "window": None}
+    state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
+                                               roster=roster, model_key=model_key)
+    if state in {"GAUGE_ERROR", "UNKNOWN"} or evidence.get("gauge_error"):
+        return {"value": 0.0, "basis": "unknown", "window": None}
+    windows = evidence.get("windows") or {}
+    applicable = evidence.get("applicable_windows", windows)
+    readings = [(name, window_routing_pace(window, fleet)) for name, window in windows.items()
+                if name in applicable]
+    readings = [(name, pace) for name, pace in readings if pace]
+    if not readings:
+        return {"value": 0.0, "basis": "unknown", "window": None}
+    deficits = [(name, pace) for name, pace in readings if pace["value"] <= -PACE_DEFICIT_DEAD_ZONE]
+    if deficits:
+        name, pace = min(deficits, key=lambda row: row[1]["value"])
+        value = pace["value"]
+    else:
+        name, pace = max(readings, key=lambda row: row[1]["value"])
+        value = max(0.0, pace["value"])
+    return {"value": round(value, 4), "basis": "projection" if pace["projected"] else "window_pace",
+            "window": name, "status": pace["status"], "words": pace["words"]}
+
+
+# BR-SELECT-002
+def recent_use(state_dir: Path, fleet: Any, half_life_s: float, now: Any = None) -> dict:
+    """{(pool, model_key): decayed count of recent runs}, finished or still in flight.
+
+    Finished runs come from the wrapper ledger (every route, dispatched or not); runs still
+    in flight from dispatch receipts, which exist from launch, so a parallel burst sees its own
+    earlier picks. One dispatch counts once. Weight halves every `half_life_s`.
+    """
+    now = now or fleet.utc_now()
+    horizon = 8 * half_life_s
+    counts: dict = {}
+    seen: set = set()
+
+    def add(pool: Any, model: Any, started: Any, dispatch: Any) -> None:
+        if not pool or not model or not started:
+            return
+        if dispatch:
+            if dispatch in seen:
+                return
+            seen.add(dispatch)
+        try:
+            age = (now - fleet.parse_iso(str(started))).total_seconds()
+        except (TypeError, ValueError):
+            return
+        if 0 <= age <= horizon:
+            key = (str(pool), str(model))
+            counts[key] = counts.get(key, 0.0) + 0.5 ** (age / half_life_s)
+
+    dispatches = Path(state_dir) / "dispatches"
+    try:
+        entries = list(os.scandir(dispatches))
+    except OSError:
+        entries = []
+    cutoff = now.timestamp() - horizon
+    for entry in entries:
+        try:
+            if not entry.is_dir() or entry.stat().st_mtime < cutoff:
+                continue
+            record = json.loads((Path(entry.path) / "dispatch.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict):
+            add(record.get("pool"), record.get("selected_model"), record.get("started_at"),
+                record.get("dispatch_id"))
+    path = Path(state_dir) / "runs.jsonl"
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - RECENT_RUNS_TAIL_BYTES))
+            lines = handle.read().splitlines()
+        if size > RECENT_RUNS_TAIL_BYTES:
+            lines = lines[1:]   # the first line of a tail is usually cut
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("schema") == "crossfeed-model-run/v1":
+            add(record.get("quota_pool"), record.get("selected_model"), record.get("started_at"),
+                record.get("dispatch_id"))
+    return counts
+
+
+def _variety_policy(policy: dict, fleet: Any) -> dict:
+    raw = policy.get("variety", {})
+    if raw is False:
+        raw = {"quality_band": 0.0}
+    if not isinstance(raw, dict):
+        raise fleet.FleetError("selector variety must be an object or false")
+    merged = dict(VARIETY, **{key: value for key, value in raw.items() if key != "quality_band"})
+    band = raw.get("quality_band", VARIETY["quality_band"])
+    band = {stakes: band for stakes in VARIETY["quality_band"]} if _number(band) is not None else (
+        dict(VARIETY["quality_band"], **band) if isinstance(band, dict) else None)
+    if band is None or any(_number(value) is None or not 0 <= value <= 1 for value in band.values()):
+        raise fleet.FleetError("selector variety quality_band must be in [0, 1]")
+    merged["quality_band"] = band
+    for key in ("pace_weight", "recency_half_life_s", "temperature"):
+        value = _number(merged.get(key))
+        if value is None or value < 0 or (key != "pace_weight" and value == 0):
+            raise fleet.FleetError(f"selector variety {key} must be positive")
+        merged[key] = value
+    return merged
+
+
+# BR-SELECT-002
+def _vary(scored: list, greedy: dict, stakes: str, weights: dict, variety: dict,
+          pace_of: Any, recency_of: Any) -> tuple[list, list]:
+    """(candidates, probabilities): the lanes a varied choice may take, and how likely each is.
+
+    Candidates are measured options within the quality band of the option plain scoring picked,
+    on both estimated quality and score, so quota price and latency still count. Hard gates ran
+    before scoring, so nothing here can admit an option. One option per lane, its best-scored
+    level. Preference is pace (surplus favoured, deficit avoided) minus decayed recent use, minus
+    how far behind the scored pick the option is (0 to 1 across the band); the draw is a softmax
+    over preference, so every candidate keeps a chance and none is certain.
+    """
+    band = variety["quality_band"].get(stakes, 0.0)
+    candidates = [greedy]
+    if band > 0 and not greedy["q"]["unknown"]:
+        lanes = {(greedy["pool"], greedy["model_key"])}
+        for item in scored:
+            lane = (item["pool"], item["model_key"])
+            if (lane in lanes or item["q"]["unknown"] or item.get("pro_fallback")
+                    or item["quality"] < greedy["quality"] - band
+                    or item["score"] < greedy["score"] - weights.get(stakes, 1.0) * band):
+                continue
+            lanes.add(lane)
+            candidates.append(item)
+    if len(candidates) == 1:
+        return candidates, [1.0]
+    preferences = []
+    recency = recency_of()
+    width = weights.get(stakes, 1.0) * band
+    for item in candidates:
+        pace = pace_of(item["pool"], item["model_key"])
+        used = recency.get((item["pool"], item["model_key"]), 0.0)
+        # Scoring's own verdict stays a tilt: 0 for its pick, -1 at the edge of the band.
+        behind = (item["score"] - greedy["score"]) / width
+        preference = variety["pace_weight"] * pace["value"] - used + behind
+        item["variety"] = {"pace": pace, "recent_use": round(used, 4), "score_behind": round(behind, 4),
+                           "preference": round(preference, 4)}
+        preferences.append(preference)
+    top = max(preferences)
+    raw = [math.exp((value - top) / variety["temperature"]) for value in preferences]
+    probabilities = [value / sum(raw) for value in raw]
+    for item, probability in zip(candidates, probabilities):
+        item["variety"]["probability"] = round(probability, 6)
+    return candidates, probabilities
+
+
 def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
     plan = roster.get("quota_pools", {}).get(pool, {}).get("plan", {})
     allowance = plan.get("allowance")
@@ -505,6 +712,7 @@ def parse_allow(value: str | Path | None, fleet: Any) -> list[str] | None:
     return entries
 
 
+# BR-SELECT-002
 def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   stakes: str = "normal", family: str | None = None,
                   exclude_lineage: str | None = None, mode: str | None = None,
@@ -656,16 +864,52 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         scored.sort(key=lambda option: (option.get("worker_level") != "xhigh", -option["score"]))
         greedy = scored[0]
         explore = 0.0
+    variety = _variety_policy(policy, fleet)
+    if target is not None:
+        candidates, probabilities = [greedy], [1.0]   # an explicitly requested model is not varied
+    else:
+        paces: dict = {}
+        recent: list = []
+
+        def pace_of(pool, model_key):
+            if (pool, model_key) not in paces:
+                paces[(pool, model_key)] = pool_pace(roster, runtime, pool, fleet, model_key=model_key)
+            return paces[(pool, model_key)]
+
+        def recency_of():
+            if not recent:
+                recent.append(recent_use(state_dir, fleet, variety["recency_half_life_s"]))
+            return recent[0]
+
+        candidates, probabilities = _vary(scored, greedy, stakes, weights, variety, pace_of, recency_of)
     exploring = bool(explore and random.random() < explore)
-    choice = random.choice(unknown_options) if exploring else greedy
+    if exploring:
+        choice = random.choice(unknown_options)
+    elif len(candidates) == 1:
+        choice = greedy
+    else:
+        draw, choice = random.random(), candidates[-1]
+        for item, probability in zip(candidates, probabilities):
+            draw -= probability
+            if draw < 0:
+                choice = item
+                break
+    varied = {id(item): probability for item, probability in zip(candidates, probabilities)}
     for item in scored + unknown_options:
-        item["selection_probability"] = (1 - explore if item is greedy else 0) + (
+        item["selection_probability"] = (1 - explore) * varied.get(id(item), 0.0) + (
             explore / len(unknown_options) if item["q"]["unknown"] and unknown_options else 0)
     receipt = state_dir / "selections" / (str(uuid.uuid4()) + ".json")
     top3 = scored[:3]
     result = {"schema": "fleet-selection/v1", "choice": choice, "top3": top3,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
               "explore": explore, "unknown_options": len(unknown_options),
+              "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
+                          "pace_weight": variety["pace_weight"],
+                          "recency_half_life_s": variety["recency_half_life_s"],
+                          "temperature": variety["temperature"],
+                          "candidates": [{"pool": item["pool"], "model_key": item["model_key"],
+                                          "level": item["level"], **item.get("variety", {})}
+                                         for item in candidates]},
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
               "pool_prices": prices, "role": role, "family": family, "stakes": stakes,
               "rejected": rejected, "allow": allow_list, "selection_file": str(receipt),

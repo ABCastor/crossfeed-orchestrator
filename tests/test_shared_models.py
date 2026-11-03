@@ -281,7 +281,8 @@ class SharedRoutingTests(unittest.TestCase):
 
     def test_declared_marginal_price_breaks_equal_score_ties(self):
         self.roster['lanes'][0]['price_1m'] = {'in': 0, 'out': 0}
-        self.assertEqual(self.select()['choice']['pool'], 'opencode-go')
+        # BR-SELECT-002: an exact tie is varied; the declared price still orders the ranking.
+        self.assertEqual(self.select()['top3'][0]['pool'], 'opencode-go')
 
     def test_conflicting_legacy_alias_caches_remain_unknown(self):
         self.roster['model_cards']['third-luna'] = identity_card()
@@ -327,7 +328,11 @@ class SharedRoutingTests(unittest.TestCase):
                          'latency_by_stakes': {'high': 0.001},
                          'source_telemetry': {'opencode-go/opencode': {'latency_s': 1},
                                               'codex/codex': {'latency_s': 20}}}])
-        self.assertEqual(self.select()['choice']['pool'], 'opencode-go')
+        # BR-SELECT-002: within the variety band the faster source ranks first and is favoured.
+        faster = self.select()
+        self.assertEqual(faster['top3'][0]['pool'], 'opencode-go')
+        odds = {item['pool']: item['probability'] for item in faster['variety']['candidates']}
+        self.assertGreater(odds['opencode-go'], odds['codex'])
         routes = {r['pool']: r for r in self.select(stakes='high')['top3']}
         self.assertEqual(routes['codex']['latency_s'], 20)
 

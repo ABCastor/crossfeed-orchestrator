@@ -321,6 +321,74 @@ def _window_surplus_forecast(window: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Pace, as CodexBar shows it: a window spent evenly has used the same share of its allowance as
+# of its time. Usage ahead of elapsed time is a deficit (at this rate it runs out before the
+# reset); usage behind it is a surplus (at this rate the reset destroys allowance unused).
+# Differences under one point read as on pace.
+PACE_ON_PACE_POINTS = 1.0
+
+
+# BR-SELECT-002
+def window_pace(window: dict[str, Any]) -> dict[str, Any] | None:
+    """Deficit or surplus of one active window, in percentage points of its allowance.
+
+    Needs the window's length and time to reset; returns None without them. `delta_percent` is
+    elapsed% minus used%: positive is surplus, negative is deficit. A deficit carries
+    `runs_out_in_s` when it can be projected: the oracle's own ETA first, else the window's
+    average burn once at least MIN_BURN_SAMPLE_FRACTION of it has elapsed. Before that sample the
+    reading is `early`: the pace is real, a run-out time would be noise.
+    """
+    minutes = window.get("window_minutes")
+    left = window.get("seconds_to_reset")
+    used = window.get("used_percent")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (minutes, left, used)):
+        return None
+    if minutes <= 0:
+        return None
+    window_s = float(minutes) * 60
+    left = min(max(0.0, float(left)), window_s)
+    elapsed_s = window_s - left
+    used = max(0.0, min(100.0, float(used)))
+    elapsed = 100.0 * elapsed_s / window_s
+    delta = elapsed - used
+    status = ("on_pace" if abs(delta) < PACE_ON_PACE_POINTS else
+              "surplus" if delta > 0 else "deficit")
+    early = elapsed_s < window_s * MIN_BURN_SAMPLE_FRACTION
+    runs_out, basis = None, None
+    if status == "deficit":
+        eta = window.get("eta_seconds")
+        if used >= 100:
+            runs_out, basis = 0, "full"
+        elif isinstance(eta, (int, float)) and not isinstance(eta, bool) and 0 <= eta < left:
+            runs_out, basis = int(eta), "observed_pace"
+        elif not early and used > 0:
+            # Flat average rate used/elapsed_s, extrapolated to 100%. A deficit means this
+            # lands before the reset by construction.
+            runs_out, basis = int(elapsed_s * (100.0 - used) / used), "average_burn"
+    pace = {"elapsed_percent": round(elapsed, 1), "used_percent": round(used, 1),
+            "delta_percent": round(delta, 1), "points": int(round(abs(delta))),
+            "status": status, "early": early,
+            "runs_out_in_s": runs_out, "run_out_basis": basis}
+    pace["words"] = pace_words(pace)
+    return pace
+
+
+def pace_words(pace: dict[str, Any] | None) -> str:
+    """'17% surplus', '21% in deficit, runs out in 5d 3h', 'on pace': the reading in CodexBar's words."""
+    if not pace:
+        return ""
+    if pace["status"] == "on_pace":
+        return "on pace"
+    if pace["status"] == "surplus":
+        return f"{pace['points']}% surplus"
+    text = f"{pace['points']}% in deficit"
+    if pace.get("runs_out_in_s") is not None and pace.get("run_out_basis") != "full":
+        text += f", runs out in {format_duration(pace['runs_out_in_s'])}"
+    elif pace.get("early"):
+        text += ", too early to project"
+    return text
+
+
 def _state_for_used(used_percent: int) -> str:
     if used_percent >= 90:
         return "CRITICAL"
@@ -4474,6 +4542,7 @@ def reset_words(reset_at: str | None, now: dt.datetime | None = None) -> str:
     return f"{date} {clock}" if 0 < days <= 7 else date
 
 
+# BR-SELECT-002
 def pool_limits(
     pool: dict[str, Any], windows: dict[str, Any], idle: dict[str, Any] | None,
     spend_down: Iterable[str], now: dt.datetime,
@@ -4497,6 +4566,7 @@ def pool_limits(
             "resets_in_s": int(window.get("seconds_to_reset", 0)),
             "resets": reset_words(window.get("reset_at"), now),
             "spend_down": name in expiring,
+            "pace": window_pace(window) if used < 100 else None,
         })
     for name, window in (idle or {}).items():
         if name in windows:
@@ -4508,6 +4578,7 @@ def pool_limits(
             "used_percent": int(window.get("used_percent", 0)),
             "state": _state_for_used(int(window.get("used_percent", 0))).lower(),
             "reset_at": None, "resets_in_s": None, "resets": "", "spend_down": False,
+            "pace": None,
         })
     limits.sort(key=lambda item: (item["minutes"] is None, item["minutes"] or 0, bool(item["scope"]), item["name"]))
     metered = pool.get("metered")
@@ -4831,6 +4902,7 @@ def fleet_overview(
                 "used_percent": int(window["used_percent"]),
                 "window": window_label(name, window),
                 "resets_in_s": int(window.get("seconds_to_reset", 0)),
+                "pace": window_pace(window) if int(window["used_percent"]) < 100 else None,
                 "spend_down": bool(evidence.get("spend_down")),
                 "age_s": evidence.get("age_seconds"),
                 "confidence": evidence.get("confidence"),
@@ -4862,6 +4934,13 @@ def fleet_overview(
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, (snapshot or {}).get("idle_windows") if windows else None,
             evidence.get("spend_down") or [], now)
+        if entry["gauge_error"]:
+            # A last-good reading kept through a failed read is older than the clock it would be
+            # compared with: usage can only have grown since, so its surplus would be overstated.
+            for limit in entry["limits"]:
+                limit["pace"] = None
+            if quota:
+                quota["pace"] = None
         if evidence.get("source") == "explicit-quota-error":
             entry["limits"].append({
                 "name": "provider_refusal", "title": evidence.get("limit_name") or "Provider refusal",
@@ -4976,6 +5055,8 @@ def _limit_text(limit: dict[str, Any]) -> str:
     if limit["reset_at"] is None:
         return text + ", not started"
     text += f", resets {limit['resets']} (in {format_duration(limit['resets_in_s'])})"
+    if limit.get("pace"):
+        text += f", {limit['pace']['words']}"
     if limit.get("spend_down"):
         text += " use-it"
     return text

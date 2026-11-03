@@ -139,9 +139,13 @@ class GaugeErrorTests(unittest.TestCase):
         unmeasured = copy.deepcopy(runtime)
         unmeasured.pop("quota_refresh_errors")
         control = selector.select_option(self.roster, unmeasured, self.state, "default", allow=allow, fleet=fleetctl)
-        self.assertEqual(control["choice"]["pool"], "opencode-go")
+        # BR-SELECT-002: the two are within the variety band, so the pick is varied; the gauge
+        # price still decides the ranking and tilts the draw.
+        self.assertEqual(control["top3"][0]["pool"], "opencode-go")
         result = selector.select_option(self.roster, runtime, self.state, "default", allow=allow, fleet=fleetctl)
-        self.assertEqual(result["choice"]["pool"], "codex")
+        self.assertEqual(result["top3"][0]["pool"], "codex")
+        odds = {item["pool"]: item["probability"] for item in result["variety"]["candidates"]}
+        self.assertGreater(odds["codex"], odds["opencode-go"])
         self.assertEqual(result["lambdas"]["codex"], .5)
         self.assertEqual(result["lambdas"]["opencode-go"], 1.0)
         fallback = selector.select_option(self.roster, runtime, self.state, "default",
@@ -156,7 +160,7 @@ class GaugeErrorTests(unittest.TestCase):
         fleetctl.atomic_json(self.state / "runtime.json", runtime)
         result = self.cli("select", "--role", "default", "--allow", allow, "--json", "--no-refresh")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["choice"]["pool"], "codex")
+        self.assertEqual(json.loads(result.stdout)["top3"][0]["pool"], "codex")
 
     def test_success_clears_error_even_when_keeping_a_newer_snapshot(self):
         self.refresh()
