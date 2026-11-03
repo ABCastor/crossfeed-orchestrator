@@ -282,6 +282,13 @@ class FleetWiringTests(unittest.TestCase):
             self.assertIn(name, fleetctl.ORACLE_REGISTRY)
 
     def test_one_antigravity_report_feeds_three_pools_without_codexbar(self):
+        # The clock stands at the fixture's capture (29 Oct ~22:00Z, its commit time), before its
+        # resets, which on the real clock have all passed.
+        captured = dt.datetime(2026, 10, 29, 22, 0, tzinfo=dt.timezone.utc)
+        for module, name in ((native, "_now"), (fleetctl, "utc_now")):
+            frozen = patch.object(module, name, lambda: captured)
+            frozen.start()
+            self.addCleanup(frozen.stop)
         calls = []
         snapshot = native.parse_antigravity(fixture("agy-usage.json"))
 
