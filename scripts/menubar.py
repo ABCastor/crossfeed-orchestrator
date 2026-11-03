@@ -5,7 +5,8 @@ console and `brief` show, so the menu bar can never disagree with routing. Rende
 refresh, no network, no clock except the one passed in.
 
 The menu-bar line names the lead pool and every pool that is full or nearly full; the dropdown
-lists every measured pool with each of its limits and when it resets, and says plainly when a
+lists every measured pool with each of its limits, when it resets and its pace (how far usage is
+ahead of or behind an even spend to the reset, as CodexBar shows it), and says plainly when a
 reading failed or is old.
 """
 from __future__ import annotations
@@ -59,13 +60,20 @@ def _percent_words(pool: dict[str, Any], limit: dict[str, Any] | None) -> str:
     return f"{int(limit.get('used_percent') or 0)}%" if limit else "?"
 
 
+# BR-SELECT-002
+def pace_words(pace: dict[str, Any] | None) -> str:
+    """'17% surplus', '21% in deficit, runs out in 5d 3h', 'on pace': worded once, by the overview."""
+    return str((pace or {}).get("words") or "")
+
+
 def _limit_words(limit: dict[str, Any]) -> str:
     title = str(limit.get("title") or "Limit")
     if limit.get("scope"):
         title += f" ({limit['scope']})"
     used = "full" if int(limit.get("used_percent") or 0) >= 100 else f"{int(limit.get('used_percent') or 0)}%"
     resets = limit.get("resets")
-    return f"{title} {used}" + (f" · resets {resets}" if resets else "")
+    pace = pace_words(limit.get("pace"))
+    return f"{title} {used}" + (f" · resets {resets}" if resets else "") + (f" · {pace}" if pace else "")
 
 
 def _ago(seconds: Any) -> str:
@@ -98,6 +106,7 @@ def rows(overview: dict[str, Any], lead: str | None = None) -> list[dict[str, An
             "level": pool.get("level"), "state": pool.get("state"),
             "full": is_full(pool, limit), "used_percent": int(limit["used_percent"]) if limit else None,
             "resets": (limit or {}).get("resets") or "", "reset_at": (limit or {}).get("reset_at"),
+            "pace": (limit or {}).get("pace"),
             "limits": limits, "gauge_error": pool.get("gauge_error"), "stale_age_s": pool.get("stale_age_s"),
         })
     out.sort(key=lambda row: row["pool"] != lead)
@@ -139,6 +148,8 @@ def swiftbar(overview: dict[str, Any], lead: str | None, plugin: str | None = No
         head = f"{row['label']}  {'full' if row['full'] else (str(row['used_percent']) + '%' if row['used_percent'] is not None else 'not read')}"
         if row["resets"]:
             head += f" · resets {row['resets']}"
+        if row["pace"] and not row["full"]:
+            head += f" · {pace_words(row['pace'])}"
         if row["level"] and row["level"] not in {"normal"}:
             head += f" · set to {row['level']}"
         lines.append(_escape(head) + (f" | color={color}" if color else ""))
@@ -165,7 +176,9 @@ def text(overview: dict[str, Any], lead: str | None) -> str:
     lines = [title(overview, lead)]
     for row in rows(overview, lead):
         used = "full" if row["full"] else ("not read" if row["used_percent"] is None else f"{row['used_percent']}%")
-        lines.append(f"{row['label']}: {used}" + (f", resets {row['resets']}" if row["resets"] else ""))
+        pace = pace_words(row["pace"]) if not row["full"] else ""
+        lines.append(f"{row['label']}: {used}" + (f", resets {row['resets']}" if row["resets"] else "")
+                     + (f", {pace}" if pace else ""))
         for limit in row["limits"]:
             lines.append("  " + _limit_words(limit))
         error = _error_words(row)

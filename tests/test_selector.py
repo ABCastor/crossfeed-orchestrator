@@ -279,11 +279,16 @@ class SelectorTests(unittest.TestCase):
         runtime = self.snapshot("claude", 95)
         runtime["quota_snapshots"].update(self.snapshot("codex", 70)["quota_snapshots"])
         result = self.select(runtime)
-        self.assertEqual(result["choice"]["pool"], "codex")
+        # BR-SELECT-002: equal quality is varied; scoring still ranks the surplus pool first and
+        # the varied draw favours it.
+        ranked = result["top3"][0]
+        self.assertEqual(ranked["pool"], "codex")
+        odds = {item["pool"]: item["probability"] for item in result["variety"]["candidates"]}
+        self.assertGreater(odds["codex"], odds["claude"])
         self.assertEqual(result["lambdas"]["codex"], 0)
         self.assertGreater(result["lambdas"]["claude"], 0)
-        self.assertAlmostEqual(result["choice"]["cost"]["percent"], .02)
-        self.assertTrue(result["choice"]["cost"]["estimated"])
+        self.assertAlmostEqual(ranked["cost"]["percent"], .02)
+        self.assertTrue(ranked["cost"]["estimated"])
 
     def test_allowed_pool_policy_and_excluded_lineage(self):
         self.roster["policy"]["selector"] = {"allowed_pools_by_role": {"review": ["codex", "claude"], "default": ["opencode-go"]}}
