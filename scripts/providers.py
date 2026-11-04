@@ -43,6 +43,29 @@ def reference(value):
     return "file:" + str(Path(path).expanduser())
 
 
+# Readers run from launchd, menu bars and other apps' plugins (Orca), where nobody can answer
+# a 1Password prompt: with a service account, op is read headless. The token comes from the
+# environment or from a 600 file; op gets an empty HOME so it never probes the desktop app,
+# which macOS and 1Password would otherwise turn into an approval dialog for the parent app
+# (4 Nov 2026: Orca asked every ~30 minutes). Without a service account, op runs as before.
+OP_TOKEN_FILE = Path(os.environ.get("OP_SERVICE_ACCOUNT_TOKEN_FILE") or "~/.config/op/agent-rw-token")
+
+
+def _headless_op():
+    token = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip()
+    if not token:
+        try:
+            path = Path(os.environ.get("OP_SERVICE_ACCOUNT_TOKEN_FILE") or OP_TOKEN_FILE).expanduser()
+            token = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            return {}
+    if not token:
+        return {}
+    home = Path.home() / ".config/op/isolated-home"  # shared with ~/.claude/scripts/op
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return {"env": {**os.environ, "OP_SERVICE_ACCOUNT_TOKEN": token, "HOME": str(home)}}
+
+
 def resolve_key(ref):
     ref = reference(ref)
     try:
@@ -53,7 +76,8 @@ def resolve_key(ref):
         elif ref.startswith("file:"):
             key = Path(ref[5:]).read_text(encoding="utf-8")
         else:
-            result = subprocess.run(["op", "read", ref], capture_output=True, text=True, timeout=10)
+            result = subprocess.run(["op", "read", ref], capture_output=True, text=True, timeout=10,
+                                    **_headless_op())
             if result.returncode:
                 raise ProviderError("1Password could not read that reference. Check access and try again.")
             key = result.stdout

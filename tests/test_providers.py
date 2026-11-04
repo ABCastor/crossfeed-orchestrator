@@ -102,6 +102,28 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(providers.api_base('http://127.0.0.1:4319', 'crossfeed-chat'), 'http://127.0.0.1:4319/v1')
         self.assertIsNone(providers.NoRedirect().redirect_request(None, None, None, None, None, None))
 
+    def test_op_reads_headless_with_service_account_so_no_app_raises_a_prompt(self):
+        # 4 Nov 2026: an Orca plugin ran the quota refresh; op, with no service account in
+        # Orca's environment, asked the 1Password app to approve Orca every ~30 minutes.
+        ref = 'op://' + 'a'*26 + '/API/credential'
+        token = self.root/'sa-token'; token.write_text('ops_fake_service_account\n')
+        env = {k: v for k, v in os.environ.items() if k != 'OP_SERVICE_ACCOUNT_TOKEN'}
+        env['OP_SERVICE_ACCOUNT_TOKEN_FILE'] = str(token)
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(providers.subprocess, 'run', return_value=Mock(returncode=0, stdout=KEY)) as run:
+            self.assertEqual(providers.resolve_key(ref), KEY)
+        child = run.call_args.kwargs['env']
+        self.assertEqual(child['OP_SERVICE_ACCOUNT_TOKEN'], 'ops_fake_service_account')
+        self.assertNotEqual(child['HOME'], os.environ.get('HOME'))  # no desktop-app probe
+        self.assertTrue(Path(child['HOME']).is_dir())
+        self.assertFalse((Path(child['HOME'])/'Library/Group Containers/2BUA8C4S2C.com.1password').exists())
+        # No service account at all: plain op, the person at the keyboard approves as before.
+        env['OP_SERVICE_ACCOUNT_TOKEN_FILE'] = str(self.root/'missing')
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(providers.subprocess, 'run', return_value=Mock(returncode=0, stdout=KEY)) as run:
+            providers.resolve_key(ref)
+        self.assertIsNone(run.call_args.kwargs.get('env'))
+
     def test_key_in_url_is_refused_before_network_or_reflection(self):
         with self.assertRaises(providers.ProviderError) as raised:
             providers.probe('openai-compatible', 'https://example.com/' + KEY, key=KEY)
