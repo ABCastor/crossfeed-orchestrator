@@ -555,7 +555,9 @@ def main():
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import vault_guard
         outputs = [str(p) for p in (args.events, args.last) if p]
-        if vault_guard.refuse_or_pass(vault_guard.check("chatgpt", "read-only", None, "", outputs)):
+        working = [str(args.prompt_file)] if args.prompt_file else []
+        if vault_guard.refuse_or_pass(vault_guard.check("chatgpt", "read-only", None, "", outputs,
+                                                         working=working)):
             return vault_guard.REFUSED
         return run(args)
     except Rejected as error:

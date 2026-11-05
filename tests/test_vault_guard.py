@@ -128,6 +128,16 @@ class GuardRules(Planted):
         self.assertTrue(vault_guard.check("chatgpt", "read-only", None, "", [str(self.vault / "r.md")]))
         self.assertEqual(vault_guard.check("chatgpt", "read-only", None, "", [str(self.work / "r.md")]), [])
 
+    def test_working_files_in_vault_refused(self):
+        # 5 Nov 2026: PROMPT.md / KEY / run.log kept in a vault consult folder were committed.
+        for name in ("PROMPT.md", "KEY", "run.log"):
+            self.assertTrue(vault_guard.check("chatgpt", "read-only", None, "", working=[str(self.vault / "Projects" / name)]), name)
+        self.assertEqual(vault_guard.check("chatgpt", "read-only", None, "", working=[str(self.work / "PROMPT.md")]), [])
+        out = subprocess.run([sys.executable, str(SCRIPTS / "vault_guard.py"), "check", "--wrapper", "chatgpt",
+                              "--mode", "read-only", "--work", str(self.vault / "PROMPT.md")],
+                             input="", capture_output=True, text=True, env={**os.environ, "CROSSFEED_PROTECTED_ROOTS": str(self.vault)})
+        self.assertEqual(out.returncode, vault_guard.REFUSED)
+
     def test_incident_brief_is_a_write_target_but_reading_is_not(self):
         hits = vault_guard.brief_targets(INCIDENT_BRIEF.format(vault=self.vault), vault_guard.protected_roots())
         self.assertEqual(len(hits), 1)

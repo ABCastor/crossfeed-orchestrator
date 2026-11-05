@@ -139,9 +139,21 @@ def _codex_config_hits(configs: list[str], roots: list[Path]) -> list[str]:
 
 
 def check(wrapper: str, mode: str, directory: str | None, prompt: str,
-          outputs: list[str] | None = None, configs: list[str] | None = None) -> list[str]:
+          outputs: list[str] | None = None, configs: list[str] | None = None,
+          working: list[str] | None = None) -> list[str]:
     roots = protected_roots()
     reasons = []
+    # Added 5 Nov 2026: the caller's own working files (prompt, run key, run log, receipt) are
+    # scratch too. Consult runs kept PROMPT.md, KEY and run.log in the vault and the auto-snapshot
+    # committed them, though the worker's RESPONSE.md was refused. `working` names those files.
+    for work in working or []:
+        if not work:
+            continue
+        w = _real(work)
+        for root in roots:
+            if _inside(w, root):
+                reasons.append(f"working file {w} (prompt, run key, log or receipt) is inside the protected "
+                               f"folder {root}; run folders live outside it, e.g. ~/ws/consults/<project>/<date-slug>/")
     if directory and mode == "write":
         d = _real(directory)
         for root in roots:
@@ -217,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--dir")
     c.add_argument("--out", action="append", default=[])
     c.add_argument("--config", action="append", default=[])
+    c.add_argument("--work", action="append", default=[], help="a prompt/key/log/receipt file the caller keeps")
     c.add_argument("--prompt-file", help="read the brief from this file instead of stdin")
     sub.add_parser("profile", help="print the Seatbelt profile, or exit 5 when it cannot be applied")
     sub.add_parser("roots")
@@ -238,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             prompt = ""
     else:
         prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
-    return refuse_or_pass(check(args.wrapper, args.mode, args.dir, prompt, args.out, args.config))
+    return refuse_or_pass(check(args.wrapper, args.mode, args.dir, prompt, args.out, args.config, args.work))
 
 
 if __name__ == "__main__":
