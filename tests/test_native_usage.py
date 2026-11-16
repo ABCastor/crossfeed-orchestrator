@@ -269,6 +269,37 @@ class CopilotTests(unittest.TestCase):
 class FleetWiringTests(unittest.TestCase):
     """The readers plug into the existing refresh: registry, one fetch per provider, honest failure."""
 
+    def test_claude_codexbar_source_is_independent_of_expired_cli_credentials(self):
+        # CodexBar's web answer can contain a synthetic five-hour slot, not a measured zero.
+        payload = [{"provider": "claude", "source": "web", "usage": {
+            "updatedAt": fleetctl.iso(), "accountEmail": "private@example.invalid",
+            "loginMethod": "Claude Max 20x",
+            "primary": {"usedPercent": 0, "windowMinutes": 300, "isSyntheticPlaceholder": True},
+            "secondary": {"usedPercent": 86, "windowMinutes": 10080,
+                          "resetsAt": fleetctl.iso(dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1))},
+            "extraRateWindows": [{"id": "synthetic-extra", "title": "Placeholder",
+                                  "window": {"usedPercent": 0, "isSyntheticPlaceholder": True}}]}}]
+        roster = {"quota_pools": {"claude": {
+            "quota_refresh": {"oracle": "codexbar", "provider": "claude", "ttl_s": 300}}}}
+        response = type("Result", (), {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""})()
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(native, "_claude_credential_records", return_value=[claude_record(-60)]) as credentials, \
+                patch.object(fleetctl.subprocess, "run", return_value=response) as run:
+            state = Path(folder)
+            self.assertEqual(fleetctl.refresh_stale_pools(state, ["claude"], roster=roster, force=True),
+                             {"claude": "refreshed"})
+            runtime = json.loads((state / "runtime.json").read_text())
+            snap = runtime["quota_snapshots"]["claude"]
+            self.assertEqual(snap["source"], "codexbar")
+            self.assertEqual(snap["windows"]["secondary"]["used_percent"], 86)
+            self.assertEqual(snap["plan"], "Claude Max 20x")
+            self.assertNotIn("idle_windows", snap)
+            self.assertNotIn("private@example.invalid", json.dumps(runtime))
+            self.assertNotIn("claude", runtime["quota_refresh_errors"])
+            credentials.assert_not_called()
+            self.assertEqual(run.call_args.args[0][1:],
+                             ["usage", "--provider", "claude", "--format", "json"])
+
     def setUp(self):
         self.roster = json.loads((ROOT / "examples" / "access-overlay.example.json").read_text())
         self.tmp = tempfile.TemporaryDirectory(dir="/tmp")

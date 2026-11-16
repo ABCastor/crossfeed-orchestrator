@@ -1225,8 +1225,8 @@ def codexbar_observed(
     output into the same snapshot shape `current_pool_state` consumes:
     {source, observed_at, windows:{name:{used_percent, reset_at}}}.
 
-    CodexBar is the authoritative oracle (it reads Claude's Keychain-OAuth token
-    itself; the fleet never touches the credential). Providers CodexBar cannot
+    CodexBar owns its provider-specific source selection and authentication;
+    the fleet never touches its credentials. Providers CodexBar cannot
     currently serve (not logged in / no fetch strategy) return available=False
     with CodexBar's own reason, so the caller records a gauge error and can fall
     back to a recent successful reading rather than guessing."""
@@ -1313,7 +1313,7 @@ def codexbar_observed(
 
     for slot in ("primary", "secondary", "tertiary"):
         window = usage.get(slot)
-        if isinstance(window, dict):
+        if isinstance(window, dict) and window.get("isSyntheticPlaceholder") is not True:
             add(
                 slot,
                 window.get("usedPercent"),
@@ -1325,6 +1325,8 @@ def codexbar_observed(
         if not isinstance(extra, dict):
             continue
         window = extra.get("window") or {}
+        if window.get("isSyntheticPlaceholder") is True:
+            continue
         name = str(extra.get("id") or f"extra_{len(windows)}")
         add(
             name,
