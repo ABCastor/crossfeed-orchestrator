@@ -44,7 +44,13 @@ exit 0
 FAKE_ROSTER = '''#!/bin/bash
 case "${1:-}" in
   check|check-lane) exit 0;;
-  lane-json) printf '%s\\n' '{"selector":"fake-model"}';;
+  lane-json)
+    if [ "$2" = model-auto ]; then
+      printf '%s\\n' '{"selector":"auto","quota_pool":"github-copilot-student"}'
+    else
+      printf '%s\\n' '{"selector":"fake-model"}'
+    fi
+    ;;
   lookup) printf 'model-%s\\n' "$3";;
   *) exit 9;;
 esac
@@ -54,6 +60,7 @@ case "${1:-}" in
   effort) printf 'high\\t%s\\troster fake\\n' "$2";;
   route) printf '%s\\n' fake-lane;;
   acquire) printf '%s\\n' fake-lease-token;;
+  switch) printf '%s\\n' auto;;
   release|pool-slot|model-gate) exit 0;;
   *) exit 9;;
 esac

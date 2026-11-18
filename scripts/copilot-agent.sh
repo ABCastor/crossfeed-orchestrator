@@ -75,7 +75,6 @@ fi
 
 [ -n "$PROMPT" ] || _usage_error "--prompt or --prompt-file is required"
 [ -d "$DIR" ] || _usage_error "work directory not found: $DIR"
-command -v copilot >/dev/null 2>&1 || { echo "copilot-agent: copilot binary not on PATH" >&2; exit 127; }
 command -v jq >/dev/null 2>&1 || { echo "copilot-agent: jq is required" >&2; exit 127; }
 crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
@@ -105,6 +104,8 @@ fi
 _gate_rc=0; "$HERE/fleetctl.py" pool-slot "$POOL" --pid $$ || _gate_rc=$?
 [ "$_gate_rc" != 5 ] || exit 5
 if [ "$MODEL" != auto ] && [ "$_gate_rc" != 0 ]; then exit 5; fi
+# An off or occupied pool refuses even on a host without the Copilot CLI.
+command -v copilot >/dev/null 2>&1 || { echo "copilot-agent: copilot binary not on PATH" >&2; exit 127; }
 echo "copilot-agent: effort service-chosen: the service chooses the level" >&2
 
 tmp_events=""

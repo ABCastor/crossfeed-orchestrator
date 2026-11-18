@@ -7,6 +7,7 @@ install of the engine without depending on another test module or a shipped over
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -435,8 +436,16 @@ class PoolSlotTests(unittest.TestCase):
         bindir = self.state / "bin"
         bindir.mkdir()
         (bindir / "python3").symlink_to(sys.executable)
+        jq = shutil.which("jq")
+        self.assertIsNotNone(jq, "jq is required for the Copilot roster preflight")
+        (bindir / "jq").symlink_to(Path(jq).resolve())
+        data = roster()
+        data["lanes"].append(dict(
+            lane("github-copilot-student-auto", "github-copilot-auto", tier="observer"),
+            harness="copilot", provider="github-copilot", selector="auto", quota_pool="github-copilot-student",
+        ))
         overlay = self.state / "overlay.json"
-        overlay.write_text(json.dumps(roster()), encoding="utf-8")
+        overlay.write_text(json.dumps(data), encoding="utf-8")
         # No claude, codex or copilot on this PATH: a run the gate lets through stops at the
         # binary check (127) and never reaches a real provider.
         env = dict(os.environ, PATH=f"{bindir}:/usr/bin:/bin", FLEET_STATE_DIR=str(self.state),
@@ -456,6 +465,8 @@ class PoolSlotTests(unittest.TestCase):
                                       text=True, env=env, timeout=60)
                 self.assertEqual(free.returncode, 127, free.stderr)
                 self.assertNotIn("one run at a time", free.stderr)
+                if wrapper == "copilot":
+                    self.assertIn("copilot binary not on PATH", free.stderr)
 
 
 if __name__ == "__main__":

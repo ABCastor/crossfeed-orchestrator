@@ -1086,10 +1086,15 @@ test_copilot_write_exit() {
 test_copilot_missing_exit() {
   local case_dir rc
   case_dir="$(new_case copilot-missing)"
-  HOME="$case_dir/home" PATH="$EMPTY_BIN:/usr/bin:/bin" /bin/bash "$COPILOT_WRAPPER" --prompt quick \
+  # Keep roster and vault preflight tools on PATH, but not the fake Copilot CLI.
+  mkdir -p "$case_dir/preflight-bin"
+  ln -s "$REAL_PYTHON3" "$case_dir/preflight-bin/python3"
+  ln -s "$REAL_JQ" "$case_dir/preflight-bin/jq"
+  HOME="$case_dir/home" PATH="$case_dir/preflight-bin:/usr/bin:/bin" /bin/bash "$COPILOT_WRAPPER" --prompt quick \
     >"$case_dir/stdout" 2>"$case_dir/stderr"
   rc=$?
   [ "$rc" -eq 127 ] || { fail "expected missing-binary rc 127, got $rc"; return 1; }
+  contains "$case_dir/stderr" 'copilot binary not on PATH' || { fail "did not reach the Copilot binary check"; return 1; }
 }
 
 test_copilot_invalid_json_exit() {
