@@ -112,6 +112,7 @@
   "quota_pools": {
     "opencode-go": {
       "label": "OpenCode Go",
+      "funding": "included",
       "plan": {
         "name": "Example OpenCode Go",
         "price": null,
@@ -173,6 +174,7 @@
     },
     "claude": {
       "label": "Claude",
+      "funding": "included",
       "plan": {
         "name": "Example Claude",
         "price": null,
@@ -190,6 +192,7 @@
     },
     "codex": {
       "label": "Codex (ChatGPT)",
+      "funding": "included",
       "plan": {
         "name": "Example Codex (ChatGPT)",
         "price": null,
@@ -223,6 +226,7 @@
     },
     "antigravity-gemini": {
       "label": "Antigravity · Gemini",
+      "funding": "included",
       "plan": {
         "name": "Example Antigravity · Gemini",
         "price": null,
@@ -245,6 +249,7 @@
     },
     "antigravity-3p": {
       "label": "Antigravity · Claude and GPT",
+      "funding": "included",
       "plan": {
         "name": "Example Antigravity · Claude and GPT",
         "billing": "subscription",
@@ -264,6 +269,7 @@
       "quota_source": "<describe this pool's quota_source>"
     },
     "antigravity": {
+      "funding": "included",
       "quota_refresh": null,
       "quota_source": "<describe this pool's quota_source>",
       "plan": {
@@ -274,6 +280,7 @@
     },
     "github-copilot-student": {
       "label": "GitHub Copilot",
+      "funding": "included",
       "plan": {
         "name": "Example GitHub Copilot",
         "price": null,
@@ -293,6 +300,7 @@
     },
     "gemini-metered": {
       "label": "Gemini API",
+      "funding": "metered",
       "plan": {
         "name": "Example Gemini API",
         "billing": "per-token",
@@ -313,6 +321,7 @@
     },
     "openrouter-free": {
       "label": "OpenRouter",
+      "funding": "verified-free",
       "plan": {
         "name": "Example OpenRouter",
         "price": null,
@@ -329,6 +338,7 @@
     },
     "chatgpt-work": {
       "label": "ChatGPT Chat via Crossfeed Chat",
+      "funding": "included",
       "pro_weekly_allowance": 0,
       "quota_refresh": null,
       "quota_source": "No authoritative Chat quota reading; Pro allowance is an owner-set estimate. Do not borrow Codex/Work snapshots.",
@@ -342,6 +352,7 @@
     },
     "openrouter-mimo": {
       "label": "OpenRouter MiMo",
+      "funding": "metered",
       "plan": {
         "name": "MiMo V2.6 paid opt-in",
         "billing": "per-token",
@@ -358,6 +369,7 @@
     },
     "antigravity-argon": {
       "label": "Antigravity · Argon",
+      "funding": "included",
       "plan": {
         "name": "Antigravity · Argon individual allowance",
         "billing": "subscription"

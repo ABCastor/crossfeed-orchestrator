@@ -274,6 +274,10 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
     Invalid/stale receipts are explicit missing selection, never an unrelated
     dispatch's replay record. This does not invent task correctness or usage.
     """
+    try:
+        import funding
+    except ModuleNotFoundError:
+        from scripts import funding
     result = {"effort": effort or None, "role": role or None, "family": family or None,
               "selection": None}
     source = selection if selection is not None else os.environ.get("FLEET_SELECTION_FILE")
@@ -330,6 +334,8 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
                                   if (v := numeric(raw["q"].get(k))) is not None}
                     if type(raw["q"].get("unknown")) is bool:
                         clean["q"]["unknown"] = raw["q"]["unknown"]
+                if (cash := funding.receipt_fields(raw.get("cash"))) is not None:
+                    clean["cash"] = cash
                 fallback = raw.get("pro_fallback")
                 if isinstance(fallback, dict) and isinstance(fallback.get("requested_model"), str):
                     clean["pro_fallback"] = {key: fallback[key] for key in ("requested_model", "reason", "order") if key in fallback}
@@ -396,6 +402,12 @@ def begin(wrapper, requested, selected, lane, role, effort=None, selection=None,
             "afk_attempt_id": os.environ.get("AFK_ATTEMPT_ID")}
     record.update(selection_metadata(selection, model=record["selected_model"], lane_id=record["lane_id"],
                                      effort=effort, pool=pool, harness=wrapper, role=role, family=family))
+    try:
+        import funding
+    except ModuleNotFoundError:
+        from scripts import funding
+    selected_cash = ((record.get("selection") or {}).get("choice") or {}).get("cash")
+    record["cash"] = selected_cash or funding.quote(funding.classify(data, pool, item))
     record["model_identity"] = canonical_model(record["selected_model"], data)
     return record
 

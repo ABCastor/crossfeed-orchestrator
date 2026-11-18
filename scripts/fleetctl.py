@@ -31,6 +31,13 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 try:
+    import funding
+except ImportError:
+    _funding_spec = importlib.util.spec_from_file_location("fleet_funding", Path(__file__).with_name("funding.py"))
+    funding = importlib.util.module_from_spec(_funding_spec)
+    _funding_spec.loader.exec_module(funding)
+
+try:
     import chatgpt_pro
 except ImportError:
     # Hooks also load this controller by file path from a different directory.
@@ -3262,9 +3269,10 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         notice = (f"fleetctl: selected pool={option['pool']} model={option['model_key']} "
                   f"level={option['level']} selection={option['selection_file']} receipt={receipt} "
                   f"model_receipt={identity} diagnostics={attempt_dir / 'stderr.log'}")
-        print(notice, file=sys.stderr, flush=True)
+        cash = option.get("cash") or funding.quote("unknown")
+        print(f"{notice} | cash {funding.summary(cash)}", file=sys.stderr, flush=True)
         if args.dry_run:
-            print(json.dumps({"command_argv": argv, "cwd": str(directory),
+            print(json.dumps({"command_argv": argv, "cwd": str(directory), "cash": cash,
                               "selection_file": option["selection_file"],
                               "receipt": str(receipt), "model_receipt": str(identity)}, indent=2))
             return 0
@@ -3272,7 +3280,7 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         record = {"schema": "fleet-dispatch/v1", "dispatch_id": dispatch_id,
                   "started_at": iso(), "selection_file": option["selection_file"],
                   "pool": option["pool"], "selected_model": option["model_key"],
-                  "level": option["level"], "model_receipt": str(identity),
+                  "level": option["level"], "model_receipt": str(identity), "cash": cash,
                   "stderr_file": str(attempt_dir / "stderr.log")}
         atomic_json(receipt, record)
         # Failed workers may have printed partial answers. Keep those private so
@@ -4033,10 +4041,9 @@ def metered_pool_usage(state_dir: Path, roster: dict[str, Any] | None) -> dict[s
     metered: dict[str, Any] = {}
     day_start = local_day_start()
     for pool, config in sorted((roster.get("quota_pools") or {}).items()):
-        cap = config.get("daily_usd_cap")
-        if cap is None:
+        cap = funding.number(config.get("daily_usd_cap"))
+        if cap is None or cap < 0:
             continue
-        cap = float(cap)
         spent = pool_spent_since(state_dir, roster, pool, day_start)
         metered[pool] = {
             "governed_by": "daily_usd_cap",
@@ -4051,6 +4058,30 @@ def metered_pool_usage(state_dir: Path, roster: dict[str, Any] | None) -> dict[s
             ),
         }
     return metered
+
+
+# BR-CASH-001
+def cash_by_pool(roster, state_dir, metered=None):
+    if not roster:
+        return {}
+    if metered is None:
+        metered = metered_pool_usage(state_dir, roster)
+    configs = roster.get("quota_pools", {})
+    result = {}
+    for pool in sorted(set(configs) | lane_pools(roster)):
+        config = configs.get(pool, {})
+        billing = funding.classify(roster, pool)
+        budget = funding.legacy_budget(pool, config, state_dir, metered.get(pool)) if billing == "metered" else {}
+        result[pool] = funding.quote(billing, budget)
+    return result
+
+
+def _cash_brief(overview):
+    lines = [f"  {pool['pool']}: {funding.summary(pool['cash'], symbol='')}"
+             for pool in overview["pools"] if pool.get("cash")]
+    lines += [f"  {lane}: {funding.summary(cash, symbol='')}"
+              for lane, cash in overview.get("lane_cash", {}).items()]
+    return ["Cash (USD, separate from quota pressure):", *lines] if lines else []
 
 
 def _atomic_json_ordered(path: Path, value: Any) -> None:
@@ -4877,6 +4908,13 @@ def fleet_overview(
             lane_counts[lane["quota_pool"]] = lane_counts.get(lane["quota_pool"], 0) + 1
     snapshots = runtime.get("quota_snapshots") or {}
     metered = metered_pool_usage(state_dir, roster)
+    cash = cash_by_pool(roster, state_dir, metered)
+    lane_cash = {}
+    for lane in roster.get("lanes", []):
+        pool, lane_id = lane.get("quota_pool"), lane.get("lane_id")
+        billing = funding.classify(roster, pool, lane)
+        if lane_id and cash.get(pool, {}).get("funding") != billing:
+            lane_cash[lane_id] = funding.quote(billing)
     measured_runtime = _without_levels(runtime)
     pools: list[dict[str, Any]] = []
     for pool, config in pools_config.items():
@@ -4930,6 +4968,7 @@ def fleet_overview(
             "measured": has_source,
             "plan": pool_plan(config, snapshot),
             "metered": metered.get(pool),
+            "cash": cash.get(pool),
             "pro_usage": roster.get("chatgpt_pro_usage", {}).get(pool),
             "lanes": lane_counts.get(pool, 0),
         }
@@ -4990,6 +5029,7 @@ def fleet_overview(
         "level_meaning": LEVEL_MEANING,
         "pools": sorted(pools, key=lambda pool: pool["label"].casefold()),
         "models": models,
+        "lane_cash": lane_cash,
         "effort_problems": effort_problems(roster, state_dir, now),
         "recent_runs": recent_model_runs(state_dir),
     }
@@ -5134,6 +5174,7 @@ def _render_verbose_brief(overview: dict[str, Any]) -> str:
     lines.extend(_pins_text(overview))
     if overview.get("effort_problems"):
         lines.append("Effort evidence needs recheck: " + " | ".join(overview["effort_problems"]))
+    lines.extend(_cash_brief(overview))
     lines.append("Pick with: fleetctl.py select --role R")
     return "\n".join(lines)
 
@@ -5245,6 +5286,7 @@ def render_brief(
         lines.append(worker_line)
     if directive:
         lines.append(directive)
+    lines.extend(_cash_brief(overview))
     lines.append("pick: fleetctl.py select --role R [--stakes S]")
     return "\n".join(lines)
 
@@ -5288,6 +5330,7 @@ def show_usage(
         "wrapper_run_ledger": run_ledger_usage(state_dir),
         "quota_pools": quota_pools,
         "metered_pools": metered_pools,
+        "cash_by_pool": cash_by_pool(roster, state_dir, metered_pools),
         "truth_boundary": {
             "authoritative_percent_source": "authenticated OpenCode Go console",
             "local_cost_is_quota_debit": False,
@@ -5345,8 +5388,10 @@ def show_usage(
             f"{pool} (metered): {info['admission']} — "
             f"${info['estimated_spent_usd_today']:.4f} of ${info['daily_usd_cap']:.2f} estimated "
             f"spent today, ${info['estimated_remaining_usd']:.4f} left. "
-            "No percentage quota exists for this pool; the daily cap is the limiter."
+            "No percentage quota exists for this pool."
         )
+    for pool, cash in result["cash_by_pool"].items():
+        print(f"{pool} cash: {funding.summary(cash)}")
     print(f"OpenCode Go state: {state}")
     if evidence.get("bottleneck_used_percent") is not None:
         print(
@@ -6153,7 +6198,8 @@ def main() -> int:
             else:
                 print(selection["choice"]["command"])
                 for option in selection["top3"]:
-                    print(f"{option['pool']}/{option['model_key']}/{option['level']}: {option['score']:.6f}")
+                    print(f"{option['pool']}/{option['model_key']}/{option['level']}: "
+                          f"{option['score']:.6f} | cash {funding.summary(option['cash'])}")
                 print("Pool prices: " + json.dumps(selection["lambdas"], sort_keys=True))
             return 0
         if args.command == "route":

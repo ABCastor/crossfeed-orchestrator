@@ -15,6 +15,12 @@ Scope: the Benchmarks page and local admission-check policy, the opt-in paid MiM
 - tested-by: `tests/test_business_benchmark_policy.py:BenchmarkPolicyTests.test_admission_rule_is_documented_and_referenced` and `tests/test_benchmark_page.py:JobTests.test_each_job_pick_has_rankings_or_says_none`.
 - Review when: the owner asks for more local benchmarking or changes the admission-check shape or receipt.
 
+## BR-CASH-001 — Cash and quota are separate [DECIDED · supplied cash-aware routing build brief, 18 Nov 2026]
+
+- RULE: A key or list price does not establish who pays. Show funding and incremental cash separately from quota pressure and API-equivalent cost. Unknown or malformed pricing must not be represented as a zero quote or grant bounded paid admission.
+- implemented-by: `scripts/funding.py:classify`, `scripts/selector.py:enumerate_options`, `scripts/fleetctl.py:cash_by_pool`, `scripts/run_identity.py:selection_metadata`.
+- tested-by: `tests/test_business_cash_routing.py:CashVisibilityTests`.
+
 ## BR-MIMO-001 — MiMo paid calls require explicit opt-in [DECIDED · owner instruction supplied as 13 Oct 2026]
 
 - RULE: Only `xiaomi/mimo-v2.6-pro` and `xiaomi/mimo-v2.6-flash` may use the paid route. Direct calls require `--paid-mimo`; selector and dispatch require an allow list naming `openrouter-mimo`. Every other default OpenRouter call keeps the live free-only gate. No automatic paid fallback.

@@ -21,8 +21,10 @@ import uuid
 from typing import Any
 
 try:
+    import funding
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
+    from scripts import funding
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
 
@@ -51,9 +53,7 @@ WRAPPERS["chatgpt-chat"] = "chatgpt-agent.sh"
 
 
 def _number(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
-        return float(value)
-    return None
+    return funding.number(value)
 
 
 def pool_lambda(projected_used_percent_at_reset: float | None,
@@ -122,7 +122,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 card = roster.get("model_cards", {}).get(model, {})
                 candidates.append({"model_key": model, "model": run_as, "harness": pool,
                                    "quota_pool": pool, "direct": True,
-                                   **({"price_1m": card["price_1m"]} if "price_1m" in card else {}),
+                                   **{k: card[k] for k in ("price_1m", "funding") if k in card},
                                    "capabilities": card.get("capabilities", {"input": ["text"]}),
                                    "allowed_modes": card.get("allowed_modes", ["read-only", "write"]),
                                    "access_status": card.get("access_status", "verified"),
@@ -133,6 +133,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         key, harness, pool = lane.get("model_key"), lane.get("harness"), lane.get("quota_pool")
         label = lane.get("lane_id") or f"{pool}/{key}"
         why = None
+        cash_class = funding.classify(roster, pool, lane)
         privacy_reason = fleet.data_policy_refusal(lane, data_class)
         if privacy_reason:
             why = privacy_reason
@@ -143,6 +144,11 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "paid pool requires explicit --allow"
         elif fleet.data_policy_refusal(lane, "code") and (harness != "opencode" or mode != "read-only"):
             why = "public-only lane requires prompt-contained OpenCode read-only call"
+        # BR-CASH-001
+        elif funding.explicitly_unknown(roster, pool, lane, cash_class):
+            why = "funding is unknown"
+        elif cash_class == "metered" and "price_1m" in lane and funding.rates(lane["price_1m"]) is None:
+            why = "missing or invalid tariff"
         elif allowed is not None and pool not in allowed:
             why = "pool forbidden for role"
         elif lane.get("access_status") != "verified" or lane.get("admission_status") != "active":
@@ -196,7 +202,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "model_identity": canonical_model(key, roster),
                   "run_as": lane.get("model") or lane.get("selector") or key,
                   "mode": mode, "band": band, "pool_state": state,
-                  "provider": lane.get("provider"),
+                  "provider": lane.get("provider"), "funding": cash_class,
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
         if "price_1m" in lane:
             option["source_price_1m"] = lane["price_1m"]
@@ -559,12 +565,16 @@ def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
 
 
 def _cost(row: dict, allowance: float | None) -> tuple[float | None, float | None]:
-    tokens, prices = row.get("tokens_per_task") or {}, row.get("price_1m") or {}
-    values = [_number(data.get(side)) for data in (tokens, prices) for side in ("in", "out")]
-    if any(value is None or value < 0 for value in values):
+    prices = funding.rates(row.get("price_1m"))
+    tokens = row.get("tokens_per_task")
+    if prices is None or not isinstance(tokens, dict):
         return None, None
-    incoming, outgoing, in_price, out_price = values
-    usd = (incoming * in_price + outgoing * out_price) / 1_000_000
+    incoming, outgoing = (_number(tokens.get(side)) for side in ("in", "out"))
+    if any(value is None or value < 0 for value in (incoming, outgoing)):
+        return None, None
+    usd = incoming * (prices[0] / 1_000_000) + outgoing * (prices[1] / 1_000_000)
+    if not math.isfinite(usd):
+        return None, None
     return usd, usd / allowance * 100 if allowance is not None else None
 
 
@@ -796,6 +806,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             price = option["source_price_1m"]
             return dict(row, price_1m=price if isinstance(price, dict) else {})
         return row
+    pool_cash = fleet.cash_by_pool(roster, state_dir)
     scored = []
     weights = dict(DEFAULTS["stakes_weights"], **policy.get("stakes_weights", {}))
     uncertainty_weight = max(1e-9, float(policy.get("uncertainty_weight", DEFAULTS["uncertainty_weight"])))
@@ -838,7 +849,14 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         if stakes == "high":
             penalty = min(penalty, high_cost_cap)
         score = quality if stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
-        scored.append(dict(option, quality=quality, q={"mean": mean, "sd": sd, "unknown": unknown},
+        cash_class = option["funding"]
+        budget = ({k: v for k, v in pool_cash.get(option["pool"], {}).items()
+                   if k not in ("funding", "estimate_usd", "worst_case_usd")}
+                  if cash_class == "metered" else {})
+        # A market/API-equivalent price is not authority to quote a cash tariff.
+        estimate = cost["estimated_usd"] if "source_price_1m" in option else None
+        cash = funding.quote(cash_class, budget, estimate=estimate)
+        scored.append(dict(option, cash=cash, quality=quality, q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
@@ -913,7 +931,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                           "level": item["level"], **item.get("variety", {})}
                                          for item in candidates]},
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
-              "pool_prices": prices, "role": role, "family": family, "stakes": stakes,
+              "pool_prices": prices, "pool_cash": pool_cash, "role": role, "family": family, "stakes": stakes,
               "rejected": rejected, "allow": allow_list, "selection_file": str(receipt),
               "target": list(target) if target is not None else None,
               "lead": lead, "lead_pressure": pressure}
