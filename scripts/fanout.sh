@@ -53,7 +53,7 @@ case "$DEFAULT_TIMEOUT" in '') : ;; *[!0-9]*) echo "fanout: --timeout must be a 
 # Run artifacts are runtime state, not source. Defaulting them into the source tree meant a
 # clone accumulated manifests and prompts inside itself; they belong beside the rest of the
 # fleet's state. An explicit --out is unaffected.
-[ -n "$OUT" ] || OUT="${FLEET_STATE_DIR:-$HOME/.local/state/orchestrator}/runs/run-$(date +%Y%m%d-%H%M%S)-$$"
+[ -n "$OUT" ] || OUT="${FLEET_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator}/runs/run-$(date +%Y%m%d-%H%M%S)-$$"
 if [ -e "$OUT" ] && [ -n "$(find "$OUT" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
   echo "fanout: refusing non-empty output directory: $OUT" >&2
   # Not a usage error (the flags were fine) — a refused campaign that dispatched nothing.
@@ -567,6 +567,9 @@ for id in "${IDS[@]}"; do
     dispatch_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
     CROSSFEED_DISPATCH_ID="$dispatch_id" "$script" "${args[@]}" >/dev/null 2>"$OUT/$id.err"
     rc=$?
+    # This fanout created the exact task events path. A missing receipt does not
+    # change its ownership; the wrapper has returned and cannot need it any more.
+    rm -f "$OUT/$id.events.jsonl" || echo 'fanout: SESSION CLEANUP FAILED: cannot remove task events' >&2
     set -e
     classify_wrapper_outcome "$agent" "$rc" "$OUT/$id.out" "$OUT/$id.err"
     reason="$WRAPPER_OUTCOME_REASON"

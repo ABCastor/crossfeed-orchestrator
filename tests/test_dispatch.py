@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import signal
+import time
 import sys
 import tempfile
 import unittest
@@ -78,6 +80,27 @@ class DispatchTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return rc, calls, stderr.getvalue()
 
+    def test_attempt_transcripts_removed_after_stdout_last_api_and_failure(self):
+        for mode in ('stdout', 'last', 'api', 'failure', 'cancel'):
+            with self.subTest(mode=mode):
+                self.args.last = self.root / 'caller-answer' if mode == 'last' else None
+                answer = {} if mode == 'api' else None
+                code = 42 if mode == 'failure' else 143 if mode == 'cancel' else 0
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = fleetctl.dispatch_selection(self.selection([self.option(mode, code)]),
+                                                     self.args, self.state, 'task', response=answer)
+                self.assertEqual(rc, code)
+                for attempt in (self.state / 'dispatches').iterdir():
+                    self.assertFalse((attempt / 'answer.txt').exists())
+                    self.assertFalse((attempt / 'stdout.log').exists())
+                    self.assertTrue((attempt / 'dispatch.json').is_file())
+                    self.assertTrue((attempt / 'answer.txt.crossfeed.json').is_file())
+                    self.assertTrue((attempt / 'stderr.log').is_file())
+                if mode == 'last':
+                    self.assertEqual(self.args.last.read_text(), 'last answer\n')
+                if mode == 'api':
+                    self.assertEqual(answer['content'], 'api answer\n')
+
     def test_prompt_is_literal_and_selection_environment_survives(self):
         prompt = 'line 1\\n"quotes" $HOME $(touch forbidden) `touch forbidden` ; --dir <task>'
         selected = self.option("chosen")
@@ -98,7 +121,8 @@ class DispatchTests(unittest.TestCase):
         self.assertNotIn("actual_model", json.loads(receipt.read_text()))
         self.assertIn("model_receipt=", diagnostic)
         self.assertIn("diagnostics=", diagnostic)
-        self.assertIn(prompt, receipt.with_name("stderr.log").read_text())
+        self.assertNotIn(prompt, receipt.with_name("stderr.log").read_text())
+        self.assertIn("stderr_bytes=", receipt.with_name("stderr.log").read_text())
 
     def test_prelaunch_refusals_retry_ranked_options_once(self):
         options = [self.option("first", 4, "none"), self.option("second", 5, "none"),
@@ -190,7 +214,7 @@ class DispatchTests(unittest.TestCase):
         self.args.dry_run = True
         option = self.option("preview")
         stdout = io.StringIO()
-        with mock.patch.object(subprocess, "run") as launch, contextlib.redirect_stdout(stdout):
+        with mock.patch.object(subprocess, "Popen") as launch, contextlib.redirect_stdout(stdout):
             rc, calls, _ = self.dispatch(self.selection([option]), "dry task")
         launch.assert_not_called()
         preview = json.loads(stdout.getvalue())
@@ -247,7 +271,7 @@ class DispatchTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", cli), mock.patch.object(fleetctl, "read_overlay", return_value={}), \
              mock.patch.object(fleetctl, "select_option", return_value=self.selection([option])) as select, \
              mock.patch.object(fleetctl, "refresh_stale_pools") as refresh, \
-             mock.patch.object(subprocess, "run") as launch, \
+             mock.patch.object(subprocess, "Popen") as launch, \
              contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(fleetctl.main(), 0)
         refresh.assert_not_called()
@@ -257,6 +281,48 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(select.call_args.kwargs["allow"], "antigravity-gemini:gemini-3.8-flash:*")
         self.assertEqual(select.call_args.kwargs["mode"], "write")
         self.assertIn(prompt_file.read_text(), json.loads(stdout.getvalue())["command_argv"])
+
+    def test_real_signals_forward_to_worker_group_and_remove_transcripts(self):
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=signum):
+                ready = self.root / f'ready-{signum}'
+                received = self.root / f'received-{signum}'
+                worker = self.root / f'signal-worker-{signum}.py'
+                worker.write_text("import pathlib, signal, sys, time\n"
+                    f"def stop(sig, frame):\n pathlib.Path({str(received)!r}).write_text(str(sig)); sys.exit(128+sig)\n"
+                    "signal.signal(signal.SIGTERM, stop)\nsignal.signal(signal.SIGHUP, stop)\n"
+                    "args=sys.argv; pathlib.Path(args[args.index('--last')+1]).write_text('private answer')\n"
+                    "print('private partial',flush=True)\n"
+                    f"pathlib.Path({str(ready)!r}).write_text(str(__import__('os').getpid()))\ntime.sleep(30)\n")
+                option = self.option(f'signal-{signum}')
+                option['command_argv'] = [sys.executable, str(worker), '--prompt', '<task>']
+                runner = self.root / f'signal-runner-{signum}.py'
+                runner.write_text("import argparse,json,pathlib,sys\n"
+                    f"sys.path.insert(0,{str(ROOT / 'scripts')!r})\nimport fleetctl\n"
+                    f"args=argparse.Namespace(dir=pathlib.Path({str(self.root)!r}),last=None,dry_run=False,overlay=pathlib.Path({str(self.args.overlay)!r}))\n"
+                    f"sys.exit(fleetctl.dispatch_selection(json.loads({json.dumps(self.selection([option]))!r}),args,pathlib.Path({str(self.state)!r}),'task'))\n")
+                proc = subprocess.Popen([sys.executable, str(runner)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        start_new_session=True)
+                finished = False
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                        time.sleep(.02)
+                    self.assertTrue(ready.exists())
+                    proc.send_signal(signum)
+                    proc.communicate(timeout=10)
+                    self.assertEqual(proc.returncode, 128 + signum)
+                    self.assertEqual(received.read_text(), str(signum))
+                    self.assertFalse(list(self.state.glob('dispatches/*/answer.txt')))
+                    self.assertFalse(list(self.state.glob('dispatches/*/stdout.log')))
+                    finished = True
+                finally:
+                    if not finished and ready.exists():
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(int(ready.read_text()), signal.SIGKILL)
+                    if proc.poll() is None:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        proc.communicate()
 
     def test_stdout_has_only_worker_bytes(self):
         runner = self.root / "runner.py"

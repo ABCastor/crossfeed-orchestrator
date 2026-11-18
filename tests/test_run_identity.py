@@ -22,6 +22,24 @@ SPEC.loader.exec_module(identity)
 
 
 class IdentityWrapperTests(Sandbox):
+    def setUp(self):
+        super().setUp()
+        # Exercise the real wrappers with fake CLIs and a disposable guard fixture.
+        # The OS jail cannot nest in managed Codex; test_vault_guard owns that boundary.
+        self.wrapper_scripts = self.root / "scripts"
+        self.wrapper_scripts.mkdir()
+        for script in SCRIPTS.iterdir():
+            if script.is_file() and script.name != 'vault_guard.py':
+                (self.wrapper_scripts / script.name).symlink_to(script)
+        guard = (SCRIPTS / 'vault_guard.py').read_text().replace(
+            'SANDBOX_EXEC = "/usr/bin/sandbox-exec"', 'SANDBOX_EXEC = "/nonexistent/test-only-seatbelt"'
+        ).replace('Path(pwd.getpwuid(os.getuid()).pw_dir)', 'Path("/nonexistent/crossfeed-test-home")')
+        (self.wrapper_scripts / 'vault_guard.py').write_text(guard)
+
+    def run_script(self, name, *args, timeout=60):
+        return subprocess.run(["bash", str(self.wrapper_scripts / name), *args], env=self.env,
+                              cwd=self.root, capture_output=True, text=True, timeout=timeout)
+
     def receipts(self):
         return [json.loads(line) for line in (self.state / "runs.jsonl").read_text().splitlines()
                 if json.loads(line).get("schema") == identity.SCHEMA]
@@ -36,6 +54,7 @@ class IdentityWrapperTests(Sandbox):
         self.assertIn("Crossfeed model receipt:", result.stderr)
         self.assertIn(actual or selected, result.stderr)
         self.assertIn(record["run_id"], result.stderr)
+        self.assertIn(f"Crossfeed run {record['run_id']}.", argv.read_text())
         self.assertNotIn("Crossfeed", result.stdout)
         if last:
             self.assertEqual(last.read_text(), result.stdout)
@@ -56,11 +75,34 @@ class IdentityWrapperTests(Sandbox):
         (sessions / f"rollout-{thread}.jsonl").write_text(json.dumps(
             {"type": "turn_context", "payload": {"model": "gpt-6.1-sol"}}) + "\n")
         argv = self.fake_cli("codex", f"echo '{{\"type\":\"thread.started\",\"thread_id\":\"{thread}\"}}'\n" + FAKE_CODEX)
+        cli = self.bin / 'codex'
+        # Native delete is a separate command, so it must not overwrite launch argv.
+        cli.write_text('''#!/bin/bash
+if [ "${1:-}" = delete ]; then
+  [ "$2" = --force ] || exit 93
+  python3 - "$3" <<'PY_DELETE'
+import json, os, pathlib, sys
+ledger = pathlib.Path(os.environ['FLEET_STATE_DIR']) / 'runs.jsonl'
+assert json.loads(ledger.read_text().splitlines()[-1])['actual_model'] == 'gpt-6.1-sol'
+for path in (pathlib.Path(os.environ['CODEX_HOME']) / 'sessions').glob('**/*' + sys.argv[1] + '.jsonl'):
+    path.unlink()
+PY_DELETE
+  exit $?
+fi
+''' + f'''python3 - "$@" <<'PY_OWNERSHIP'
+import os, pathlib, sqlite3, sys
+prompt = next(value for value in sys.argv if value.startswith('Crossfeed selected model:'))
+with sqlite3.connect(pathlib.Path(os.environ['CODEX_HOME']) / 'state_5.sqlite') as db:
+    db.execute('CREATE TABLE threads(id TEXT, source TEXT, first_user_message TEXT)')
+    db.execute('INSERT INTO threads VALUES (?, ?, ?)', ('{thread}', 'exec', prompt))
+PY_OWNERSHIP
+''' + cli.read_text())
         self.off("codex", "gpt-6-astra")
         last = self.root / "answer"
         result = self.run_script("codex-agent.sh", "--model", "gpt-6-astra", "--prompt", "private task",
                                  "--dir", str(self.root), "--last", str(last), "--idle-timeout", "0")
         self.check_run(result, argv, "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol", last)
+        self.assertFalse(list(sessions.glob('rollout-*.jsonl')))
 
     def test_claude_stream_tells_the_worker_and_reports_the_provider_model(self):
         argv = self.fake_cli("claude", """echo '{"type":"system","subtype":"init","model":"claude-sonnet-5-5"}'
@@ -116,6 +158,8 @@ echo '{"type":"result","exitCode":0}'
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((out / "summary.tsv").read_text().split("\t")[3], "gpt-6.1-sol")
         self.assertEqual((out / "identity.out").read_text(), "answer\n")
+        self.assertFalse(list(out.glob("*.events.jsonl")))
+        self.assertTrue((out / "identity.out.crossfeed.json").is_file())
 
 
     def test_openrouter_wrapper_captures_the_provider_model_from_its_native_stream(self):

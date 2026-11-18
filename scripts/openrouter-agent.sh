@@ -206,7 +206,7 @@ cleanup() {
   set +e
   [ -n "$WATCHDOG_PID" ] && kill -s KILL "$WATCHDOG_PID" 2>/dev/null
   [ -n "$lease_token" ] && "$HERE/fleetctl.py" release --token "$lease_token" >/dev/null 2>&1
-  rm -f "${EVENTS:-}" "$RUN_LAST" "$PROGRESS" "$RUNOUT" "$KILL_STATE"
+  rm -f "${EVENTS:-}" "$RUN_LAST" "$PROGRESS" "$RUNOUT" "$KILL_STATE" || echo 'openrouter-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
   trap - EXIT
   exit "$status"
 }
@@ -872,7 +872,7 @@ case "$(sed -n '1p' "$KILL_STATE")" in
 esac
 
 if [ "$rc" -ne 0 ]; then
-  [ -s "$RUNOUT" ] && cat "$RUNOUT" >&2
+  echo "openrouter-agent: native output suppressed (bytes=$(wc -c <"$RUNOUT"))" >&2
   exit "$rc"
 fi
 
@@ -881,11 +881,11 @@ fi
 # report" rather than "the worker produced nothing".
 if [ ! -s "$RUN_LAST" ] || ! grep -q '[^[:space:]]' "$RUN_LAST" 2>/dev/null; then
   echo "openrouter-agent: the call succeeded but produced NO text (blank deliverable). Not publishing it." >&2
-  [ -s "$RUNOUT" ] && cat "$RUNOUT" >&2
+  echo "openrouter-agent: native output suppressed (bytes=$(wc -c <"$RUNOUT"))" >&2
   exit 7
 fi
 
-[ -s "$RUNOUT" ] && cat "$RUNOUT" >&2
+echo "openrouter-agent: native output suppressed (bytes=$(wc -c <"$RUNOUT"))" >&2
 
 # Publish atomically, so a reader never observes a half-written deliverable and a failed run
 # never leaves the previous run's answer sitting in the caller's --last.

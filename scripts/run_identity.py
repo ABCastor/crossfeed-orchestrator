@@ -509,12 +509,15 @@ def answer(path):
     return text.rstrip()  # Plain-output older CLIs/fakes remain supported, with unconfirmed identity.
 
 
-def worker_notice(record):
+def worker_notice(record, *, run_marker=True):
+    # run_marker=False for Crossfeed Chat: that service deletes its ChatGPT chats itself, and a
+    # per-run id would make a caller's Idempotency-Key retry send a different payload (409).
     selected = record.get("selected_model") or "unknown (CLI default)"
     return (f"Crossfeed selected model: {selected}; CLI selector: {record.get('selector') or 'default'}. "
             f"Requested: {record.get('requested_model') or 'automatic selection'}. "
             "Use this selected identity when describing this dispatch. The provider may resolve an alias or "
-            "Auto selector later; do not invent an underlying model. The caller receives a model receipt.\n"
+            "Auto selector later; do not invent an underlying model. The caller receives a model receipt."
+            + (f" Crossfeed run {record['run_id']}." if run_marker else "") + "\n"
             "=== CROSSFEED TASK ===\n")
 
 
@@ -588,7 +591,7 @@ def finish(path, events, returncode, last, schema, database=None, result_file=No
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["begin", "prompt", "finish", "answer"])
+    parser.add_argument("action", choices=["begin", "prompt", "run-id", "finish", "answer"])
     parser.add_argument("--path", type=Path, required=True)
     parser.add_argument("--wrapper")
     parser.add_argument("--requested", default="")
@@ -610,6 +613,8 @@ def main():
                                              args.effort, args.selection_file, args.family)))
     elif args.action == "prompt":
         print(worker_notice(json.loads(args.path.read_text())), end="")
+    elif args.action == "run-id":
+        print(json.loads(args.path.read_text())["run_id"])
     elif args.action == "answer":
         print(answer(args.path))
     else:

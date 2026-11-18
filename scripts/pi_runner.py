@@ -232,7 +232,7 @@ def supervise(args, command, env, events_file, key, interrupted):
         if key:
             text = text.replace(key, "[REDACTED]")
         if label == "stderr":
-            print(text, file=sys.stderr, flush=True)
+            diagnostic(f"native stderr bytes={len(raw)}; text suppressed")
             return
         try:
             record = json.loads(text)
@@ -408,7 +408,7 @@ def run(args, interrupted):
         acquired = subprocess.run([str(HERE / "fleetctl.py"), "acquire", "--lane", lane, "--ttl", str(ttl)], capture_output=True, text=True)
         token = acquired.stdout.strip()
         if acquired.returncode or not token:
-            raise Rejected(4, "quota lease refused, lane capacity or daily cap reached")
+            raise Rejected(4, "quota lease refused: " + (" ".join((acquired.stderr or "").split())[-300:] or f"fleetctl exit {acquired.returncode}, no detail"))
         status, output, begun = 5, None, False
         try:
             begin = subprocess.run([sys.executable, str(HERE / "run_identity.py"), "begin", "--path", str(identity),

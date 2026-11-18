@@ -2,6 +2,8 @@ Load for OpenCode worker attachments, direct calls, context modes, research-scou
 
 # OpenCode worker
 
+Every worker uses a private data home and, where required, a private search directory. After receipt capture, both are deleted on success, failure, timeout and cancellation; failure diagnostics go to stderr before deletion, and cleanup failures preserve the worker exit code.
+
 Requires OpenCode v2 (ported against 2.0.32). Default is read-only, `--context lean`: compact synchronized worker contract, project AGENTS.md preserved, skill catalogue disabled. `--context shared` imports synchronized instructions and skill paths. Every run generates a private native v2 profile; project config and Claude compatibility discovery are disabled. External plugins and MCP are denied by native integration policies, replacing the removed `--pure` flag. Lean disables skill-discovery plugins and skill integrations. Read-only and direct deny Code Mode execute; permitted reads/searches remain native direct tools. Build retains Code Mode with native tool permission checks. OpenCode session/worktree management tools are denied to prevent moving the session boundary. These are tool-policy boundaries. Wrapper verification is explicit.
 
 Choose automatic `--role` or one explicit `--lane`, `--model-key` or `--model`, never conflicting selectors. `--variant` overrides a supported level (forwarded as `provider/model#variant`); `--effort-role` selects role-level resolution with an explicit lane. Writes need `--write` and a clean disposable git worktree. Plan denies shell/edit/nested agents/external dirs; it is a tool-policy boundary, not an OS sandbox. Build retains denied nested/external tools; the caller owns isolation and full proof.

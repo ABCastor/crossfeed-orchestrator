@@ -415,6 +415,21 @@ subprocess.Popen=popen
             self.assertEqual(json.loads((self.work / "last.crossfeed.json").read_text())["cancellation_scope"],
                              "local-http-only")
 
+    def test_protected_prompt_file_is_refused_before_gateway_work(self):
+        protected = self.work / 'protected'
+        protected.mkdir()
+        prompt = protected / 'prompt'
+        prompt.write_text('private fixture prompt')
+        (self.work / 'prompt').unlink()
+        (self.work / 'prompt').symlink_to(prompt)
+        self.env['CROSSFEED_PROTECTED_ROOTS'] = str(protected)
+        result = self.run_adapter()
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn('working file', result.stderr)
+        self.assertNotIn('private fixture prompt', result.stderr)
+        self.assertFalse(self.gateway.payloads)
+        self.assertFalse((self.work / 'state/runtime.json').exists())
+
     def test_mode_effort_and_terms_refusal_before_request(self):
         for extra in [("--mode", "rw"), ("--effort", "xhigh"), ("--modality", "image")]:
             self.assertEqual(self.run_adapter(extra=extra).returncode, 3)
@@ -704,6 +719,7 @@ subprocess.Popen=popen
         (state / 'runtime.json').write_text(json.dumps({'leases': [], 'switches': {'chatgpt-work': 'off'}}))
         result = self.run_adapter(extra=('--wall', '5'))
         self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertIn('quota pool chatgpt-work is switched off', result.stderr)
         self.assertEqual(self.gateway.payloads, [])
         self.assertEqual(self.tickets(), [])
 

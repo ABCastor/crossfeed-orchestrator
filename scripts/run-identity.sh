@@ -26,6 +26,7 @@ crossfeed_prepare() {
   python3 "$CROSSFEED_IDENTITY_SCRIPT" begin --path "$CROSSFEED_IDENTITY" \
     --wrapper "$1" --requested "$CROSSFEED_REQUESTED" --selected "$selected" \
     --lane "${LANE:-}" --role "$CROSSFEED_REQUESTED_ROLE" --effort "$effort"
+  CROSSFEED_RUN_ID="$(python3 "$CROSSFEED_IDENTITY_SCRIPT" run-id --path "$CROSSFEED_IDENTITY")"
   PROMPT="$(python3 "$CROSSFEED_IDENTITY_SCRIPT" prompt --path "$CROSSFEED_IDENTITY")"$'\n'"$PROMPT"
 }
 
@@ -47,7 +48,7 @@ crossfeed_finish() {
     }
   fi
   # Run-private scratch stays outside the operator's folders; cleanup leaves durable data intact.
-  [ -z "$CROSSFEED_IDENTITY" ] || unlink "$CROSSFEED_IDENTITY"
+  [ -z "$CROSSFEED_IDENTITY" ] || unlink "$CROSSFEED_IDENTITY" || echo 'Crossfeed: SESSION CLEANUP FAILED: cannot remove identity scratch' >&2
 }
 
 # ---- vault guard (20 Oct 2026; rule and why: vault_guard.py, BUSINESS-RULES.md BR-VAULT-001) ----

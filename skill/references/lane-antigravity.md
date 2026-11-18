@@ -2,6 +2,8 @@ Load before an agy worker, especially when checking transport, workspace or quot
 
 # Antigravity worker
 
+After receipt capture on every exit, Crossfeed removes new or modified conversations whose first user step contains this run's unique marker, plus their WAL/SHM, brain, annotation and implicit files. It leaves `conversation_summaries.db` untouched for operator review; cleanup failures report on stderr and preserve the worker exit code.
+
 Always pass `--lane` or `--role`; a bare call uses agy's own settings model, not the roster's intended lane. Wrapper flags include --prompt (no --prompt-file), dir, lane/role/model, effort, sandbox, timeout, idle-timeout, kill-after, last and raw. Selector dispatch sets the chosen model/level; console gates still apply.
 
 The wrapper runs `agy --print` under a PTY because non-TTY stdout can be empty even after successful work. It passes `--add-dir`: changing cwd alone does not add a workspace. Missing workspace can look like file blindness; distinguish wrapper configuration from model capability before recording a limitation. The PTY passes an argv array, not shell-interpolated prompt text. Avoid newest-global-transcript recovery under concurrency; it may identify another run.

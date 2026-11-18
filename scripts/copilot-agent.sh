@@ -122,6 +122,7 @@ WATCHDOG_PID=""
 CHILD_COMPLETED=0
 PENDING_SIGNAL_NAME=""
 PENDING_SIGNAL_CODE=""
+copilot_home=""
 
 _cleanup() {
   local status=$?
@@ -129,13 +130,30 @@ _cleanup() {
   # a job just forked) can run this inherited EXIT trap and delete the run's files early.
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   crossfeed_finish "$status" || status=8
-  [ -n "$tmp_events" ] && rm -f "$tmp_events"
-  rm -f "$stderr_file" "$answer_file" "$KILL_STATE"
+  if [ -n "$copilot_home" ]; then
+    rm -rf "$copilot_home" || echo 'copilot-agent: SESSION CLEANUP FAILED: cannot delete private COPILOT_HOME' >&2
+  fi
+  [ -z "$tmp_events" ] || rm -f "$tmp_events" || echo 'copilot-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  rm -f "$stderr_file" "$answer_file" "$KILL_STATE" || echo 'copilot-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
   trap - EXIT
   exit "$status"
 }
 trap _cleanup EXIT
 
+# Never copy session-state or session-store.db. This deliberately named allowlist
+# must be live-checked when Copilot changes its supported login storage.
+COPILOT_LOGIN_FILES=( config.json )
+copilot_login_home="${COPILOT_HOME:-$HOME/.copilot}"
+copilot_homes_root="${FLEET_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator}/copilot-homes"
+mkdir -p -m 700 "$copilot_homes_root"
+copilot_home="$(mktemp -d "$copilot_homes_root/run.XXXXXXXX")"
+chmod 700 "$copilot_home"
+for login_file in "${COPILOT_LOGIN_FILES[@]}"; do
+  if [ -f "$copilot_login_home/$login_file" ]; then
+    cp "$copilot_login_home/$login_file" "$copilot_home/$login_file"
+    chmod 600 "$copilot_home/$login_file"
+  fi
+done
 crossfeed_prepare copilot
 
 args=(
@@ -380,7 +398,7 @@ fi
 
 CROSSFEED_STARTED=1
 set -m
-env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+env -u COPILOT_GITHUB_TOKEN -u GH_TOKEN -u GITHUB_TOKEN COPILOT_HOME="$copilot_home" \
   ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} copilot "${args[@]}" </dev/null >"$EVENTS" 2>"$stderr_file" &
 CHILD_PID=$!
 if [ -n "$PENDING_SIGNAL_CODE" ]; then
@@ -437,8 +455,8 @@ case "$(sed -n '1p' "$KILL_STATE")" in
 esac
 
 if [ "$rc" -ne 0 ]; then
-  echo "copilot-agent: copilot exited $rc. stderr tail:" >&2
-  tail -8 "$stderr_file" >&2 || true
+  echo "copilot-agent: copilot exited $rc. Native stderr is suppressed." >&2
+  echo "copilot-agent: native output captured (bytes=$(wc -c <"$stderr_file")); transcript suppressed" >&2
   exit "$rc"
 fi
 

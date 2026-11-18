@@ -52,6 +52,10 @@ State the inferred mode.
 
 Never reopen a settled decision. Council on your own doubt. Same-vendor subagents are never independent reviewers/council seats: use `--exclude-lineage <lead vendor>`.
 
+## Session cleanup
+
+Crossfeed retires run-owned sessions after receipt capture. Use `fleetctl.py traces` to check for leftovers, or `fleetctl.py traces --purge --yes` to dispose of proven stale artifacts. See [No trace](../docs/USAGE.md#no-trace) for limits and exit codes.
+
 ## Hard rules
 
 - Official CLIs, intended logins, owner's account; recheck terms before sustained automation. API and partner-plan lanes must declare and enforce their authentication class; never infer billing from an API key. Crossfeed Chat is a separate read-only subscription-relay route requiring dated account-risk acceptance, which does not imply vendor permission; see `docs/CHATGPT.md`. `claude -p` never uses `--bare` (API billing). `fleetctl.py doctor` names missing prerequisites.

@@ -2,6 +2,8 @@ Load for a Codex worker needing sandbox, schema, resume or native-subagent detai
 
 # Codex worker
 
+Crossfeed keeps the native session only until its model receipt is captured, then uses `codex delete --force` for the event thread and all recursive sub-agent threads, children first, on every exit. Ephemeral mode loses native model identity in codex-cli 0.166.0, so the wrapper deletes after accounting instead. Cleanup failures are loud on stderr and preserve the worker exit code.
+
 `codex-agent.sh` wraps official `codex exec` on the ChatGPT login. Core flags: `--prompt`/`--prompt-file`, `--dir`, `--model`, `--role`, `--reasoning`, `--sandbox read-only|workspace-write`, `--schema`, `--events`, `--last`, `--log`, `--timeout`, `--idle-timeout`, `--kill-after`, `--dry-run`. It passes the working root, closes stdin, always sets resolved model_reasoning_effort and resolves console stand-ins before effort.
 
 `read-only` denies writes. `workspace-write` permits work-root/configured temp writes, not arbitrary home/system writes. Codex cannot write `.git`; the lead reviews, commits and runs full suites outside the sandbox. Thread-dependent aiosqlite/asyncio.to_thread tests can hang and system ps may be blocked. Run meaningful targeted checks within the sandbox, report exact limits, then verify affected full behavior outside it.

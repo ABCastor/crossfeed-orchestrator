@@ -98,6 +98,19 @@ pathlib.Path(args[args.index('--last') + 1]).write_text('final text')
         self.assertNotIn("--timeout", args)
         self.assertIn("SUCCEEDED", (self.out / "summary.tsv").read_text())
 
+    def test_fanout_removes_owned_events_without_receipt(self):
+        for code in (0, 42):
+            with self.subTest(code=code):
+                wrapper = self.scripts / 'pi-agent.sh'
+                wrapper.write_text("#!/usr/bin/env python3\nimport pathlib,sys\na=sys.argv\n"
+                    "pathlib.Path(a[a.index('--events')+1]).write_text('private events')\n"
+                    "pathlib.Path(a[a.index('--last')+1]).write_text('final text')\n"
+                    f"sys.exit({code})\n")
+                wrapper.chmod(0o755)
+                self.dispatch(dry=False)
+                self.assertTrue((self.out / 'summary.tsv').exists())
+                self.assertFalse((self.out / 'test.events.jsonl').exists())
+
     def test_native_failures_do_not_suppress_an_entire_pool(self):
         expected = {3: "lane-or-modality-not-admitted", 4: "lease-refused",
                     5: "provider-or-terms-error", 6: "no-terminal-event", 7: "empty-final-output"}

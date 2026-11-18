@@ -17,6 +17,14 @@ from tests.test_fleetctl import lane
 
 class NoKnownLimitTests(unittest.TestCase):
     def setUp(self):
+        # These tests isolate adapter/quota diagnostics. No-trace has its own
+        # failure-propagation tests; supply clean external evidence here rather
+        # than requiring the operator's process list and ChatGPT service.
+        traces = patch.object(fleetctl, "traces_module")
+        self.addCleanup(traces.stop)
+        trace_module = traces.start().return_value
+        trace_module.census.return_value = {"exit_code": 0}
+        trace_module.lines.return_value = []
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = Path(self.tmp.name)

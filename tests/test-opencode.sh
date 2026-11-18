@@ -10,6 +10,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -d "$SCRIPT_DIR/scripts" ] || SCRIPT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_WRAPPER="${WRAPPER_UNDER_TEST:-$SCRIPT_DIR/scripts/opencode-agent.sh}"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/opencode-agent-test.XXXXXX")"
+export SESSION_FAKE_LOG="$TEST_ROOT/session-paths"
+export SESSION_FAKE="$SCRIPT_DIR/tests/fixtures/session_fake.py"
+export HOME="$TEST_ROOT/home"
+mkdir -p "$HOME"
+unset COPILOT_HOME
+
 FIXTURE_DIR="$TEST_ROOT/fixture/scripts"
 FAKE_BIN="$TEST_ROOT/bin"
 CLOCK_BIN="$TEST_ROOT/clock-bin"
@@ -20,6 +26,17 @@ mkdir -p "$FIXTURE_DIR" "$FAKE_BIN" "$CLOCK_BIN" "$TEST_HOME" "$TEST_TMP" "$FLEE
 cp "$SOURCE_WRAPPER" "$FIXTURE_DIR/opencode-agent.sh"
 cp "$SCRIPT_DIR/scripts/opencode_v2.py" "$FIXTURE_DIR/"
 cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$SCRIPT_DIR/scripts/vault_guard.py" "$FIXTURE_DIR/"
+[ ! -f "$SCRIPT_DIR/scripts/session_cleanup.py" ] || cp "$SCRIPT_DIR/scripts/session_cleanup.py" "$FIXTURE_DIR/"
+# These copied wrappers exercise fake CLI lifecycle, not the OS jail (test_vault_guard.py owns it).
+# Managed Codex already runs in Seatbelt and cannot nest it. Model fakes never touch a vault.
+python3 - "$FIXTURE_DIR/vault_guard.py" <<'PY_GUARD'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('SANDBOX_EXEC = "/usr/bin/sandbox-exec"',
+                                 'SANDBOX_EXEC = "/nonexistent/test-only-seatbelt"').replace(
+                                 'Path(pwd.getpwuid(os.getuid()).pw_dir)', 'Path("/nonexistent/crossfeed-test-home")'))
+PY_GUARD
 export FLEET_STATE_DIR="$TEST_ROOT/model-state"
 # Ordinary receipts must work even with an optional gateway configured but down.
 # A supplied overlay still exercises the caller's reproducer; the default is
@@ -137,6 +154,7 @@ FAKE_FLEET
 cat >"$FAKE_BIN/opencode" <<'FAKE_OPENCODE'
 #!/bin/bash
 set -u
+python3 "$SESSION_FAKE" opencode
 for arg in "$@"; do
   case "$arg" in --pure|--dir|--variant) echo "v1 flag rejected: $arg" >&2; exit 2;; esac
 done
@@ -293,6 +311,11 @@ case "$field" in
     [ -z "${FAKE_PARENT_COMM:-}" ] || printf '%s\n' "$FAKE_PARENT_COMM"
     ;;
   pgid=)
+    if [ -n "${FAKE_DISCOVERY_SIGNAL_FILE:-}" ]; then
+      while [ ! -s "$FAKE_DISCOVERY_SIGNAL_FILE" ]; do sleep .02; done
+      printf '%s\n' "$pid" >"$FAKE_DISCOVERY_SIGNAL_FILE.child-pid"
+      kill -TERM "$(cat "$FAKE_DISCOVERY_SIGNAL_FILE")"
+    fi
     [ "${FAKE_PGID_MODE:-ok}" = "miss" ] || printf ' %s\n' "$pid"
     ;;
   time=)
@@ -529,6 +552,24 @@ test_lease_padding() {
 
 # A child that finishes before ps can read its group is a normal run, not a discovery failure:
 # set -m already made its PID its PGID, and `wait` still returns its status.
+test_signal_during_group_discovery() {
+  local d="$TEST_ROOT/discovery-signal" wrapper_pid child_pid rc
+  mkdir -p "$d/work"
+  HOME="$TEST_HOME" TMPDIR="$TEST_TMP" FLEET_STATE_DIR="$FLEET_STATE" PATH="$BASE_PATH"     AGENT_SYNC_VERIFY="$FAKE_BIN/verify-end" FAKE_DISCOVERY_SIGNAL_FILE="$d/target"     /bin/bash "$WRAPPER" --prompt idle-silent --dir "$d/work" --kill-after 1 >"$d/out" 2>"$d/err" &
+  wrapper_pid=$!
+  printf '%s\n' "$wrapper_pid" >"$d/target"
+  wait "$wrapper_pid"
+  rc=$?
+  child_pid="$(cat "$d/target.child-pid")"
+  if kill -0 "$child_pid" 2>/dev/null; then
+    kill -KILL -- "-$child_pid" 2>/dev/null || true
+    fail "worker survived interruption during group discovery"
+    return 1
+  fi
+  [ "$rc" -eq 143 ] || { fail "signal expected 143, got $rc"; return 1; }
+  contains "$d/err" 'EXTERNAL TERM RECEIVED' || { fail "discovery signal skipped signal handler"; return 1; }
+}
+
 test_fast_child_pgid_miss() {
   local d="$TEST_ROOT/pgid-miss" rc
   mkdir -p "$d/work"
@@ -732,7 +773,7 @@ run_test() {
   selected "$name" || return 0
   RUN_COUNT=$((RUN_COUNT + 1))
   DETAIL=""; LAST_STDERR=""
-  if "$function_name"; then
+  if "$function_name" && python3 "$SESSION_FAKE" assert-clean "$TEST_ROOT"; then
     PASS_COUNT=$((PASS_COUNT + 1))
     printf 'PASS %s\n' "$name"
   else
@@ -758,6 +799,7 @@ run_test process_group_cleanup test_process_group_cleanup
 run_test outer_cap_warning test_outer_cap_warning
 run_test lease_padding test_lease_padding
 run_test fast_child_pgid_miss test_fast_child_pgid_miss
+run_test signal_during_group_discovery test_signal_during_group_discovery
 run_test exit_3_modality test_exit_3_modality
 run_test exit_4_lease_contention test_exit_4_lease_contention
 run_test exit_4_invalid_json test_exit_4_invalid_json

@@ -8,6 +8,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -d "$SCRIPT_DIR/scripts" ] || SCRIPT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WRAPPER="${WRAPPER_UNDER_TEST:-$SCRIPT_DIR/scripts/codex-agent.sh}"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/codex-agent-test.XXXXXX")"
+export SESSION_FAKE="$SCRIPT_DIR/tests/fixtures/session_fake.py"
+export HOME="$TEST_ROOT/home"
+mkdir -p "$HOME"
+unset COPILOT_HOME
+
 # The wrapper reads the fleet's runtime (level, pool slot, the console's model choice). A private one
 # keeps the operator's live settings out of these cases, and these cases out of his pool slot.
 export FLEET_STATE_DIR="$TEST_ROOT/fleet-state"
@@ -40,6 +45,11 @@ cat >"$FAKE_BIN/codex" <<'FAKE_CODEX'
 #!/bin/bash
 set -u
 
+if [ "${1:-}" = delete ]; then
+  [ "$2" = --force ] || exit 93
+  exec python3 "$SESSION_FAKE" codex-delete "$3"
+fi
+
 if [ -n "${FAKE_ARGS_FILE:-}" ]; then
   printf '%s\n' "$@" >"$FAKE_ARGS_FILE"
 fi
@@ -57,6 +67,8 @@ while [ "$#" -gt 0 ]; do
     *) prompt="$1"; shift;;
   esac
 done
+
+python3 "$SESSION_FAKE" codex "$prompt"
 
 # Preserve behavioral modes after the wrapper adds its identity briefing.
 prompt="${prompt##*=== CROSSFEED TASK ===$'\n'}"
@@ -384,7 +396,8 @@ test_fast_exit_passthrough() {
     --prompt instant-42 --dir "$case_dir/work" --idle-timeout 20
   rc=$?
   [ "$rc" -eq 42 ] || { fail "instant child expected rc 42, got $rc"; return 1; }
-  contains "$case_dir/stderr" 'instant fake codex diagnostic' || { fail "instant child diagnostic was discarded"; return 1; }
+  contains "$case_dir/stderr" 'native output captured (bytes=' || { fail "instant child byte-count diagnostic missing"; return 1; }
+  ! contains "$case_dir/stderr" 'instant fake codex diagnostic' || { fail "native diagnostic text leaked"; return 1; }
   contains "$case_dir/stderr" 'codex exited 42' || { fail "wrapper exit diagnostic missing"; return 1; }
   ! contains "$case_dir/stderr" 'PROCESS-GROUP DISCOVERY FAILURE' || { fail "completed child was mislabeled as discovery failure"; return 1; }
 }
@@ -544,6 +557,23 @@ test_help_contract() {
   contains "$case_dir/stdout" '124 wall-clock kill' || { fail "exit-code contract missing from help"; return 1; }
 }
 
+test_cleanup_failure_preserves_status() {
+  local d="$TEST_ROOT/cleanup-failure" rc prompt expected
+  mkdir -p "$d/work"
+  for prompt in quick nonzero; do
+    expected=0; [ "$prompt" != nonzero ] || expected=42
+    FAKE_DELETE_FAIL=1 invoke "$d/out" "$d/err" --prompt "$prompt" --dir "$d/work" --last "$d/last" --events "$d/events"
+    rc=$?
+    [ "$rc" = "$expected" ] || { fail "cleanup changed status $expected to $rc"; return 1; }
+    contains "$d/err" 'codex-agent: SESSION CLEANUP FAILED:' || { fail 'cleanup failure was silent'; return 1; }
+    [ -f "$d/last.crossfeed.json" ] || { fail 'cleanup preceded receipt'; return 1; }
+    # Resolve the intentionally injected deletion failure before the suite's zero-session check.
+    # Verified cleanup needs this run's id (from its receipt), exactly as the wrapper passes it.
+    PATH="$BASE_PATH" python3 "$SCRIPT_DIR/scripts/session_cleanup.py" codex --events "$d/events" \
+      --run-id "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$d/last.crossfeed.json")" || return 1
+  done
+}
+
 selected() {
   local wanted="$1" item
   [ "$#" -ge 1 ] || return 1
@@ -559,7 +589,7 @@ run_test() {
   selected "$name" || return 0
   RUN_COUNT=$((RUN_COUNT + 1))
   DETAIL=""
-  if "$function_name"; then
+  if "$function_name" && python3 "$SESSION_FAKE" assert-clean "$TEST_ROOT"; then
     PASS_COUNT=$((PASS_COUNT + 1))
     printf 'PASS %s\n' "$name"
   else
@@ -576,6 +606,7 @@ else
   SELECTED_TESTS=("$@")
 fi
 
+run_test cleanup_failure_preserves_status test_cleanup_failure_preserves_status
 run_test output_liveness test_output_liveness
 run_test idle_kill test_idle_kill
 run_test default_silence_reports test_default_silence_reports

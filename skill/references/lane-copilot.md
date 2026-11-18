@@ -2,6 +2,8 @@ Load before using Copilot as one small read-only observer.
 
 # Copilot observer
 
+Every worker uses a private mode-700 `COPILOT_HOME`, seeded only from `COPILOT_LOGIN_FILES=(config.json)`, and deletes it on every exit after receipt capture. Session state and the session database are never copied from the configured login; the config-only sign-in allowlist needs a live login check when the CLI changes.
+
 The default Student configuration is Auto-only. Other accounts can admit specific named read-only workers under a single shared subscription pool. Configure its credit allowance from your own plan; inline completion and CLI credits are separate entitlements. Do not treat Auto's selected backend as a named-model entitlement.
 
 Use the official copilot CLI and its intended login, not OpenCode's named Copilot provider catalogue. The wrapper refuses writes and models that are not active and verified on the configured account, denies shell and file-write tools, disables built-in MCP/remote export/custom instructions, and applies its credit cap. It removes token environment overrides to use the configured supported login. No token values belong in output.

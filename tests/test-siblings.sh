@@ -12,6 +12,11 @@ AGY_SOURCE="${AGY_WRAPPER_UNDER_TEST:-$SCRIPT_DIR/scripts/agy-agent.sh}"
 COPILOT_SOURCE="${COPILOT_WRAPPER_UNDER_TEST:-$SCRIPT_DIR/scripts/copilot-agent.sh}"
 
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sibling-agent-test.XXXXXX")"
+export SESSION_FAKE="$SCRIPT_DIR/tests/fixtures/session_fake.py"
+export HOME="$TEST_ROOT/home"
+mkdir -p "$HOME"
+unset COPILOT_HOME
+
 FAKE_BIN="$TEST_ROOT/bin"
 CLOCK_BIN="$TEST_ROOT/clock-bin"
 EMPTY_BIN="$TEST_ROOT/empty-bin"
@@ -43,6 +48,17 @@ cp "$CLAUDE_SOURCE" "$FIXTURE_DIR/claude-agent.sh"
 cp "$AGY_SOURCE" "$FIXTURE_DIR/agy-agent.sh"
 cp "$COPILOT_SOURCE" "$FIXTURE_DIR/copilot-agent.sh"
 cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$SCRIPT_DIR/scripts/vault_guard.py" "$FIXTURE_DIR/"
+[ ! -f "$SCRIPT_DIR/scripts/session_cleanup.py" ] || cp "$SCRIPT_DIR/scripts/session_cleanup.py" "$FIXTURE_DIR/"
+# These copied wrappers exercise fake CLI lifecycle, not the OS jail (test_vault_guard.py owns it).
+# Managed Codex already runs in Seatbelt and cannot nest it. Model fakes never touch a vault.
+python3 - "$FIXTURE_DIR/vault_guard.py" <<'PY_GUARD'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('SANDBOX_EXEC = "/usr/bin/sandbox-exec"',
+                                 'SANDBOX_EXEC = "/nonexistent/test-only-seatbelt"').replace(
+                                 'Path(pwd.getpwuid(os.getuid()).pw_dir)', 'Path("/nonexistent/crossfeed-test-home")'))
+PY_GUARD
 export FLEET_STATE_DIR="$TEST_ROOT/model-state"
 chmod +x "$FIXTURE_DIR/claude-agent.sh" "$FIXTURE_DIR/agy-agent.sh" "$FIXTURE_DIR/copilot-agent.sh"
 CLAUDE_WRAPPER="$FIXTURE_DIR/claude-agent.sh"
@@ -112,6 +128,7 @@ chmod +x "$FIXTURE_DIR/roster.sh" "$FIXTURE_DIR/fleetctl.py"
 cat >"$FAKE_BIN/claude" <<'FAKE_CLAUDE'
 #!/bin/bash
 set -u
+python3 "$SESSION_FAKE" claude "$@"
 if [ -n "${FAKE_ARGS_FILE:-}" ]; then printf '%s\n' "$@" >"$FAKE_ARGS_FILE"; fi
 prompt=""
 while [ "$#" -gt 0 ]; do
@@ -207,6 +224,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+python3 "$SESSION_FAKE" agy "$prompt"
 # The fake's behavioral mode is the task payload; recorded argv still proves worker awareness.
 prompt="${prompt##*=== CROSSFEED TASK ===$'\n'}"
 case "$prompt" in
@@ -277,6 +295,7 @@ FAKE_AGY
 cat >"$FAKE_BIN/copilot" <<'FAKE_COPILOT'
 #!/bin/bash
 set -u
+python3 "$SESSION_FAKE" copilot
 if [ -n "${FAKE_ARGS_FILE:-}" ]; then printf '%s\n' "$@" >"$FAKE_ARGS_FILE"; fi
 if [ -n "${FAKE_TOKEN_STATE:-}" ]; then
   printf 'COPILOT_GITHUB_TOKEN=%s\n' "${COPILOT_GITHUB_TOKEN-unset}" >"$FAKE_TOKEN_STATE"
@@ -682,7 +701,8 @@ common_fast_exit_passthrough() {
     --prompt instant-42 --dir "$case_dir/work" --idle-timeout 20
   rc=$?
   [ "$rc" -eq 42 ] || { fail "$label instant child expected rc 42, got $rc"; return 1; }
-  contains "$case_dir/stderr" "$diagnostic" || { fail "$label instant child diagnostic was discarded"; return 1; }
+  contains "$case_dir/stderr" 'native output captured (bytes=' || { fail "$label instant child byte-count diagnostic missing"; return 1; }
+  ! contains "$case_dir/stderr" "$diagnostic" || { fail "$label native diagnostic text leaked"; return 1; }
   ! contains "$case_dir/stderr" 'PROCESS-GROUP DISCOVERY FAILURE' || { fail "$label completed child was mislabeled as discovery failure"; return 1; }
 }
 
@@ -862,7 +882,7 @@ test_claude_stderr_streaming() {
       --idle-timeout 20 --kill-after 1 >"$case_dir/stdout" 2>"$case_dir/stderr" &
   wrapper_pid=$!
 
-  if ! wait_for_contains "$case_dir/stderr" 'live-stderr-progress'; then
+  if ! wait_for_contains "$case_dir/stderr" 'native stderr progress (text suppressed)'; then
     kill -TERM "$wrapper_pid" 2>/dev/null || true
     wait "$wrapper_pid" 2>/dev/null || true
     fail "Claude stderr progress was not visible while the run was live"
@@ -873,8 +893,9 @@ test_claude_stderr_streaming() {
   wait "$wrapper_pid"
   rc=$?
   [ "$rc" -eq 0 ] || { fail "stderr-streaming run expected rc 0, got $rc"; return 1; }
-  progress_count="$(grep -c 'live-stderr-progress' "$case_dir/stderr")"
+  progress_count="$(grep -c 'native stderr progress (text suppressed)' "$case_dir/stderr")"
   [ "$progress_count" -eq 1 ] || { fail "stderr progress was duplicated or lost: count $progress_count"; return 1; }
+  ! contains "$case_dir/stderr" 'live-stderr-progress' || { fail "native stderr text leaked"; return 1; }
   assert_dead "$case_dir/tee-pid" "Claude stderr tee" || return 1
 }
 
@@ -1183,7 +1204,7 @@ run_test() {
   selected "$name" || return 0
   RUN_COUNT=$((RUN_COUNT + 1))
   DETAIL=""
-  if "$function_name"; then
+  if "$function_name" && python3 "$SESSION_FAKE" assert-clean "$TEST_ROOT"; then
     PASS_COUNT=$((PASS_COUNT + 1))
     printf 'PASS %s\n' "$name"
   else

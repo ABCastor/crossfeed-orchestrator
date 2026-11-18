@@ -2,6 +2,8 @@ Load once per session when Pi is the lead harness.
 
 # Pi reader
 
+Pi workers always launch with `--no-session` and a disposable agent directory, which is removed on every exit. Model receipts retain metadata only; the native worker session is never persisted.
+
 Pi's bash blocks and has no background mode or default timeout. For parallel external work, issue one foreground fanout.sh call rather than detaching several shell processes. Never pass Pi bash timeout as an outer wall clock; intentional worker budgets belong in wrapper/task options. Keep all work tracked until the call returns.
 
 One worker: run `python3 scripts/fleetctl.py dispatch ... --last <dir>/report.md` in the foreground. Pi does not wait for backgrounded children: a trailing `&` returns immediately and the worker runs unseen and untracked. Pressing Esc to abort Pi's bash call kills every worker in that call; treat it as a kill: inspect `git status` and partial reports before relaunching.

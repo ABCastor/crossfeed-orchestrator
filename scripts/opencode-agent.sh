@@ -279,14 +279,16 @@ cleanup() {
   set +e
   [ -n "$WATCHDOG_PID" ] && kill -s KILL "$WATCHDOG_PID" 2>/dev/null || true
   if [ -n "$lease_token" ]; then "$HERE/fleetctl.py" release --token "$lease_token" >/dev/null 2>&1 || true; fi
-  rm -f "$tmp_events" "$stderr_file" "$answer_file" "$KILL_STATE" "$record_error"
-  if [ -n "$search_dir" ] && [ -d "$search_dir" ]; then rm -rf "$search_dir"; fi
+  if [ "$status" -ne 0 ] && [ -s "$stderr_file" ]; then
+    echo 'opencode-agent: failure diagnostics before removing private run home:' >&2
+    echo "opencode-agent: native output captured (bytes=$(wc -c <"$stderr_file")); transcript suppressed" >&2
+  fi
+  rm -f "$tmp_events" "$stderr_file" "$answer_file" "$KILL_STATE" "$record_error" || echo 'opencode-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  if [ -n "$search_dir" ] && [ -d "$search_dir" ]; then
+    rm -rf "$search_dir" || echo 'opencode-agent: SESSION CLEANUP FAILED: cannot delete search directory' >&2
+  fi
   if [ -n "$oc_data_home" ] && [ -d "$oc_data_home" ]; then
-    if [ "$status" -eq 0 ]; then
-      rm -rf "$oc_data_home"
-    else
-      echo "opencode-agent: failed run kept isolated OpenCode data for debugging: $oc_data_home" >&2
-    fi
+    rm -rf "$oc_data_home" || echo 'opencode-agent: SESSION CLEANUP FAILED: cannot delete private data home' >&2
   fi
   trap - EXIT
   exit "$status"
@@ -318,7 +320,7 @@ db_source="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"
 [ -f "$auth_source" ] || [ -f "$db_source" ] || {
   echo "opencode-agent: OpenCode auth not found; sign in: opencode auth login opencode --method device" >&2; exit 2;
 }
-oc_homes_root="${FLEET_STATE_DIR:-$HOME/.local/state/orchestrator}/oc-homes"
+oc_homes_root="${FLEET_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator}/oc-homes"
 mkdir -p -m 700 "$oc_homes_root"
 oc_data_home="$(mktemp -d "$oc_homes_root/run.XXXXXXXX")"
 mkdir -m 700 "$oc_data_home/opencode"
@@ -670,9 +672,18 @@ _watchdog() {
   done
 }
 
+PENDING_SIGNAL_NAME=""
+PENDING_SIGNAL_CODE=""
+
 _handle_signal() {
   local signal_name="$1" signal_code="$2" now elapsed
-  trap - HUP INT TERM
+  PENDING_SIGNAL_NAME="$signal_name"
+  PENDING_SIGNAL_CODE="$signal_code"
+  # Bash may deliver a signal between fork and assigning $!. Record it until
+  # the post-launch checkpoint has a PID; there is no worker before launch.
+  [ -n "$CHILD_PID" ] || return 0
+  trap '' HUP INT TERM
+  CHILD_PGID="${CHILD_PGID:-$CHILD_PID}"
   [ -n "$WATCHDOG_PID" ] && kill -s KILL "$WATCHDOG_PID" 2>/dev/null || true
   if [ -n "$CHILD_PGID" ] && _group_alive; then
     now="$(_now)"
@@ -687,10 +698,21 @@ _handle_signal() {
 
 # Job control makes the exec'd OpenCode process a process-group leader. All
 # supervision signals target that group, so tool descendants cannot be orphaned.
+RUN_STARTED="$(_now)"
+trap '_handle_signal HUP 129' HUP
+trap '_handle_signal INT 130' INT
+trap '_handle_signal TERM 143' TERM
+if [ -n "$PENDING_SIGNAL_CODE" ]; then
+  exit "$PENDING_SIGNAL_CODE"
+fi
 CROSSFEED_STARTED=1
 set -m
 run_opencode &
 CHILD_PID=$!
+if [ -n "$PENDING_SIGNAL_CODE" ]; then
+  _handle_signal "$PENDING_SIGNAL_NAME" "$PENDING_SIGNAL_CODE"
+fi
+CHILD_PGID="$CHILD_PID"
 if ! CHILD_PGID="$(_read_child_pgid "$CHILD_PID")"; then
   # set -m made the child its own group leader at launch (PID = PGID), even when it finished
   # before ps could see it, so that identity still reaches any descendants it left behind.
@@ -702,10 +724,6 @@ if ! CHILD_PGID="$(_read_child_pgid "$CHILD_PID")"; then
 fi
 set +m
 
-RUN_STARTED="$(_now)"
-trap '_handle_signal HUP 129' HUP
-trap '_handle_signal INT 130' INT
-trap '_handle_signal TERM 143' TERM
 
 _watchdog &
 WATCHDOG_PID=$!
@@ -756,7 +774,7 @@ if jq -e -n '[inputs | select(.type == "error") | .error.type // "" | select(sta
 fi
 if [ $rc -ne 0 ]; then
   echo "opencode-agent: opencode exited $rc (124=wall-clock kill, 125=idle kill). stderr tail:" >&2
-  tail -8 "$stderr_file" >&2 || true
+  echo "opencode-agent: native output captured (bytes=$(wc -c <"$stderr_file")); transcript suppressed" >&2
   exit $rc
 fi
 
@@ -767,7 +785,7 @@ jq -e . "$EVENTS" >/dev/null 2>&1 || {
 # input only, so a session error followed by any other event used to read as a clean run.
 if jq -e -n '[inputs | select(((.type // "") | test("error"; "i")) or (.error? != null))] | length > 0' "$EVENTS" >/dev/null; then
   echo "opencode-agent: session error event despite process exit 0" >&2
-  jq -c 'select(((.type // "") | test("error"; "i")) or (.error? != null))' "$EVENTS" | tail -3 >&2
+  echo "opencode-agent: native error events suppressed (bytes=$(wc -c <"$EVENTS"))" >&2
   exit 5
 fi
 

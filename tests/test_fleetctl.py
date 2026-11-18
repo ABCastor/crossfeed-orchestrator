@@ -2031,7 +2031,8 @@ class EffortTests(unittest.TestCase):
             overlay = root / 'overlay.json'; overlay.write_text(json.dumps(r))
             out = io.StringIO()
             # No quota reader runs: this test is about effort evidence, not the machine's sign-ins.
-            with patch('sys.stdout', out), patch.dict(os.environ, {'FLEET_NO_AUTO_REFRESH': '1'}):
+            with patch('sys.stdout', out), patch.dict(os.environ, {'FLEET_NO_AUTO_REFRESH': '1',
+                    'HOME': d, 'CODEX_HOME': str(root / '.codex'), 'OPENCODE_DB': str(root / 'opencode.db')}):
                 self.assertEqual(fleetctl.doctor_command(overlay, root), 1)
             self.assertIn('kimi-k3: missing effort', out.getvalue())
             self.assertIn('Effort evidence needs recheck:', fleetctl.render_brief(fleetctl.fleet_overview(r, {}, root), verbose=True))

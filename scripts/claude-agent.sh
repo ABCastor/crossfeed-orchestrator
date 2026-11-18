@@ -208,13 +208,13 @@ _cleanup() {
   # a job just forked) can run this inherited EXIT trap and delete the run's files early.
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   crossfeed_finish "$status" || status=8
-  _stop_stderr_stream
-  [ -n "${RUNERR_PIPE:-}" ] && rm -f "$RUNERR_PIPE"
+  _stop_stderr_stream || true
+  [ -z "${RUNERR_PIPE:-}" ] || rm -f "$RUNERR_PIPE" || echo 'claude-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
   [ -n "${RUNERR_PIPE_DIR:-}" ] && rmdir "$RUNERR_PIPE_DIR" 2>/dev/null || true
-  [ -n "${RUNERR:-}" ] && rm -f "$RUNERR"
-  [ -n "${RUNOUT:-}" ] && rm -f "$RUNOUT"
-  [ -n "${KILL_STATE:-}" ] && rm -f "$KILL_STATE"
-  _stand_in_notice
+  [ -z "${RUNERR:-}" ] || rm -f "$RUNERR" || echo 'claude-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "${RUNOUT:-}" ] || rm -f "$RUNOUT" || echo 'claude-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "${KILL_STATE:-}" ] || rm -f "$KILL_STATE" || echo 'claude-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  _stand_in_notice || true
   trap - EXIT
   exit "$status"
 }
@@ -372,7 +372,7 @@ _watchdog() {
   local silence_interval="${CROSSFEED_TEST_SILENCE_INTERVAL_S:-600}" reported_silence=0
   [[ "$silence_interval" =~ ^[1-9][0-9]*$ ]] || silence_interval=600
   local started last_activity now elapsed idle_for
-  local last_output current_output last_cpu current_cpu
+  local last_output current_output last_cpu current_cpu last_stderr=empty current_stderr
 
   started="$(_now)"
   last_activity="$started"
@@ -392,6 +392,11 @@ _watchdog() {
       return 0
     fi
 
+    current_stderr="$(_file_signature "$RUNERR")"
+    if [ -s "$RUNERR" ] && [ "$current_stderr" != "$last_stderr" ]; then
+      echo 'claude-agent: native stderr progress (text suppressed)' >&2
+    fi
+    last_stderr="$current_stderr"
     current_output="$(_output_signature)"
     current_cpu="$(_child_cpu_ticks)"
     if [ "$current_output" != "$last_output" ] || [ "$current_cpu" != "$last_cpu" ]; then
@@ -454,7 +459,7 @@ fi
 
 # Keep tee in the wrapper's group, not Claude's group. The watchdog samples the
 # same RUNERR bytes that are streamed live, and the wrapper explicitly reaps tee.
-tee "$RUNERR" <"$RUNERR_PIPE" >&2 &
+tee "$RUNERR" <"$RUNERR_PIPE" >/dev/null &
 TEE_PID=$!
 
 _oauth_token=""
@@ -559,8 +564,8 @@ case "$(sed -n '1p' "$KILL_STATE")" in
 esac
 
 if [ "$rc" -ne 0 ]; then
-  echo "claude-agent: claude exited $rc. output tail:" >&2
-  tail -5 "$RUNOUT" >&2 || true
+  echo "claude-agent: claude exited $rc. native output suppressed:" >&2
+  echo "claude-agent: native output captured (bytes=$(wc -c <"$RUNOUT")); transcript suppressed" >&2
   exit "$rc"
 fi
 

@@ -447,7 +447,7 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
             break
         # Capacity can clear; admission, switches and spend refusals cannot.
         if "active lease(s), cap is" not in err:
-            raise Rejected(4, "quota lease refused")
+            raise Rejected(4, "quota lease refused: " + (" ".join(err.split())[-300:] or f"fleetctl exit {child.returncode}, no detail"))
         time.sleep(.1)
     release_turn()
     status, output, begun = 5, None, False
@@ -486,7 +486,7 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
             identity.write_text(json.dumps(record))
             begun = True
             payload = {"model": lane["selector"], "messages": [{"role": "user", "content":
-                       run_identity.worker_notice(record) + args.prompt}], "tool_choice": "none", "stream": False}
+                       run_identity.worker_notice(record, run_marker=False) + args.prompt}], "tool_choice": "none", "stream": False}
             with events.open("w") as handle:
                 output, receipt = supervise(args, base, key, payload, handle, interrupted, record["idempotency_key"], lane,
                                             on_started=lambda: http_started.append(True))

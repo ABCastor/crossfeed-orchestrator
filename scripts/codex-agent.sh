@@ -231,12 +231,18 @@ _cleanup() {
   # a job just forked) can run this inherited EXIT trap and delete the run's files early.
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   crossfeed_finish "$status" || status=8
-  [ -n "$_tmp_events" ] && rm -f "$_tmp_events"
-  [ -n "$_tmp_runout" ] && rm -f "$_tmp_runout"
-  [ -n "$_tmp_last" ] && rm -f "$_tmp_last"
-  [ -n "${RUN_LAST:-}" ] && rm -f "$RUN_LAST"
-  [ -n "${KILL_STATE:-}" ] && rm -f "$KILL_STATE"
-  _stand_in_notice
+  # --ephemeral drops the native rollout's model identity in codex-cli 0.166.0.
+  # Keep it only through receipt capture, then use the native delete command,
+  # children first, for this run's exact thread tree (never the newest session).
+  if [ "$CROSSFEED_STARTED" = 1 ] && [ -n "${EVENTS:-}" ]; then
+    python3 "${BASH_SOURCE[0]%/*}/session_cleanup.py" codex --events "$EVENTS" --run-id "$CROSSFEED_RUN_ID" || true
+  fi
+  [ -z "$_tmp_events" ] || rm -f "$_tmp_events" || echo 'codex-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "$_tmp_runout" ] || rm -f "$_tmp_runout" || echo 'codex-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "$_tmp_last" ] || rm -f "$_tmp_last" || echo 'codex-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "${RUN_LAST:-}" ] || rm -f "$RUN_LAST" || echo 'codex-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "${KILL_STATE:-}" ] || rm -f "$KILL_STATE" || echo 'codex-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  _stand_in_notice || true
   trap - EXIT
   exit "$status"
 }
@@ -281,6 +287,7 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "codex-agent: dry run, nothing started. The command:" >&2
   printf '%q ' codex "${args[@]}"
   printf '%s\n' '<prompt>'
+  echo 'codex delete --force <thread_id>  # after receipt; sub-agent threads deleted children first' >&2
   [ -z "$STAND_IN_NOTICE" ] || echo "${STAND_IN_NOTICE/this run used/this run would use}" >&2
   exit 0
 fi
@@ -411,9 +418,9 @@ _print_kill_message() {
   echo "codex-agent: ${label} LIMIT FIRED after ${elapsed}s (${detail})." >&2
   echo "codex-agent: working directory: $DIR" >&2
   echo "codex-agent: killing Codex process group $CHILD_PGID; partial edits may be on disk." >&2
-  echo "codex-agent: recovery: inspect git status first. 'codex exec resume --last' is BEST-EFFORT only:" >&2
-  echo "codex-agent:   it resumes the globally most recent session, so if any other codex run overlapped this one" >&2
-  echo "codex-agent:   it will continue the WRONG task. Resume by explicit session id when runs overlap." >&2
+  echo "codex-agent: recovery: inspect git status first. 'codex exec resume --last' cannot recover this Crossfeed run:" >&2
+  echo "codex-agent:   Crossfeed deletes this run's session after capturing its model receipt." >&2
+  echo "codex-agent:   --last targets another recent session; inspect partial edits on disk instead." >&2
 }
 
 _terminate_group() {
@@ -503,9 +510,9 @@ _handle_signal() {
     echo "codex-agent: EXTERNAL ${signal_name} RECEIVED after ${elapsed}s; no configured limit fired." >&2
     echo "codex-agent: working directory: $DIR" >&2
     echo "codex-agent: killing Codex process group $CHILD_PGID; partial edits may be on disk." >&2
-    echo "codex-agent: recovery: inspect git status first. 'codex exec resume --last' is BEST-EFFORT only:" >&2
-  echo "codex-agent:   it resumes the globally most recent session, so if any other codex run overlapped this one" >&2
-  echo "codex-agent:   it will continue the WRONG task. Resume by explicit session id when runs overlap." >&2
+    echo "codex-agent: recovery: inspect git status first. 'codex exec resume --last' cannot recover this Crossfeed run:" >&2
+  echo "codex-agent:   Crossfeed deletes this run's session after capturing its model receipt." >&2
+  echo "codex-agent:   --last targets another recent session; inspect partial edits on disk instead." >&2
     _terminate_group
     exit "$signal_code"
   fi
@@ -595,8 +602,8 @@ case "$(sed -n '1p' "$KILL_STATE")" in
 esac
 
 if [ "$rc" -ne 0 ]; then
-  echo "codex-agent: codex exited $rc. output tail:" >&2
-  tail -5 "$RUNOUT" >&2 || true
+  echo "codex-agent: codex exited $rc. native output suppressed:" >&2
+  echo "codex-agent: native output captured (bytes=$(wc -c <"$RUNOUT")); transcript suppressed" >&2
   exit "$rc"
 fi
 
@@ -606,7 +613,7 @@ fi
 if [ ! -f "$RUN_LAST" ] || ! grep -q '[^[:space:]]' "$RUN_LAST" 2>/dev/null; then
   echo "codex-agent: codex exited 0 but produced NO final message (blank deliverable). Not publishing it." >&2
   echo "codex-agent: run log retained at: $RUNOUT" >&2
-  tail -5 "$RUNOUT" >&2 || true
+  echo "codex-agent: native output captured (bytes=$(wc -c <"$RUNOUT")); transcript suppressed" >&2
   _tmp_runout=""   # keep the evidence; a failed run is exactly when the log is needed
   exit 4
 fi

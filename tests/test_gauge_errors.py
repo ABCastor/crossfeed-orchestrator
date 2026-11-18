@@ -28,7 +28,10 @@ class GaugeErrorTests(unittest.TestCase):
         self.roster["lanes"] = [lane for lane in self.roster["lanes"]
                                 if lane["model_key"] in {"kimi-k2.7-code", "gpt-6.1-sol"}]
         self.roster["quota_pools"]["unconfigured"] = {"quota_refresh": None}
-        self.env = {**os.environ, "CODEXBAR_BIN": str(self.fixture),
+        home = self.state / "home"
+        home.mkdir()
+        self.env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(home / ".codex"),
+                    "OPENCODE_DB": str(home / "opencode.db"), "CODEXBAR_BIN": str(self.fixture),
                     "ACCESS_OVERLAY": str(self.state / "overlay.json"),
                     "FLEET_STATE_DIR": str(self.state), "FLEET_NO_AUTO_REFRESH": "0",
                     "FLEET_QUOTA_POLICY": "clock_aware", "FLEET_IGNORE_QUOTA": "0",

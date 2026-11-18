@@ -30,6 +30,8 @@ assert 'ANTHROPIC_OAUTH_TOKEN' not in os.environ
 assert 'ANTHROPIC_AUTH_TOKEN' not in os.environ
 assert os.environ.get('GEMINI_API_KEY') == 'super-secret-test-key' or os.environ.get('FAKE_PROVIDER') != 'google'
 (root/'args.json').write_text(json.dumps(sys.argv[1:]))
+if '--no-session' not in sys.argv:
+ (root/'pi-persisted-session').write_text('fake session')
 (root/'started').write_text(str(os.getpid()))
 (root/'prompt').write_text(sys.stdin.read())
 def emit(x): print(json.dumps(x), flush=True)
@@ -51,6 +53,7 @@ if mode in ('stall','descendant','leader-exit'):
 if mode == 'silent-finish': time.sleep(2.2)
 if mode == 'alive':
  for _ in range(8): emit({'type':'message_update','assistantMessageEvent':{'type':'thinking_delta','delta':'thinking'}}); time.sleep(.25)
+if mode == 'private-stderr': print('PRIVATE PROMPT AND ANSWER', file=sys.stderr, flush=True)
 if mode == 'secret':
  print('super-secret-',file=sys.stderr, end='',flush=True); time.sleep(.05); print('test-key',file=sys.stderr,flush=True)
 if mode == 'exit': sys.exit(9)
@@ -79,7 +82,8 @@ root=pathlib.Path(os.environ['FAKE_ROOT'])
 args=sys.argv[1:]
 with (root/'lease.jsonl').open('a') as f: f.write(json.dumps({'command':args[0],'args':args,'at':time.time()})+'\n')
 if args[0]=='acquire':
- if os.environ.get('FAKE_LEASE_FAIL'): sys.exit(1)
+ if os.environ.get('FAKE_LEASE_FAIL'):
+  print('fleetctl: quota pool fixture is switched off', file=sys.stderr); sys.exit(1)
  print('test-token')
 elif args[0]=='release':
  if os.environ.get('FAKE_RELEASE_PAUSE'):
@@ -100,6 +104,16 @@ class PiTests(unittest.TestCase):
         self.bin.mkdir()
         for name in ('pi-agent.sh', 'pi_runner.py', 'run_identity.py', 'vault_guard.py'):
             shutil.copy(ROOT / 'scripts' / name, self.scripts / name)
+        # Lifecycle fakes use an isolated HOME. The production OS jail has its own suite;
+        # it cannot nest inside the managed runner's Seatbelt sandbox.
+        # Keep the real jail when available: test_vault_guard also reuses this fixture.
+        if Path('/usr/bin/sandbox-exec').exists() and subprocess.run(
+                ['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)', '/usr/bin/true'],
+                capture_output=True).returncode:
+            guard = self.scripts / 'vault_guard.py'
+            guard.write_text(guard.read_text().replace(
+                'SANDBOX_EXEC = "/usr/bin/sandbox-exec"', 'SANDBOX_EXEC = "/nonexistent/test-only-seatbelt"'
+            ).replace('Path(pwd.getpwuid(os.getuid()).pw_dir)', 'Path("/nonexistent/crossfeed-test-home")'))
         for file, text in ((self.bin / 'pi', FAKE_PI), (self.scripts / 'roster.sh', FAKE_ROSTER), (self.scripts / 'fleetctl.py', FAKE_FLEET)):
             file.write_text(text)
             file.chmod(0o755)
@@ -110,6 +124,7 @@ class PiTests(unittest.TestCase):
             if name.endswith(('API_KEY', 'KEY_FILE')) or 'OAUTH' in name:
                 self.env.pop(name, None)
         self.env.update(PATH=str(self.bin)+os.pathsep+self.env['PATH'], FAKE_ROOT=str(self.root),
+                        HOME=str(self.root/'home'), CODEX_HOME=str(self.root/'codex-home'),
                         GEMINI_API_KEY='super-secret-test-key', ACCESS_OVERLAY=str(self.overlay),
                         FLEET_STATE_DIR=str(self.root/'state'), PI_CODING_AGENT_DIR=str(self.root/'ambient'),
                         FAKE_AMBIENT=str(self.root/'ambient'), ANTHROPIC_OAUTH_TOKEN='ambient-forbidden-login',
@@ -119,7 +134,10 @@ class PiTests(unittest.TestCase):
         self.events = self.root/'events.jsonl'
 
     def tearDown(self):
-        self.tmp.cleanup()  # Test scratch only, never user-owned files.
+        try:
+            self.assertFalse((self.root/'pi-persisted-session').exists())
+        finally:
+            self.tmp.cleanup()  # Test scratch only, never user-owned files.
 
     def run_pi(self, *args, mode='ok', env=None):
         context = dict(self.env, FAKE_MODE=mode)
@@ -202,6 +220,12 @@ class PiTests(unittest.TestCase):
         self.assertNotIn('super-secret-test-key',result.stdout+result.stderr+self.events.read_text())
         self.assertNotIn('super-secret-test-key',(self.root/'args.json').read_text())
 
+    def test_native_stderr_text_is_not_a_retained_diagnostic(self):
+        result = self.run_pi(mode='private-stderr')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('PRIVATE PROMPT AND ANSWER', result.stderr)
+        self.assertIn('native stderr bytes=', result.stderr)
+
     def test_split_stderr_and_event_secret_is_redacted(self):
         result=self.run_pi(mode='secret')
         self.assertEqual(result.returncode,0,result.stderr)
@@ -223,6 +247,8 @@ class PiTests(unittest.TestCase):
                 self.assertEqual(result.returncode,expected,result.stderr)
                 self.assertEqual(result.stdout,'')
                 self.assertFalse((self.root/'started').exists())
+                if env.get('FAKE_LEASE_FAIL'):
+                    self.assertIn('quota pool fixture is switched off', result.stderr)
 
     def test_missing_pi_dependency(self):
         (self.bin/'pi').unlink()

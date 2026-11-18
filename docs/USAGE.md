@@ -185,3 +185,14 @@ bash tests/run-all.sh
 ## Licence
 
 The code is Apache 2.0, see [LICENSE](../LICENSE). The names, the logos, the beaver mascot and the signature artwork are not covered by that licence, and the bundled fonts keep their own (SIL Open Font License); [NOTICE](../NOTICE) has the details.
+
+
+## No trace
+
+Crossfeed retires run-owned native sessions and private transcripts after it captures the receipt. Explicit caller outputs, receipts, metadata-only dispatch diagnostics and shared app summaries remain. Gemini media deletes its temporary uploaded file; OpenRouter runs are stateless. Cleanup failures report a warning without changing the worker outcome.
+
+Run `python3 scripts/fleetctl.py traces` for a census. Use `--json` for counts, `--older-than SECONDS` (default 900) to change the age threshold, or `--surface NAME ...` to narrow the check. Only the first user message can prove session ownership; quoting the marker later does not qualify. The census also recognizes wrapper-owned run homes and transcript paths. It excludes live or open artifacts and never deletes shared app database rows.
+
+`--purge` prints a plan. `--purge --yes` rechecks activity and ownership before using `codex delete --force` (at most six at once) or the discard command for file artifacts. Set `DISCARD` to the path of a compatible executable accepting paths, `--certain` and `--reason`; the fallback is `$HOME/.claude/scripts/discard`. If disposal is unavailable, the check fails rather than deleting by another method.
+
+Exit 0 means clean, 1 means leftovers or shared rows requiring an operator decision, and 2 means a surface cannot be checked or disposal fails. A configured Crossfeed Chat gateway must show delete mode, timely sweeps and completed passes with visible and archived deletion counters. `doctor` includes the census. To monitor it on a schedule, run `traces` without `--purge` and alert on any nonzero exit.

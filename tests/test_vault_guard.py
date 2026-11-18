@@ -288,7 +288,7 @@ class WorkersThatStartCannotWrite(Planted):
     def fixture(self, *wrappers):
         fixture = self.root / "scripts"
         fixture.mkdir()
-        for name in (*wrappers, "run-identity.sh", "run_identity.py", "vault_guard.py"):
+        for name in (*wrappers, "run-identity.sh", "run_identity.py", "vault_guard.py", "session_cleanup.py"):
             shutil.copy(SCRIPTS / name, fixture / name)
         for name, text in (("roster.sh", FAKE_ROSTER), ("fleetctl.py", FAKE_FLEETCTL)):
             (fixture / name).write_text(text)

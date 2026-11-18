@@ -83,14 +83,24 @@ KEY="$(cat "$KEY_FILE")"
 [ -n "$KEY" ] || { err "API key at $KEY_FILE is empty"; exit 3; }
 command -v python3 >/dev/null || { err "python3 not found"; exit 3; }
 
+media_pid=""
+media_signal=""
+_forward_media_signal() {
+  media_signal="$1"
+  [ -z "$media_pid" ] || kill -s "$1" "$media_pid" 2>/dev/null || true
+}
+trap '_forward_media_signal HUP' HUP
+trap '_forward_media_signal INT' INT
+trap '_forward_media_signal TERM' TERM
 CAP_USD="${GEMINI_MEDIA_DAILY_CAP_USD:-$DEFAULT_CAP_USD}"
 GEMINI_MEDIA_KEY="$KEY" GEMINI_MEDIA_CAP_USD="$CAP_USD" GEMINI_MEDIA_LEDGER="$LEDGER" \
-  python3 - "$FILE" "$MODALITY" "$PROMPT" "$MODEL" "$TIMEOUT" <<'PY'
+  python3 - "$FILE" "$MODALITY" "$PROMPT" "$MODEL" "$TIMEOUT" <<'PY' &
 import datetime as dt
 import fcntl
 import json
 import mimetypes
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -158,10 +168,11 @@ def best_effort_delete(name: str | None) -> None:
         request = urllib.request.Request(
             f"{API}/{name}", headers={"x-goog-api-key": key}, method="DELETE"
         )
-        with urllib.request.urlopen(request, timeout=min(60, remaining())):
+        # Cleanup gets its own budget even after the generation deadline.
+        with urllib.request.urlopen(request, timeout=60):
             pass
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"gemini-media: SESSION CLEANUP FAILED: uploaded file delete failed ({type(exc).__name__})", file=sys.stderr)
 
 
 def today() -> str:
@@ -283,6 +294,7 @@ def complete(entry_id: str, actual_usd: float, usage: dict) -> None:
 
 
 def upload_file(mime_type: str) -> tuple[str, str]:
+    global uploaded_name
     size = os.path.getsize(media_path)
     start = urllib.request.Request(
         f"{UPLOAD_API}/files",
@@ -322,6 +334,8 @@ def upload_file(mime_type: str) -> tuple[str, str]:
     info = request_json(finalize)
     file_info = info.get("file", {})
     name = file_info.get("name")
+    # Record ownership before URI validation and asynchronous processing can fail.
+    uploaded_name = name
     uri = file_info.get("uri")
     state = file_info.get("state")
     if not name or not uri:
@@ -379,6 +393,13 @@ if not mime_type or not mime_type.startswith(modality + "/"):
         "use a standard audio/video filename extension"
     )
 
+def cancel(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
+for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(signum, cancel)
+
 uploaded_name = None
 reservation_id = None
 try:
@@ -429,8 +450,22 @@ except Exception as exc:
     print(f"gemini-media: {exc}", file=sys.stderr)
     raise SystemExit(5)
 finally:
+    # Repeated cancellation must not interrupt the deletion already in progress.
+    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, signal.SIG_IGN)
     best_effort_delete(uploaded_name)
 PY
+media_pid=$!
+[ -z "$media_signal" ] || kill -s "$media_signal" "$media_pid" 2>/dev/null || true
+# A caught signal interrupts wait; keep waiting for Python's finally/delete to finish.
+set +e
+while :; do
+  wait "$media_pid"
+  media_rc=$?
+  kill -0 "$media_pid" 2>/dev/null || break
+done
+trap - HUP INT TERM
+exit "$media_rc"
 
 }
 main "$@"; exit $?

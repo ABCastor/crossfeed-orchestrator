@@ -109,6 +109,7 @@ lease_token=""
 ptyfile=""
 KILL_STATE=""
 PTY_CHILD_STATE=""
+AGY_SNAPSHOT=""
 
 _cleanup() {
   local status=$?
@@ -116,9 +117,13 @@ _cleanup() {
   # a job just forked) can run this inherited EXIT trap and delete the run's files early.
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   crossfeed_finish "$status" || status=8
-  [ -n "${ptyfile:-}" ] && rm -f "$ptyfile"
-  [ -n "${KILL_STATE:-}" ] && rm -f "$KILL_STATE"
-  [ -n "${PTY_CHILD_STATE:-}" ] && rm -f "$PTY_CHILD_STATE"
+  if [ "$CROSSFEED_STARTED" = 1 ] && [ -n "$AGY_SNAPSHOT" ]; then
+    python3 "$HERE/session_cleanup.py" agy --snapshot "$AGY_SNAPSHOT" --run-id "$CROSSFEED_RUN_ID" || true
+  fi
+  [ -z "$AGY_SNAPSHOT" ] || rm -f "$AGY_SNAPSHOT" || echo 'agy-agent: SESSION CLEANUP FAILED: cannot remove snapshot' >&2
+  [ -z "${ptyfile:-}" ] || rm -f "$ptyfile" || echo 'agy-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "${KILL_STATE:-}" ] || rm -f "$KILL_STATE" || echo 'agy-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
+  [ -z "${PTY_CHILD_STATE:-}" ] || rm -f "$PTY_CHILD_STATE" || echo 'agy-agent: SESSION CLEANUP FAILED: cannot remove private scratch' >&2
   if [ -n "${lease_token:-}" ]; then
     "$HERE/fleetctl.py" release --token "$lease_token" >/dev/null 2>&1 || true
   fi
@@ -217,6 +222,9 @@ if [ -n "$LANE" ]; then
 fi
 
 crossfeed_prepare agy
+AGY_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/agy-agent.sessions.XXXXXX")"
+# Refuse before launch if the ownership snapshot cannot be established.
+python3 "$HERE/session_cleanup.py" agy-snapshot --snapshot "$AGY_SNAPSHOT"
 
 # --add-dir is the actual workspace grant. Merely changing directory is not.
 agy_args=( ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} agy --print "$PROMPT" --add-dir "$DIR" --dangerously-skip-permissions )
@@ -607,7 +615,7 @@ if grep -qi 'Individual quota reached\|RESOURCE_EXHAUSTED\|HTTP[[:space:]]*429' 
     "$HERE/fleetctl.py" quota-error --lane "$LANE" --stderr "$ptyfile" || exit 8
   fi
   echo "agy-agent: AGY QUOTA EXHAUSTED (429)" >&2
-  tail -6 "$ptyfile" >&2
+  echo "agy-agent: native output captured (bytes=$(wc -c <"$ptyfile")); transcript suppressed" >&2
   exit 3
 fi
 
@@ -615,8 +623,8 @@ fi
 _clean() { sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\][0-9;]*(\x07|\x1b\\)?//g; s/\x1b[()][AB0]//g; s/\r//g' "$1"; }
 
 if [ "$rc" -ne 0 ]; then
-  echo "agy-agent: agy exited $rc. output tail:" >&2
-  _clean "$ptyfile" | tail -6 >&2
+  echo "agy-agent: agy exited $rc. native output suppressed:" >&2
+  echo "agy-agent: native output captured (bytes=$(wc -c <"$ptyfile")); transcript suppressed" >&2
   exit "$rc"
 fi
 

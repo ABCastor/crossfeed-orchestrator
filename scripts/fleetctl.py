@@ -19,6 +19,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import threading
 import sqlite3
 import subprocess
 import sys
@@ -3228,7 +3230,29 @@ def _publish_dispatch_file(source: Path, target: Path) -> None:
             os.unlink(temporary)
 
 
+class DispatchInterrupted(BaseException):
+    def __init__(self, signum):
+        self.signum = signum
+
+
 def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, state_dir: Path,
+                       prompt: str, *, response: dict[str, Any] | None = None) -> int:
+    previous = {}
+    def interrupted(signum, frame):
+        raise DispatchInterrupted(signum)
+    try:
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGTERM, signal.SIGHUP):
+                previous[signum] = signal.signal(signum, interrupted)
+        return _dispatch_selection(selection, args, state_dir, prompt, response=response)
+    except DispatchInterrupted as exc:
+        return 128 + exc.signum
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, state_dir: Path,
                        prompt: str, *, response: dict[str, Any] | None = None) -> int:
     directory = args.dir.expanduser().resolve()
     requested_last = args.last.expanduser().resolve() if args.last else None
@@ -3292,57 +3316,84 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         # Failed workers may have printed partial answers. Keep those private so
         # fallback publishes exactly one successful worker's bytes to the caller.
         output = attempt_dir / "stdout.log"
-        with (attempt_dir / "stderr.log").open("wb") as diagnostic, output.open("wb") as stdout:
-            try:
-                result = subprocess.run(argv, cwd=directory, env=env, stderr=diagnostic, stdout=stdout)
-                returncode = result.returncode if result.returncode >= 0 else 128 - result.returncode
-            except OSError:
-                # Missing wrappers and process setup failures are not lane refusals.
-                returncode = 127
-        # Wrappers publish identity only after setting their supervised launch flag.
-        # Each attempt has a new path and ID: inherited sidecars never participate.
-        launched = identity.exists()
-        free_incident = option["harness"] == "openrouter" and returncode == funding.OPENROUTER_BILLING_INCIDENT
-        if launched and (cash["funding"] == "metered" or free_incident):
-            try:
-                actual = json.loads(identity.read_text())
-                if actual.get("dispatch_id") == dispatch_id:
-                    observed = funding.receipt_fields(actual.get("cash"))
-                    if observed and (observed.get("reservation_id") or
-                                     (free_incident and observed.get("reported_usd") is not None)):
-                        record["cash"] = {**cash, **observed,
-                                          "estimate_usd": cash.get("estimate_usd")}
-                        print(f"fleetctl: cash result {funding.summary(record['cash'])}", file=sys.stderr,
-                              flush=True)
-            except (OSError, ValueError, AttributeError):
-                pass
-        record.update(ended_at=iso(), returncode=returncode,
-                      launch_evidence="model-receipt-present" if launched else "no-model-receipt")
-        atomic_json(receipt, record)
-        if returncode == 0:
-            if requested_last:
-                _publish_dispatch_file(last, requested_last)
-                _publish_dispatch_file(identity, Path(str(requested_last) + ".crossfeed.json"))
-            if response is not None:
-                response.update(content=(last if last.is_file() else output).read_text(encoding="utf-8", errors="replace"),
-                                option=option, dispatch=record)
+        try:
+            with (attempt_dir / "stderr.log").open("wb") as diagnostic, output.open("wb") as stdout:
+                try:
+                    child = subprocess.Popen(argv, cwd=directory, env=env, stderr=diagnostic,
+                                             stdout=stdout, start_new_session=True)
+                    try:
+                        code = child.wait()
+                    except (DispatchInterrupted, KeyboardInterrupt) as exc:
+                        signum = exc.signum if isinstance(exc, DispatchInterrupted) else signal.SIGINT
+                        with contextlib.suppress(ProcessLookupError):
+                            os.killpg(child.pid, signum)
+                        # The wrapper owns bounded escalation and private-home cleanup.
+                        child.wait()
+                        raise
+                    returncode = code if code >= 0 else 128 - code
+                except OSError:
+                    # Missing wrappers and process setup failures are not lane refusals.
+                    returncode = 127
+            # Wrappers publish identity only after setting their supervised launch flag.
+            # Each attempt has a new path and ID: inherited sidecars never participate.
+            launched = identity.exists()
+            free_incident = option["harness"] == "openrouter" and returncode == funding.OPENROUTER_BILLING_INCIDENT
+            if launched and (cash["funding"] == "metered" or free_incident):
+                try:
+                    actual = json.loads(identity.read_text())
+                    if actual.get("dispatch_id") == dispatch_id:
+                        observed = funding.receipt_fields(actual.get("cash"))
+                        if observed and (observed.get("reservation_id") or
+                                         (free_incident and observed.get("reported_usd") is not None)):
+                            record["cash"] = {**cash, **observed,
+                                              "estimate_usd": cash.get("estimate_usd")}
+                            print(f"fleetctl: cash result {funding.summary(record['cash'])}", file=sys.stderr,
+                                  flush=True)
+                except (OSError, ValueError, AttributeError):
+                    pass
+            record.update(ended_at=iso(), returncode=returncode,
+                          launch_evidence="model-receipt-present" if launched else "no-model-receipt")
+            atomic_json(receipt, record)
+            if returncode == 0:
+                if requested_last:
+                    _publish_dispatch_file(last, requested_last)
+                    _publish_dispatch_file(identity, Path(str(requested_last) + ".crossfeed.json"))
+                if response is not None:
+                    response.update(content=(last if last.is_file() else output).read_text(encoding="utf-8", errors="replace"),
+                                    option=option, dispatch=record)
+                    return 0
+                with output.open("rb") as stream:
+                    if hasattr(sys.stdout, "buffer"):
+                        shutil.copyfileobj(stream, sys.stdout.buffer)
+                        sys.stdout.buffer.flush()
+                    else:
+                        sys.stdout.write(stream.read().decode("utf-8", errors="replace"))
                 return 0
-            with output.open("rb") as stream:
-                if hasattr(sys.stdout, "buffer"):
-                    shutil.copyfileobj(stream, sys.stdout.buffer)
-                    sys.stdout.buffer.flush()
-                else:
-                    sys.stdout.write(stream.read().decode("utf-8", errors="replace"))
-            return 0
-        # Explicit cancellation must not start fresh work against the caller's wish.
-        terminal = returncode in {129, 130, 143} or free_incident
-        if terminal or index == len(options) - 1:
+            # Explicit cancellation must not start fresh work against the caller's wish.
+            terminal = returncode in {129, 130, 143} or free_incident
+            if terminal or index == len(options) - 1:
+                print(f"fleetctl: {option['harness']}:{option['model_key']} failed (exit {returncode}); "
+                      "no replacement used", file=sys.stderr, flush=True)
+                return returncode
+            replacement = options[index + 1]
             print(f"fleetctl: {option['harness']}:{option['model_key']} failed (exit {returncode}); "
-                  "no replacement used", file=sys.stderr, flush=True)
-            return returncode
-        replacement = options[index + 1]
-        print(f"fleetctl: {option['harness']}:{option['model_key']} failed (exit {returncode}); "
-              f"using {replacement['harness']}:{replacement['model_key']} instead", file=sys.stderr, flush=True)
+                  f"using {replacement['harness']}:{replacement['model_key']} instead", file=sys.stderr, flush=True)
+        finally:
+            # The caller already received the answer (stdout, --last or API response).
+            # Keep the stable receipt path and diagnostics, never private answer copies.
+            # Native diagnostics have no safe text contract. Retain metadata only,
+            # including on interruption and failed/malformed wrapper receipts.
+            diagnostic_path = attempt_dir / "stderr.log"
+            try:
+                size = diagnostic_path.stat().st_size
+                diagnostic_path.write_text(f"fleetctl: wrapper stderr_bytes={size}; text suppressed\n")
+            except OSError:
+                print("fleetctl: SESSION CLEANUP FAILED: cannot retire wrapper diagnostics", file=sys.stderr)
+            for transcript in (last, output):
+                try:
+                    transcript.unlink(missing_ok=True)
+                except OSError:
+                    print("fleetctl: SESSION CLEANUP FAILED: cannot remove dispatch transcript", file=sys.stderr)
     raise FleetError("selector returned no dispatch options")
 
 
@@ -4358,7 +4409,25 @@ def identity_drift_problems(roster: dict[str, Any], state_dir: Path,
     return issues
 
 
-def doctor_command(overlay_path: Path, state_dir: Path) -> int:
+def traces_module():
+    spec = importlib.util.spec_from_file_location("fleet_notrace", Path(__file__).with_name("notrace.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def traces_command(args, state_dir):
+    # No discovery, refresh, telemetry writes or provider calls: only the census's
+    # loopback status request is allowed on this read-only command.
+    try:
+        roster = json.loads(args.overlay.expanduser().read_text())
+    except (OSError, ValueError):
+        roster = None
+    return traces_module().command(args, state_dir=state_dir, roster=roster,
+                                   opencode_db=args.db.expanduser())
+
+
+def doctor_command(overlay_path: Path, state_dir: Path, *, opencode_db: Path | None = None) -> int:
     """Report what this machine can actually do, and name what is missing.
 
     Written for a first run on an unfamiliar machine: the overlay is the hard
@@ -4377,6 +4446,12 @@ def doctor_command(overlay_path: Path, state_dir: Path) -> int:
         return 1
     lanes = roster.get("lanes", [])
     print(f"  ok, {len(lanes)} lanes, {len(roster.get('quota_pools', {}))} pools")
+    print("no trace:")
+    traces = traces_module()
+    trace_result = traces.census(state_dir=state_dir, roster=roster, opencode_db=opencode_db)
+    for line in traces.lines(trace_result, compact=True):
+        print("  " + line)
+    problems += int(trace_result["exit_code"] != 0)
     effort_issues = effort_problems(roster, state_dir)
     print("effort evidence:")
     for issue in effort_issues:
@@ -5763,6 +5838,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="write this policy into the overlay as the machine default",
     )
 
+    traces = sub.add_parser("traces", help="census Crossfeed leftovers; disposal requires --purge --yes")
+    traces_module().add_arguments(traces)
     sub.add_parser("doctor", help="report what this machine can run and what is missing")
     switch = sub.add_parser(
         "switch", help="older three-way form of `level`: off = off, on = forced, auto = normal"
@@ -5895,6 +5972,8 @@ def main() -> int:
             refresh_stale_pools(state_dir, pools, roster=roster)
 
     try:
+        if args.command == "traces":
+            return traces_command(args, state_dir)
         if args.command == "serve-api":
             import lanes_api
             try:
@@ -5976,7 +6055,7 @@ def main() -> int:
             codexbar_snapshot_command(args, state_dir, cmd_roster)
             return 0
         if args.command == "doctor":
-            return doctor_command(args.overlay.expanduser(), state_dir)
+            return doctor_command(args.overlay.expanduser(), state_dir, opencode_db=args.db.expanduser())
         if args.command == "policy":
             policy_command(args, args.overlay.expanduser())
             return 0
