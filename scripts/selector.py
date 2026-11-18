@@ -23,12 +23,12 @@ from typing import Any
 try:
     import funding
     from data_policy import paid_refusal
-    from openrouter_budget import BudgetError, ceiling_usd, route_config
+    from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
     from scripts import funding
     from scripts.data_policy import paid_refusal
-    from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config
+    from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
 
@@ -219,8 +219,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                     raise BudgetError("cash envelope does not grant automatic selection")
                 worst = ceiling_usd(rates, *bounds[:2])
                 paid_cash = funding.quote("metered", budget.snapshot(require=worst), worst_case=float(worst))
-                paid_cash.update(tariff_source=route["tariff"]["source"],
-                                 tariff_valid_until=route["tariff"]["valid_until"])
+                paid_cash.update(tariff_metadata(route["tariff"]))
                 cash_tariff = dict(zip(("in", "out"), map(float, rates)))
             except (BudgetError, OSError) as exc:
                 rejected.append(f"{label}: {exc}")

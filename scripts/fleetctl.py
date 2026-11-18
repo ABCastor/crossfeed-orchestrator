@@ -4947,7 +4947,7 @@ def fleet_overview(
         if not lane_id:
             continue
         if billing == "metered" and isinstance(route, dict):
-            lane_cash[lane_id] = funding.quote(billing, funding.account_budget(roster, route.get("account")))
+            lane_cash[lane_id] = funding.paid_lane_quote(roster, route)
         elif cash.get(pool, {}).get("funding") != billing:
             lane_cash[lane_id] = funding.quote(billing)
     measured_runtime = _without_levels(runtime)

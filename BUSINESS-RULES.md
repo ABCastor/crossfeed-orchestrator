@@ -1,6 +1,6 @@
 # Routing business rules
 
-Scope: the Benchmarks page and local admission-check policy, the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, pace-aware varied selection, local fit-evidence imports, the proposed OpenCode Go value-routing policy, the daily catalog/data-policy rules, and the OpenCode v2 worker boundary below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
+Scope: the Benchmarks page and local admission-check policy, cash-aware routing and the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, pace-aware varied selection, local fit-evidence imports, the proposed OpenCode Go value-routing policy, the daily catalog/data-policy rules, and the OpenCode v2 worker boundary below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
 
 ## BR-COPILOT-001: Named models are an account entitlement
 
@@ -18,7 +18,7 @@ Scope: the Benchmarks page and local admission-check policy, the opt-in paid MiM
 ## BR-CASH-001 — Cash and quota are separate [DECIDED · supplied cash-aware routing build brief, 18 Nov 2026]
 
 - RULE: A key or list price does not establish who pays. Show funding and incremental cash separately from quota pressure and API-equivalent cost. Unknown or malformed pricing must not be represented as a zero quote or grant bounded paid admission.
-- implemented-by: `scripts/funding.py:classify`, `scripts/selector.py:enumerate_options`, `scripts/fleetctl.py:cash_by_pool`, `scripts/run_identity.py:selection_metadata`.
+- implemented-by: `scripts/funding.py:classify`, `scripts/funding.py:paid_lane_quote`, `scripts/providers.py:add`, `scripts/selector.py:enumerate_options`, `scripts/fleetctl.py:cash_by_pool`, `scripts/run_identity.py:selection_metadata`.
 - tested-by: `tests/test_business_cash_routing.py:CashVisibilityTests`.
 
 ## BR-MIMO-001 — MiMo paid calls require explicit opt-in [DECIDED · owner instruction supplied as 13 Oct 2026]
@@ -35,12 +35,12 @@ Shared-identity regression: `tests/test_shared_models.py:SharedRoutingTests.test
 - Former rule (supplied MiMo lane brief): Pro and Flash shared a provisional $5/day; reserve against live pricing, retain ambiguous holds, stop on overrun and never retry.
 - The accounting controls remain in BR-CASH-002. The former $5 default is not spending authorization.
 
-## BR-CASH-002 — No metered request without a funded reservation [DECIDED · supplied cash-aware routing build brief and council, 18 Nov 2026]
+## BR-CASH-002 — No bounded paid send without a funded reservation [DECIDED · supplied cash-aware routing build brief and council, 18 Nov 2026]
 
 - RULE: An owner-set envelope is required for the bounded prompt-only transport. There is no default envelope or implicit dollar amount. Envelopes set positive per-call, local-calendar-day and pilot-total dollar limits and an expiry. Reserve the worst case immediately before sending; all metered endpoints on an account share the same local ledger regardless of dispatch state. If authority, tariff or ledger is unusable, do not send. Replace a hold once with valid final reported cost; interrupted or ambiguous requests retain holds across midnight. Overruns freeze the account until the owner reconciles. Unsupported tool loops are not bounded selector options; the legacy Gemini direct cap is estimate-only.
 - Authority: the build brief and the stricter council controls; nothing here approves a concrete funding account, credential or amount.
 - implemented-by: `scripts/openrouter_budget.py:Budget`, `scripts/openrouter_budget.py:priced_request`, `scripts/openrouter-agent.sh:main`.
-- tested-by: `tests/test_openrouter_mimo.py:MimoTests.test_explicit_paid_flag_does_not_authorize_spend_without_an_envelope` (control: `test_explicit_paid_route_publishes_and_accounts_cost`), `test_missing_ledger_refuses_even_with_an_envelope`, `test_second_provider_overlay_only_and_alternate_dispatch_state_share_cash`, `test_per_call_limit_and_duplicate_settlement`, `test_price_jump_is_refused_before_post`, `test_pro_and_flash_share_one_cap`, `test_missing_cost_keeps_reservation_and_refuses_followup`, `test_paid_http_failure_has_no_retry_and_keeps_reservation`, `test_concurrent_reservations_cannot_overspend`, `test_bad_costs_and_corrupt_ledger_fail_closed`, `test_billing_overrun_blocks_new_calls`, `test_extra_fees_and_missing_prices_are_refused`, `test_timeout_keeps_paid_reservation`, `test_midnight_resets_settled_cost_but_keeps_unknown_reservations`.
+- tested-by: `tests/test_openrouter_mimo.py:MimoTests.test_explicit_paid_flag_does_not_authorize_spend_without_an_envelope` (control: `test_explicit_paid_route_publishes_and_accounts_cost`), `test_missing_ledger_refuses_even_with_an_envelope`, `test_second_provider_overlay_only_and_alternate_dispatch_state_share_cash`, `test_per_call_limit_and_duplicate_settlement`, `test_two_provider_processes_cannot_race_past_last_headroom`, `test_price_jump_is_refused_before_post`, `test_pro_and_flash_share_one_cap`, `test_missing_cost_keeps_reservation_and_refuses_followup`, `test_paid_http_failure_has_no_retry_and_keeps_reservation`, `test_concurrent_reservations_cannot_overspend`, `test_bad_costs_and_corrupt_ledger_fail_closed`, `test_billing_overrun_blocks_new_calls`, `test_extra_fees_and_missing_prices_are_refused`, `test_timeout_keeps_paid_reservation`, `test_midnight_resets_settled_cost_but_keeps_unknown_reservations`.
 
 Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.test_alias_does_not_bypass_paid_explicit_allow_or_cap` keeps paid admission blocked at the existing cap even when a Go route shares the model identity.
 
@@ -54,7 +54,7 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 
 - RULE: An envelope's amount, a task allow list, forced mode or quota exhaustion must not authorize a paid selection. Only an explicit automatic grant for that account and measured fit at the owner floor for the task family and effort may admit a metered candidate. No metered exploration. Within comparable measured quality and score, prefer usable expiring included quota, then lower incremental cash. Preserve highest known quality for irreversible stakes. A paid dispatch is one attempt; a nonmetered dispatch must not retry into paid.
 - implemented-by: `scripts/selector.py:enumerate_options`, `scripts/selector.py:_cash_band`, `scripts/selector.py:select_option`, `scripts/openrouter-agent.sh:main`, `scripts/fleetctl.py:dispatch_selection`.
-- tested-by: `tests/test_business_cash_routing.py:CashVisibilityTests.test_cap_and_allow_are_not_permission_to_auto_select`, `test_equal_quality_and_score_band_prefers_expiring_included_then_cash`, `test_paid_quality_must_be_measured_and_at_the_route_floor_never_explored`, `tests/test_openrouter_mimo.py:MimoTests.test_revoked_automatic_selection_is_rechecked_at_send`, `tests/test_dispatch.py:DispatchTests.test_retry_never_enters_or_leaves_a_metered_attempt`. Controls: the granted public case selects paid when included quality is outside the band; `test_runtime_failures_retry_across_harnesses_despite_receipts` proves nonmetered retries still happen.
+- tested-by: `tests/test_business_cash_routing.py:CashVisibilityTests.test_cap_and_allow_are_not_permission_to_auto_select`, `test_equal_quality_and_score_band_prefers_expiring_included_then_cash`, `test_paid_quality_must_be_measured_and_at_the_route_floor_never_explored`, `test_legacy_discovered_api_key_and_estimate_cap_do_not_admit_tool_loops`, `tests/test_openrouter_mimo.py:MimoTests.test_revoked_automatic_selection_is_rechecked_at_send`, `tests/test_dispatch.py:DispatchTests.test_retry_never_enters_or_leaves_a_metered_attempt`. Controls: the granted public case selects paid when included quality is outside the band; `test_runtime_failures_retry_across_harnesses_despite_receipts` proves nonmetered retries still happen.
 
 ## BR-SELECT-001 — Configured Haiku judgment refusals precede scoring [DECIDED · supplied R10-SELECT brief, 13 Oct 2026]
 

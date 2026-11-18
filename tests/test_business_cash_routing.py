@@ -87,6 +87,49 @@ class CashVisibilityTests(unittest.TestCase):
         return self.select(runtime, role="hard-reasoning", data_class="public",
                            prompt="Return PONG", allow=allow, **kwargs)
 
+    # BR-CASH-002 / BR-CASH-004
+    def test_legacy_discovered_api_key_and_estimate_cap_do_not_admit_tool_loops(self):
+        lane = copy.deepcopy(next(row for row in self.roster["lanes"] if row.get("paid_mimo")))
+        lane.pop("paid_mimo")
+        key = "synthetic-tool-loop"
+        lane.update(lane_id=key, model_key=key, harness="pi", selector="test/loop",
+                    provider="test", quota_pool=key, provider_source="test",
+                    auth={"kind": "api-key", "terms_class": "api-only"})
+        self.roster["quota_pools"][key] = {"daily_usd_cap": 1}
+        self.roster["effort"][key] = {"levels": {"pi": []}, "default": "provider-default"}
+        self.roster["lanes"].append(lane)
+        options, rejected = selector.enumerate_options(self.roster, {}, "review", fleet=fleetctl)
+        self.assertNotIn(key, [row["model_key"] for row in options])
+        self.assertIn(key + ": funding is unknown", rejected)
+
+    # BR-CASH-001 / BR-CASH-002
+    def test_example_enrolls_no_account_and_only_shows_inert_paid_templates(self):
+        example = json.loads((ROOT / "examples/access-overlay.example.json").read_text())
+        self.assertEqual(example["cash_accounts"], {})
+        self.assertNotIn("daily_usd_cap", example["quota_pools"]["openrouter-mimo"])
+        routes = [lane for lane in example["lanes"] if lane.get("paid_mimo")]
+        self.assertEqual(len(routes), 2)
+        for lane in routes:
+            self.assertEqual(lane["paid_route"]["model"], lane["selector"])
+            self.assertEqual(lane["paid_route"]["approved_prompt_sha256"], [])
+
+    # BR-CASH-001
+    def test_brief_and_selection_show_the_dated_owner_quote_without_reserving(self):
+        self.paid_fixture()
+        self.roster["cash_accounts"][ACCOUNT]["automatic"] = True
+        self.evidence_rows(other=.9)
+        result = self.reasoning("fixture-other:fixture-other:*")
+        choice = result["choice"]["cash"]
+        overview = fleetctl.fleet_overview(self.roster, {}, self.state)
+        cash = overview["lane_cash"]["fixture-other"]
+        self.assertEqual(cash["worst_case_usd"], choice["worst_case_usd"])
+        self.assertEqual(cash["tariff_quoted_at"], choice["tariff_quoted_at"])
+        self.assertEqual(cash["tariff_source"], "synthetic catalog")
+        self.assertGreaterEqual(cash["tariff_age_s"], 0)
+        self.assertEqual(cash["held_usd"], 0)
+        self.assertIn("worst case 0.2", fleetctl.render_brief(overview))
+        self.assertEqual(json.loads(self.ledger.read_text())["accounts"][ACCOUNT]["calls"], {})
+
     # BR-CASH-004
     def test_cap_and_allow_are_not_permission_to_auto_select(self):
         self.paid_fixture()

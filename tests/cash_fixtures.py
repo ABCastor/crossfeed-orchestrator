@@ -22,7 +22,8 @@ def configure(roster, endpoint, **limits):
                 "quality_floors": {"reasoning": .65, "repo-qa": .65},
                 "tariff": {"input": "1000", "output": "1000", "context_tokens": 100,
                            "max_output_tokens": 100, "max_input_bytes": 4000,
-                           "source": "synthetic catalog", "valid_until": "2099-01-02T00:00:00Z"},
+                           "source": "synthetic catalog", "quoted_at": "2026-01-01T00:00:00Z",
+                           "valid_until": "2099-01-02T00:00:00Z"},
             }
     roster["quota_pools"]["openrouter-mimo"].pop("daily_usd_cap", None)
 

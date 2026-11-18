@@ -1,6 +1,6 @@
 # Portable setup and evidence
 
-Crossfeed Orchestrator routes AI coding work across your subscriptions and supervises each worker.
+Crossfeed Orchestrator routes AI work across your subscriptions and supervises each worker. An optional prompt-only metered transport ships disabled, with no spending authorization.
 
 If you pay for several AI plans, your agents can use the others when one runs low. A local console sets which models they may use and how freely to spend each plan. Routing reads those settings before every job.
 
@@ -46,7 +46,7 @@ python3 scripts/fleetctl.py dispatch --role review --mode read-only \
   --last /tmp/review.txt
 ```
 
-A *lane* is a model on a particular tool, funded by a quota pool. Crossfeed selects a lane and thinking level for the task, then runs its wrapper under a lease and watchdog. Each run records the selected model; provider identity is confirmed only when the provider supplies it.
+A *lane* is a model on a particular tool. Its funding is included access, verified-free, metered or unknown; an API key doesn't tell you which. Crossfeed selects a lane and thinking level, then runs its wrapper under a lease and watchdog. Each run records the selected model; provider identity is confirmed only when the provider supplies it. The brief and receipts separate incremental cash and reserved/settled dollars from pressure on a quota window.
 
 The console has five spend levels: **off**, **low**, **normal**, **high** and **ignore estimates** (`forced` in the CLI). Model switches restrict which choices are available. Known exhaustion, provider refusals and configured paid caps remain hard gates, even when estimates are ignored. Missing quota measurements stay unknown. See [quota sources](QUOTA-REFRESH.md).
 
@@ -58,7 +58,9 @@ For parallel jobs, use `scripts/fanout.sh tasks.jsonl --parallel 3`. Give write-
 
 **The selector has not yet been proven better than simpler routing policies on hard tasks.** On 5 October 2026, synthetic coding tests passed 12/12 for Sol High, 9/11 for ChatGPT High through Pi and 9/10 for ChatGPT Extra High through Pi. Only 23/36 ChatGPT cells were measured, none of its nine calibration cells ran, and its underlying model identity is unconfirmed. Sol High remains the default; admitted Pi relay workers can provide fallback capacity under quota pressure. The [benchmark harness](../bench/README.md) lets you measure your own tasks.
 
-Copilot defaults to a read-only Auto observer. To select named workers within one subscription, follow the [account setup](../skill/references/lane-copilot.md). Antigravity requires write mode because its wrapper has no proven read-only boundary. Paid caps use recorded estimates and a run can overshoot, so use provider-side limits too. Plain ChatGPT lanes are read-only; the optional Pi coding routes use local tools. Both draw from ChatGPT account quota, separate from Codex quota.
+Copilot defaults to a read-only Auto observer. To select named workers within one subscription, follow the [account setup](../skill/references/lane-copilot.md). Antigravity requires write mode because its wrapper has no proven read-only boundary. Plain ChatGPT lanes are read-only; the optional Pi coding routes use local tools. Both draw from ChatGPT account quota, separate from Codex quota.
+
+Quota exhaustion never authorizes paid dispatch. A bounded public-text paid route needs an owner-set cash envelope and durable reservation before it sends. Automatic selection is a separate owner grant; no retry may enter or leave a paid attempt. See [cash setup and receipts](SELECTOR.md#cash-funding-and-owner-envelopes). Legacy Gemini text's recorded-spend cap is estimate-only, can overshoot in flight and does not enable automatic paid routing. A provider-side cap is a second backstop, not a substitute for the ledger.
 
 ```bash
 bash tests/run-all.sh

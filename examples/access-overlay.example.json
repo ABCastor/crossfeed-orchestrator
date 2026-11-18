@@ -109,6 +109,7 @@
     "local_cost_semantics": "estimated equivalent cost from local model pricing; never authoritative Go quota debit",
     "dashboard": "https://opencode.ai/auth"
   },
+  "cash_accounts": {},
   "quota_pools": {
     "opencode-go": {
       "label": "OpenCode Go",
@@ -311,9 +312,9 @@
       "role": "<describe this pool's role>",
       "daily_usd_cap": 0.5,
       "daily_window": "calendar-day-local",
-      "cost_semantics": "<describe this pool's cost_semantics>",
+      "cost_semantics": "Estimate-only, not a reservation or an authoritative charge.",
       "authoritative_spend_source": "Google AI Studio / Cloud console",
-      "enforcement": "wrapper admission (fleetctl acquire) refuses the next call once the calendar day's recorded estimated spend reaches the cap; a single in-flight run can overshoot by at most its own cost because max_parallel is 1",
+      "enforcement": "Legacy direct-tool-loop cap only. Checks recorded estimates before each run; an in-flight run can overshoot. Not selectable by the bounded paid router.",
       "recommended_backstop": "set a hard requests-per-day quota or a low budget on the Google API key as a true stop",
       "source": "https://ai.google.dev/gemini-api/docs/models",
       "quota_refresh": null,
@@ -360,11 +361,8 @@
       },
       "billing": "paid",
       "explicit_only": true,
-      "daily_usd_cap": 5,
-      "daily_window": "calendar-day-local",
-      "cap_owner": "Owner may change daily_usd_cap; provisional $5/day requested in the MiMo lane brief.",
       "quota_refresh": null,
-      "quota_source": "Live OpenRouter pricing plus locked spend reservations.",
+      "quota_source": "Bounded cash uses cash_accounts and the canonical cash ledger. This example grants no spend.",
       "source": "https://openrouter.ai/api/v1/models"
     },
     "antigravity-argon": {
@@ -1738,8 +1736,8 @@
       "harness": "openrouter",
       "provider": "openrouter",
       "selector": "xiaomi/mimo-v2.6-pro",
-      "access_status": "verified",
-      "admission_status": "active",
+      "access_status": "unverified",
+      "admission_status": "candidate",
       "verified_at": null,
       "quality_tier": "strong",
       "roles": [
@@ -1761,13 +1759,34 @@
       "quota_pool": "openrouter-mimo",
       "paid_mimo": true,
       "auth": {
-        "key_ref": "op://4kr2jxlokteecriaokqrdsnixm/OpenRouter API Key - Orchestrator/credential"
+        "key_ref": "op://aaaaaaaaaaaaaaaaaaaaaaaaaa/Example OpenRouter Key/credential"
+      },
+      "paid_route": {
+        "profile": "catalog-sse-v1",
+        "endpoint": "https://openrouter.ai/api/v1",
+        "provider": null,
+        "model": "xiaomi/mimo-v2.6-pro",
+        "account": "example-openrouter-no-envelope",
+        "roles": ["hard-reasoning", "long-context"],
+        "material_classes": ["public"],
+        "approved_prompt_sha256": [],
+        "quality_floors": {},
+        "tariff": {
+          "input": null,
+          "output": null,
+          "context_tokens": null,
+          "max_output_tokens": null,
+          "max_input_bytes": null,
+          "source": null,
+          "quoted_at": null,
+          "valid_until": null
+        }
       },
       "max_parallel": 1,
       "max_tasks_per_run": 1,
       "retries": 0,
       "timeout_s": null,
-      "notes": "Explicit paid opt-in only. Public/synthetic prompt-contained text; no tools or filesystem. Live catalog and daily reservations checked before each call."
+      "notes": "Inert paid route template. No envelope, approved prompt or tariff is shipped. See docs/SELECTOR.md."
     },
     {
       "lane_id": "openrouter-mimo-v2.6-flash",
@@ -1775,8 +1794,8 @@
       "harness": "openrouter",
       "provider": "openrouter",
       "selector": "xiaomi/mimo-v2.6-flash",
-      "access_status": "verified",
-      "admission_status": "active",
+      "access_status": "unverified",
+      "admission_status": "candidate",
       "verified_at": null,
       "quality_tier": "standard",
       "roles": [
@@ -1798,13 +1817,34 @@
       "quota_pool": "openrouter-mimo",
       "paid_mimo": true,
       "auth": {
-        "key_ref": "op://4kr2jxlokteecriaokqrdsnixm/OpenRouter API Key - Orchestrator/credential"
+        "key_ref": "op://aaaaaaaaaaaaaaaaaaaaaaaaaa/Example OpenRouter Key/credential"
+      },
+      "paid_route": {
+        "profile": "catalog-sse-v1",
+        "endpoint": "https://openrouter.ai/api/v1",
+        "provider": null,
+        "model": "xiaomi/mimo-v2.6-flash",
+        "account": "example-openrouter-no-envelope",
+        "roles": ["hard-reasoning", "long-context"],
+        "material_classes": ["public"],
+        "approved_prompt_sha256": [],
+        "quality_floors": {},
+        "tariff": {
+          "input": null,
+          "output": null,
+          "context_tokens": null,
+          "max_output_tokens": null,
+          "max_input_bytes": null,
+          "source": null,
+          "quoted_at": null,
+          "valid_until": null
+        }
       },
       "max_parallel": 1,
       "max_tasks_per_run": 1,
       "retries": 0,
       "timeout_s": null,
-      "notes": "Explicit paid opt-in only. Public/synthetic prompt-contained text; no tools or filesystem. Live catalog and daily reservations checked before each call."
+      "notes": "Inert paid route template. No envelope, approved prompt or tariff is shipped. See docs/SELECTOR.md."
     },
     {
       "lane_id": "antigravity-gemini-4-argon-low",

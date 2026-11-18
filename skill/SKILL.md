@@ -32,6 +32,7 @@ Brief, one row per pool:
 ```text
 pool | level | binding window | used | resets | price | models on
 off: <disabled models and stand-ins>
+Cash (USD, separate from quota pressure): <funding, estimate, worst case and headroom>
 pick: fleetctl.py select --role R [--stakes S]
 ```
 
@@ -56,7 +57,8 @@ Never reopen a settled decision. Council on your own doubt. Same-vendor subagent
 - Official CLIs, intended logins, owner's account; recheck terms before sustained automation. API and partner-plan lanes must declare and enforce their authentication class; never infer billing from an API key. Crossfeed Chat is a separate read-only subscription-relay route requiring dated account-risk acceptance, which does not imply vendor permission; see `docs/CHATGPT.md`. `claude -p` never uses `--bare` (API billing). `fleetctl.py doctor` names missing prerequisites.
 - Control authority is defined by BR-SWITCH-001 in `BUSINESS-RULES.md` (checkout or installed root): agents may change controls within recorded owner limits. Read [controls](references/controls.md) before changing them.
 - Free/anonymous lanes, OpenRouter free lanes and research-scout: public/synthetic material only. No private facts, notes, memory, personal/client data, credentials or unreleased names. Citations count only after you open them. OpenRouter checks live free-only pricing before every default call; paid MiMo is a separate explicit opt-in.
-- Paid pools require explicit admission and a configured daily cap. The owner approved MiMo V2.6 Pro and Flash via OpenRouter on 13 Oct 2026 (date supplied in the lane brief), with a provisional $5/day cap that only the owner may change. Use `--paid-mimo` directly or an explicit `--allow openrouter-mimo:<model>:*` in selection/dispatch; no automatic paid fallback. Read the overlay and optional `LIVE-RULES.md` for spending policy. Copilot is one read-only Auto observer, never swarm, `/fleet`, `/research` or named models.
+- Do not spend without the owner's account envelope and a bounded reservation. No envelope ships. Quota exhaustion, `forced`, a target or an allow list do not grant spend. Automatic paid selection requires a separate owner grant and measured fit. Only owner-approved exact public prompt text goes to the paid transport; no tools, files or private material. MiMo retains its explicit opt-in. Gemini's legacy text cap is estimate-only and is not an automatic paid lane. Read [cash policy](../docs/SELECTOR.md#cash-funding-and-owner-envelopes) and optional `LIVE-RULES.md`.
+- Copilot Student is read-only and Auto-only. Another account may admit operator-verified exact named models sharing one subscription pool with a per-call credit cap; follow [the account rule](references/lane-copilot.md).
 - UNKNOWN quota fails open for routing; keep frontier lanes single-slot until the gauge is proven. EXHAUSTED and an open quota-error circuit fail closed. `forced` never overrides a known failure or a paid cap. Spend expiring surplus on useful quality-sensitive work; do not start unresumable work that cannot finish before reset. Front-load expensive work on a pool that has just reset.
 - Always pass agy `--lane` or `--role`; bare agy uses its settings model.
 

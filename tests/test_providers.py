@@ -69,6 +69,11 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(any(o['pool'] == 'lab' for o in choices))
         lane['access_status'] = 'verified'
         choices, reasons = selector.enumerate_options(roster, {}, 'review', mode='read-only', fleet=fleetctl)
+        self.assertFalse(any(o['pool'] == 'lab' for o in choices))
+        self.assertIn(lane['lane_id'] + ': funding is unknown', reasons)
+        # Simulate separate operator billing verification for the synthetic endpoint.
+        lane['funding'] = 'verified-free'
+        choices, reasons = selector.enumerate_options(roster, {}, 'review', mode='read-only', fleet=fleetctl)
         option = next(o for o in choices if o['pool'] == 'lab')
         command = selector._command(option, 'review', self.root/'receipt.json', fleet=fleetctl)
         self.assertIn(str(ROOT/'scripts/pi-agent.sh'), command)
@@ -301,6 +306,10 @@ print(json.dumps({'type':'agent_end','messages':[message]}))
         self.assertNotIn('cost',receipt)
         self.assertEqual(receipt['effort'],'provider-default')
         self.assertEqual(receipt['native_effort'],'off')
+        configured = json.loads(self.path.read_text())
+        # This fake provider charges nothing. Record that separately from API access before selecting it.
+        configured['quota_pools']['lab']['funding'] = 'verified-free'
+        self.path.write_text(json.dumps(configured))
         dispatched = self.root/'dispatched.txt'
         run = subprocess.run([sys.executable, str(ROOT/'scripts/fleetctl.py'), '--overlay',str(self.path),
                               '--state-dir',str(self.state), 'dispatch', '--role','review', '--allow','lab:lab/test-model:*',

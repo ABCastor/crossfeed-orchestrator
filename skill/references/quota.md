@@ -20,7 +20,7 @@ A configured oracle failure is separate from UNKNOWN: reuse the last successful 
 
 One provider can fund several pools. Antigravity Gemini and third-party models have separate metering windows; never collapse them into one shortage. A healthy measured gauge cannot prove an unreported provider limit is open: before a multi-task agy campaign, run one bounded canary and confirm a real response.
 
-Go `step_finish.cost`, token totals and `opencode stats` are local equivalent-cost estimates, not authoritative Go debit. Do not reconstruct used percentages from them. Paid `gemini-metered` instead uses recorded estimated spend under its daily USD cap; its cap is a safety rail, not authoritative billing. Keep OpenCode Use balance off.
+Go `step_finish.cost`, token totals and `opencode stats` are local equivalent-cost estimates, not authoritative Go debit. Do not reconstruct used percentages from them. Legacy direct `gemini-metered` uses recorded estimated spend under an estimate-only daily cap; it can overshoot and isn't a selector option. Bounded paid text uses a separate account envelope and reservation, not quota lambda. Keep OpenCode Use balance off.
 
 At lead-pool CRITICAL, check the reset clock first. If no near-reset surplus applies, minimize lead input: summarize long inputs externally, cap digests, batch questions and defer nonessential lead work. Announce the change once. Owner-specific away-window/emergency rules belong in optional live policy, not this engine.
 

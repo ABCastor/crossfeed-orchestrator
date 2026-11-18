@@ -371,7 +371,8 @@ def add(path, *, id, kind, label="", base_url="", credential_ref="", key="", mod
         if source["owns_pool"]:
             roster.setdefault("quota_pools", {})[pool] = {"label": label, "plan": {"name": label, "billing": "unknown"}}
             if kind in {"openai-compatible", "openrouter"}:
-                roster["quota_pools"][pool]["daily_usd_cap"] = cap
+                # BR-CASH-001: key and catalogue access prove neither entitlement nor free billing.
+                roster["quota_pools"][pool].update(funding="unknown", daily_usd_cap=cap)
         sources[id] = source
     return {"id": id, "models": result["selected"], "message": result["message"] + (
         " Saved. New lanes are unverified; review and verify them in the overlay before routing." if kind != "crossfeed-chat"

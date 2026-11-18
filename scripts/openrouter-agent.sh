@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# openrouter-agent.sh — free by default; explicit paid MiMo calls have a hard daily cap.
+# openrouter-agent.sh — free by default; bounded paid text requires the owner envelope and ledger.
 #
-# FREE-ONLY BY DEFAULT (except --paid-mimo on approved MiMo lanes): before every call this fetches OpenRouter's live model catalog
+# FREE-ONLY BY DEFAULT: before every free call this fetches OpenRouter's live model catalog
 # (GET /api/v1/models) and refuses to send the request unless every field in that model's
-# `pricing` object is exactly "0" AND its output is pure text. This is the real safety rail,
+# `pricing` object is exactly "0" (including prompt and completion) AND its output is pure text. This is the real safety rail,
 # not the roster entry: a temporary free preview (e.g. a stealth model) that starts billing
 # mid-week is refused live, not silently charged. Non-text output (audio/image generation) is
 # excluded because some models price those outside the prompt/completion fields this checks.
 #
 # Usage:
 #   openrouter-agent.sh --prompt "<task>" [--lane ID | --model-key KEY | --model SELECTOR]
-#                       [--paid-mimo] [--max-tokens N] [--timeout S] [--last <file>]
+#                       [--paid-mimo | --paid --role ROLE] [--max-tokens N] [--timeout S] [--last <file>]
 #
 #   --timeout has no default: absent means no wall-clock limit.
 #   --idle-timeout defaults to 0 (opt-in killing only); --kill-after defaults to 30 seconds.
@@ -397,9 +397,8 @@ fi
 EVENTS="$(mktemp "${TMPDIR:-/tmp}/openrouter-model.XXXXXX")"
 CROSSFEED_STARTED=1
 set -m
-# OPENROUTER_API_BASE exists so the watchdog can be PROVEN, not asserted: the tests point it
-# at a local server that stalls, dribbles, or hangs, and assert the real exit codes. It is a
-# test seam, not a routing knob - never point it at a third party, the API key travels with it.
+# OPENROUTER_API_BASE is a free-transport test seam for loopback watchdog fixtures; never
+# point it at a third party. Paid transport refuses it and reads the owner-pinned route.
 OPENROUTER_MODEL="$MODEL" OPENROUTER_KEY="$KEY" OPENROUTER_PROMPT="$PROMPT" \
 OPENROUTER_API_BASE="${OPENROUTER_API_BASE-}" \
 OPENROUTER_TIMEOUT="$TIMEOUT" OPENROUTER_IDLE="$IDLE_TIMEOUT" \
@@ -646,7 +645,8 @@ if paid:
     if os.environ["OPENROUTER_API_BASE"]:
         fail(5, "paid endpoint overrides are refused; use the owner-pinned route")
     sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
-    from openrouter_budget import BudgetError, ceiling_usd, owner_overlay, priced_request, route_config
+    from openrouter_budget import (BudgetError, ceiling_usd, dollars, owner_overlay,
+                                   priced_request, route_config, tariff_metadata)
     from data_policy import paid_refusal
     from funding import classify
     from providers import NoRedirect, ProviderError, resolve_key
@@ -740,7 +740,7 @@ if paid:
     try:
         reservation = budget.reserve(model, ceiling)
         cash = quote("metered", budget.snapshot(), worst_case=float(ceiling))
-        cash["reservation_id"] = reservation
+        cash.update(tariff_metadata(route["tariff"]), reservation_id=reservation)
         with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
             events.write(json.dumps({"type": "crossfeed.cash", "cash": cash}) + "\n")
     except (BudgetError, OSError, ValueError) as exc:
@@ -748,11 +748,19 @@ if paid:
 text, usage = stream_completion(request)
 
 if paid:
+    raw_cost = usage.get("cost") if isinstance(usage, dict) else None
     try:
-        cost = budget.settle(reservation, usage.get("cost") if isinstance(usage, dict) else None)
+        cost = budget.settle(reservation, raw_cost)
         cash.update(budget.snapshot(), reported_usd=float(cost))
     except (BudgetError, OSError, ValueError):
-        fail(6, "paid usage missing/invalid or exceeded reservation; reservation retained, no retry")
+        try:
+            cash.update(budget.snapshot(), reported_usd=float(dollars(raw_cost)))
+            with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
+                events.write(json.dumps({"type": "crossfeed.cash", "cash": cash}) + "\n")
+            print(f"openrouter-agent: {summary(cash)}; reservation {reservation}", file=sys.stderr)
+        except (BudgetError, OSError):
+            pass
+        fail(6, "paid usage missing/invalid or exceeded reservation; see cash ledger, no retry")
     with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
         events.write(json.dumps({"type": "crossfeed.openrouter_usage",
                                  "usage": {"cost": str(cost), **{key: usage[key] for key in

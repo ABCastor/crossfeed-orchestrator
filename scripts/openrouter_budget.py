@@ -48,12 +48,12 @@ def positive_integer(value):
 
 def _instant(value):
     try:
-        instant = dt.datetime.fromisoformat(value)
+        instant = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
         if instant.tzinfo is not None:
             return instant
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, AttributeError):
         pass
-    raise BudgetError("missing or invalid expiry")
+    raise BudgetError("missing or invalid timestamp")
 
 
 def _live_until(value, label):
@@ -157,24 +157,38 @@ def route_config(roster, lane, role):
     ref = raw_auth.get("key_ref") if isinstance(raw_auth, dict) else None
     if not isinstance(ref, str) or not ref.startswith("op://"):
         raise BudgetError("paid route requires a 1Password key reference")
-    tariff = route.get("tariff")
-    if not isinstance(tariff, dict) or set(tariff) != {
-            "input", "output", "context_tokens", "max_output_tokens", "max_input_bytes", "source", "valid_until"}:
-        raise BudgetError("missing or invalid tariff")
-    try:
-        _live_until(tariff.get("valid_until"), "paid tariff")
-        if not isinstance(tariff["source"], str) or not tariff["source"].strip() or len(tariff["source"]) > 240:
-            raise BudgetError("tariff source required")
-        rates = tuple(dollars(tariff[k]) for k in ("input", "output"))
-        # The provider maxima use the same public USD/million representation as the quote.
-        if any(dollars(float(rate)) != rate for rate in rates):
-            raise BudgetError("tariff precision cannot be represented by the transport")
-        bounds = tuple(positive_integer(tariff[k]) for k in ("context_tokens", "max_output_tokens", "max_input_bytes"))
-    except BudgetError as exc:
-        raise BudgetError(f"invalid tariff: {exc}") from None
+    rates, bounds = parse_tariff(route.get("tariff"))
     endpoint(route.get("endpoint"))
     raw, _ = envelope(roster, route.get("account"))
     return route, rates, bounds, Budget(route["account"], raw)
+
+
+def parse_tariff(tariff):
+    if not isinstance(tariff, dict) or set(tariff) != {
+            "input", "output", "context_tokens", "max_output_tokens", "max_input_bytes",
+            "source", "quoted_at", "valid_until"}:
+        raise BudgetError("missing or invalid tariff")
+    try:
+        _live_until(tariff.get("valid_until"), "paid tariff")
+        if _instant(tariff["quoted_at"]) > dt.datetime.now(dt.timezone.utc):
+            raise BudgetError("tariff quote is dated in the future")
+        source = tariff["source"]
+        if not isinstance(source, str) or not source.strip() or len(source) > 240 or not source.isprintable():
+            raise BudgetError("printable tariff source required")
+        rates = tuple(dollars(tariff[k]) for k in ("input", "output"))
+        # Provider maxima use the same USD/million representation as the quote.
+        if any(dollars(float(rate)) != rate for rate in rates):
+            raise BudgetError("tariff precision cannot be represented by the transport")
+        bounds = tuple(positive_integer(tariff[k]) for k in ("context_tokens", "max_output_tokens", "max_input_bytes"))
+        return rates, bounds
+    except BudgetError as exc:
+        raise BudgetError(f"invalid tariff: {exc}") from None
+
+
+def tariff_metadata(tariff):
+    age = (dt.datetime.now(dt.timezone.utc) - _instant(tariff["quoted_at"])).total_seconds()
+    return {f"tariff_{key}": tariff[key] for key in ("source", "quoted_at", "valid_until")} | {
+        "tariff_age_s": max(0, int(age))}
 
 
 def ceiling_usd(rates, context, output):

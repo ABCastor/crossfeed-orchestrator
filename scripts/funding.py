@@ -66,7 +66,12 @@ def classify(roster, pool, lane=None):
 
 
 def explicitly_unknown(roster, pool, lane, value):
-    return value == "unknown" and ("funding" in lane or "funding" in roster.get("quota_pools", {}).get(pool, {}))
+    auth = lane.get("auth") or {}
+    return value == "unknown" and (
+        "funding" in lane or "funding" in roster.get("quota_pools", {}).get(pool, {})
+        or lane.get("harness") == "pi"
+        or isinstance(auth, dict) and auth.get("terms_class") == "api-only"
+    )
 
 
 def is_metered(option):
@@ -108,6 +113,20 @@ def account_budget(roster, account):
         return {"account": account, "per_call_cap_usd": float(per_call), "cap_usd": float(cap)}
 
 
+def paid_lane_quote(roster, route):
+    try:
+        from openrouter_budget import BudgetError, ceiling_usd, parse_tariff, tariff_metadata
+    except ModuleNotFoundError:
+        from scripts.openrouter_budget import BudgetError, ceiling_usd, parse_tariff, tariff_metadata
+    cash = quote("metered", account_budget(roster, route.get("account")))
+    try:
+        rates, bounds = parse_tariff(route.get("tariff"))
+        cash.update(tariff_metadata(route["tariff"]), worst_case_usd=float(ceiling_usd(rates, *bounds[:2])))
+    except BudgetError:
+        pass
+    return cash
+
+
 def summary(cash, *, symbol="$"):
     def usd(value):
         return "unknown" if value is None else f"{symbol}{value:.8g}"
@@ -126,6 +145,8 @@ def summary(cash, *, symbol="$"):
             text += f", reported {usd(cash['reported_usd'])}"
         if cash.get("frozen"):
             text += ", frozen"
+        if cash.get("tariff_source"):
+            text += f", quote {cash['tariff_source']} ({cash.get('tariff_age_s', '?')}s old)"
     return text
 
 
@@ -144,7 +165,9 @@ def receipt_fields(raw):
             result[key] = raw[key]
     if type(raw.get("frozen")) is bool:
         result["frozen"] = raw["frozen"]
-    for key in ("tariff_source", "tariff_valid_until"):
-        if isinstance(raw.get(key), str) and len(raw[key]) <= 240:
+    for key in ("tariff_source", "tariff_quoted_at", "tariff_valid_until"):
+        if isinstance(raw.get(key), str) and len(raw[key]) <= 240 and raw[key].isprintable():
             result[key] = raw[key]
+    if type(raw.get("tariff_age_s")) is int and raw["tariff_age_s"] >= 0:
+        result["tariff_age_s"] = raw["tariff_age_s"]
     return result
