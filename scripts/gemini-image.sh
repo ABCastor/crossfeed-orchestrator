@@ -83,7 +83,7 @@ REFS = sys.argv[1:]
 # per-image list price, August 2026. Reserved BEFORE the call and kept on an ambiguous
 # failure: the daily cap is the real guard, and a retry that is not charged against it is
 # how an uncapped path gets created by accident.
-# Prices per ai.google.dev/gemini-api/docs/pricing, read 2026-08-26: flash-image is $0.067 at
+# Pricing source: ai.google.dev/gemini-api/docs/pricing (26 August 2026 snapshot). Flash-image is $0.067 at
 # 1K and 2.5-flash-image is $0.039. Reserving less than the list price would make the daily
 # cap looser than it claims to be (a $0.028 figure would under-reserve by ~2.4x).
 PRICE = {'gemini-3-pro-image': 0.134, 'gemini-3.1-flash-image': 0.067,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openrouter-agent.sh — free by default; bounded paid text requires the owner envelope and ledger.
+# openrouter-agent.sh — free by default; bounded paid text requires an operator-set envelope and a ledger.
 #
 # FREE-ONLY BY DEFAULT: before every free call this fetches OpenRouter's live model catalog
 # (GET /api/v1/models) and refuses to send the request unless every field in that model's
@@ -19,19 +19,13 @@
 # no OpenRouter lane is in any routing.roles list, so fleetctl route --harness openrouter
 # would have nothing to return).
 #
-# WHY THIS WRAPPER STREAMS. It used to bind TIMEOUT="120" — the exact silent wall-clock default
-# that once killed long runs on codex-agent.sh, and it killed slow free-tier reasoning
-# runs while reporting something that read like a network error. Removing the cap alone would
-# have traded a silent kill for a silent hang, because a NON-streaming completion offers nothing
-# to observe: between "request sent" and "response complete" there is no progress at all, so an
-# "idle watchdog" over it would just be a wall clock wearing a costume. The request is therefore
-# sent with `stream: true`, and the liveness signal is THE HTTP STREAM ITSELF — every SSE byte,
-# including OpenRouter's `: OPENROUTER PROCESSING` keepalives and reasoning deltas, counts as the
-# server still working. That makes the same contract the CLI wrappers hold (no wall clock, idle
-# supervision, TERM then KILL on the process group) an honest one here rather than a relabelling.
-# The idle default matches the other wrappers on purpose: one contract, one number, no second
-# hidden bound. This transport is chattier than a CLI agent, so pass --idle-timeout for a tighter
-# bound if you want one; pass --idle-timeout 0 to disable idle supervision entirely.
+# WHY THIS WRAPPER STREAMS. Non-streaming requests expose no liveness between send and response.
+# An idle watchdog over such a request would act like a wall-clock limit and cut off slow but
+# healthy reasoning; disabling it would leave hangs unobservable. With `stream: true`, each
+# SSE byte, including `: OPENROUTER PROCESSING` keepalives and reasoning deltas, shows liveness.
+# Like the CLI wrappers, there is no default wall clock, and an idle kill sends TERM then KILL
+# to the process group. The default idle setting is shared across wrappers. Pass --idle-timeout
+# for a tighter bound on this chattier transport, or --idle-timeout 0 for diagnostics only.
 #
 # Prints the model's final text to stdout. Diagnostics go to stderr.
 # Exit codes: 0 success; 2 usage; 3 lane rejected by roster or key missing; 4 lease failure;
@@ -113,7 +107,7 @@ selectors=0
 
 command -v jq >/dev/null || { echo "openrouter-agent: jq is required" >&2; exit 127; }
 command -v python3 >/dev/null || { echo "openrouter-agent: python3 is required" >&2; exit 127; }
-crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+crossfeed_vault_guard   # no worker writes into the operator's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 # OUTER-CAP DETECTION. A file scanner cannot see call sites, so `timeout 900 ./openrouter-agent.sh`
 # sits outside any static check, and that outer clock overrides the watchdog while knowing nothing

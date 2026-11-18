@@ -16,7 +16,7 @@ Media requires `--file` and `--modality` and an admitted input capability. Adver
 
 `--role research-scout` enables hosted Exa search in an empty generated directory, with no local filesystem/shell/edit/skill/question/todo/nested tools, no attachments and a bounded iteration count. Its prompt goes to Go and generated queries to Exa: public material only. No private project facts, personal data, credentials or unreleased names. A citation counts only after the lead opens it. This is source discovery, not a vendor-native deep-research product; the lead owns coverage, weighting, contradiction handling and synthesis. Arbitrary URL fetch stays denied to avoid private-network access.
 
-Ordinary local read-only workers do not need web search. Never transmit secrets/customer/production/regulated records. Sensitive evidence stays on approved private transports unless the owner authorizes this specific model/provider.
+Ordinary local read-only workers do not need web search. Never transmit secrets/customer/production/regulated records. Sensitive evidence stays on approved private transports unless the operator authorizes this specific model/provider.
 
 Go cost telemetry is local equivalent cost, not quota debit. Keep Use balance disabled. Legacy Google text lanes use an estimate-only daily cap outside the hard ledger. An in-flight tool loop can overshoot; these lanes must be requested explicitly and are never automatic. See [quota](quota.md) for measurement truth boundaries.
 

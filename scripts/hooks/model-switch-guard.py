@@ -416,7 +416,7 @@ def check_switch_change(args: list[str], env: dict[str, str]) -> list[str]:
     if parsed.command not in {"level", "switch", "model-toggle", "model-choice", "profile", "pins"}:
         return []
     if getattr(parsed, "owner", False):
-        # This hook only sees agents' commands: an agent may never speak as the owner. The console records owner changes.
+        # This hook sees only agent commands. Agents cannot act as the operator; the console records operator changes.
         return [f"fleetctl.py {parsed.command} --owner: only the owner, through the Crossfeed console, records owner switches. "
                 "Drop --owner; agents may change anything the owner did not switch off."]
     overlay = Path(option(args, "--overlay") or env.get("ACCESS_OVERLAY") or fleet.DEFAULT_OVERLAY).expanduser()

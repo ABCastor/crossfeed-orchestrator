@@ -37,7 +37,7 @@ DEFAULTS = {"target": 90.0, "lambda0": 1.0, "mu": .001, "explore": .1,
             "uncertainty_weight": 1.0,
             "high_cost_cap": 1.0,
             "stakes_weights": {"low": 1.0, "normal": 2.0, "high": 40.0}}
-# BR-SELECT-002: variety among near-equal options. Defaults pending the owner's decision.
+# BR-SELECT-002: variety among near-equal options. Defaults are subject to operator approval.
 #   quality_band  how much estimated quality (0..1) a varied choice may give up against the
 #                 option plain scoring would pick, per stakes; 0 keeps that pick
 #   pace_weight   preference per unit of pool pace (+1 = a whole allowance about to be

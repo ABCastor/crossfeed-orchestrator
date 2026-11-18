@@ -1,4 +1,4 @@
-Load when quota gauges look wrong, the owner requests emergency mode, or the lead's pool reaches CRITICAL.
+Load when quota gauges look wrong, the operator requests emergency mode, or the lead's pool reaches CRITICAL.
 
 # Quota and reset clocks
 

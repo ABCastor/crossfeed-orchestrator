@@ -167,8 +167,7 @@ classify_consumer_outcome() {
       CONSUMER_BOUNDARY_RC=1
       ;;
     fanout:2)
-      # Usage only. Preflight refusals used to land here in the doc and on 1 in the code; they now
-      # have their own code below, so this string no longer over-claims.
+      # Exit 2 is for usage errors only. The separate preflight-refusal code is below.
       CONSUMER_OUTCOME_REASON="fanout-usage-error"
       CONSUMER_BOUNDARY_RC=2
       ;;

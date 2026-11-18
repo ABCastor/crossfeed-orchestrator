@@ -92,7 +92,7 @@ if ! command -v agy >/dev/null 2>&1; then
     exit 127
   fi
 fi
-crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+crossfeed_vault_guard   # no worker writes into the operator's notes: refuse (exit 5) or set CROSSFEED_JAIL
 mkdir -p "$DIR"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -204,15 +204,11 @@ esac
 echo "agy-agent: effort $EFFORT: $_effort_why" >&2
 
 if [ -n "$LANE" ]; then
-  # The lease is a QUOTA reservation, not a wall clock. It used to default to the wrapper's old
-  # hidden 600s cap; with no wall clock that fallback would quietly expire the lease mid-run and
-  # let a second dispatch take the slot. Size it to the liveness bound instead, which is the real
-  # upper bound on how long this run can sit before the watchdog ends it.
-  # A lease is a SLOT RESERVATION, not a deadline. Sizing it to the idle window was wrong: a healthy
-  # uncapped run that keeps emitting outlives its own lease and a second dispatch enters the lane.
-  # Over-holding costs throughput on an abundant pool and dead holders are reaped anyway;
-  # under-holding is a correctness bug. 4h was still outlivable by a healthy uncapped run.
-  # The proper fix is parent-owned lease RENEWAL; until then this errs long deliberately.
+  # The lease reserves a quota slot; it does not govern worker liveness. Use the explicit
+  # wall-clock timeout when set and a full day otherwise. A healthy uncapped run can outlive
+  # an idle window or a shorter fixed lease, letting a second dispatch claim its slot.
+  # A long lease trades throughput for correctness, and dead holders are reaped.
+  # Parent-managed renewal would keep the slot for exactly as long as the worker needs it.
   lease_ttl="${TIMEOUT:-86400}"
   if ! lease_token="$("$HERE/fleetctl.py" acquire --lane "$LANE" --ttl "$lease_ttl" 2>&1)"; then
     echo "agy-agent: lease refused for $LANE: $lease_token" >&2

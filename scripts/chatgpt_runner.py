@@ -551,7 +551,7 @@ def run_turn(args, lane, interrupted, started, check, release_turn):
 def main():
     try:
         args = arguments()
-        # Text-only lane: its one way into the owner's notes is the file this wrapper writes.
+        # A text-only lane has no write tools; check its wrapper output paths against the protected roots.
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import vault_guard
         outputs = [str(p) for p in (args.events, args.last) if p]

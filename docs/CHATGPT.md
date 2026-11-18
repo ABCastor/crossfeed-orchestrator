@@ -1,6 +1,6 @@
 # ChatGPT through Crossfeed Chat
 
-Crossfeed Orchestrator requests read-only text answers from saved ChatGPT workers through Crossfeed Chat. The gateway is an owner-accepted subscription relay: admission requires the owner's dated account-risk acceptance. The selected worker label is recorded, but the underlying provider model identity and usage remain unconfirmed.
+Crossfeed Orchestrator requests read-only text answers from saved ChatGPT workers through Crossfeed Chat. The gateway is a subscription relay: admission requires dated acceptance of the account risk by the operator. The selected worker label is recorded, but the underlying provider model identity and usage remain unconfirmed.
 
 Configure the overlay's `chatgpt_gateway.lane_template` with harness `chatgpt-chat`, transport `api_base: "http://127.0.0.1:4319/v1"` and auth `key_file: "~/.config/crossfeed-chat-service/api-key"`. Keep the bearer key in that protected file. The `chatgpt-work` quota pool has no authoritative quota reading and does not inherit Codex usage snapshots.
 

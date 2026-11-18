@@ -112,7 +112,7 @@ except ValueError as exc:
 if cap_usd <= 0:
     raise SystemExit("gemini-media: GEMINI_MEDIA_DAILY_CAP_USD must be positive")
 
-# Google public paid-tier list prices as of 2026-07-19.  The model override is
+# Google public paid-tier list prices (19 July 2026 snapshot). The model override is
 # intentionally rejected by the shell layer, so this table cannot silently be
 # used to underprice a different model.  Count all audio request input at the
 # higher audio rate, including the small text prompt, to stay conservative.

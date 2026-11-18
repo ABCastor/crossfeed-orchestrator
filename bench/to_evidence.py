@@ -179,7 +179,7 @@ def exclusion_reason(row):
     if type(code) is not int:
         return 'missing or invalid exit code'
     if code == 124:
-        return None  # main-2026-10-03/PREREG.md: "a timeout is a fail"
+        return None  # BR-EVIDENCE-001: a timeout counts as a failed trial.
     if code != 0:
         return reasons.get(code, 'worker failure without a task-check verdict')
     reason = row.get('reason', '')

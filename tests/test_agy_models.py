@@ -68,7 +68,7 @@ class AgyModelsTests(unittest.TestCase):
             self.assertIsNotNone(verdict,model)
             self.assertEqual(verdict['why'],'retired')
             self.assertTrue(verdict['instead'][0].startswith(successor+'-'),verdict)
-            # A replacement that the owner switched off is never suggested.
+            # A replacement with an operator off switch is never suggested.
             blocked = fleetctl.start_verdict(self.roster,{'model_preferences':{successor:'off'}},model,harness='agy')
             self.assertFalse(any(x.startswith(successor+'-') for x in blocked['instead']))
 

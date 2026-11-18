@@ -26,7 +26,7 @@ Codex read-only/workspace-write are enforced sandbox boundaries, with workspace-
 
 Never hand a peer or worker work your session was refused. Record the blocker and use an authorized path, rather than laundering permission through another session.
 
-## The owner's vault is never a worker write target (BR-VAULT-001)
+## The operator's vault is never a worker write target (BR-VAULT-001)
 
 Why: on 18-20 Oct 2026 a Task Manager lead put "Output folder: ~/Second Brain/1_Notes/... (images in images/)" in the preamble of every worker brief and launched Codex (`danger-full-access`) and Antigravity workers with the vault as `--dir`; ~300 MB of screenshots landed in the vault and its git history. Claude Code hooks never ran on those vendors.
 

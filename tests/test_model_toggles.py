@@ -157,7 +157,7 @@ class RouterToggleTests(unittest.TestCase):
         fleetctl.set_model_toggle(self.runtime, self.roster, "other", "flash", False)
         self.assertEqual(fleetctl.pool_switches(self.roster, self.runtime, "go")["flash"], True)
         self.assertEqual(fleetctl.pool_switches(self.roster, self.runtime, "other")["flash"], False)
-        self.assertEqual(self.choose(), "go-flash")            # go still runs it; other no longer does
+        self.assertEqual(self.choose(), "go-flash")            # only go offers this model
 
     def test_an_older_per_model_off_is_settled_onto_every_provider_that_runs_it(self):
         self.roster["lanes"].append(lane("other-big", "big", "other"))

@@ -76,7 +76,7 @@ fi
 [ -n "$PROMPT" ] || _usage_error "--prompt or --prompt-file is required"
 [ -d "$DIR" ] || _usage_error "work directory not found: $DIR"
 command -v jq >/dev/null 2>&1 || { echo "copilot-agent: jq is required" >&2; exit 127; }
-crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+crossfeed_vault_guard   # no worker writes into the operator's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 _parent_comm="$(ps -o comm= -p "$PPID" 2>/dev/null | tr -d '[:space:]' || true)"
 case "${_parent_comm##*/}" in

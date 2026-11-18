@@ -813,7 +813,7 @@ class SnapshotAutoRefreshTests(unittest.TestCase):
 
     def test_copilot_pool_is_served_by_codexbar(self):
         # The Student plan bills as an individual plan, which is the single
-        # copilot account CodexBar sees; the pool is no longer permanently UNKNOWN.
+        # Copilot account CodexBar sees and can supply quota for.
         self.assertEqual(
             fleetctl.quota_sources(self._test_roster())["github-copilot-student"]["provider"],
             "copilot",

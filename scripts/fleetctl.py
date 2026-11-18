@@ -1695,12 +1695,9 @@ def effective_cap(
         if state == "CRITICAL" and lane.get("quality_tier") == "frontier":
             cap = min(cap, 1)
         return cap
-    # UNKNOWN FAILS OPEN. Absent measurement is not evidence of exhaustion, and
-    # this used to clamp here -- which meant anyone without the quota oracle
-    # installed got every frontier lane throttled to one slot, permanently and
-    # silently. That is a worse failure than the one the clamp guards against:
-    # an over-spent pool recovers at its reset, a router nobody can un-throttle
-    # does not. EXHAUSTED still fails closed; that is a measurement, not a gap.
+    # UNKNOWN FAILS OPEN. Missing measurement is not evidence of exhaustion.
+    # Clamping here would permanently throttle frontier lanes on hosts without a quota oracle.
+    # EXHAUSTED fails closed because it is a measured condition that can clear at reset.
     if state in {"CONSERVE", "CRITICAL"} and lane.get("quality_tier") == "frontier":
         cap = min(cap, 1)
     return cap
@@ -3015,9 +3012,8 @@ def choose_lane(
 ) -> dict[str, Any]:
     # The primary pool sets the BAND (how tight the main subscription is, hence how
     # far to step down), but it must not gate lanes that spend a different budget.
-    # Exhausting it used to raise here, which killed routing outright -- the exact
-    # moment untouched headroom in another pool matters most. Each candidate is now
-    # judged against its OWN pool below.
+    # Each candidate is judged against its own pool, so exhaustion of the primary pool
+    # does not hide available headroom elsewhere.
     pool = ROUTING_POOL
     state, evidence = current_pool_state(runtime, pool, roster=roster)
     roles = roster.get("routing", {}).get("roles", {})
@@ -3237,7 +3233,7 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
     directory = args.dir.expanduser().resolve()
     requested_last = args.last.expanduser().resolve() if args.last else None
     # Refuse once, before any candidate or dry run, a dispatch that would put a worker's writes
-    # into the owner's notes; every wrapper repeats the check and blocks the writes themselves.
+    # into the operator's notes; every wrapper repeats the check and blocks the writes themselves.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import vault_guard
     if vault_guard.refuse_or_pass(vault_guard.check(
@@ -5053,7 +5049,7 @@ def fleet_overview(
             "current": current,
             "on": [model for model, value in switches.items() if value],
             "off": [model for model, value in switches.items() if not value],
-            # an older single choice the pool no longer offers: it changes nothing, and is said so
+            # Report an unavailable saved choice without applying it.
             "unavailable": stored if stored and stored not in switches else None,
             # {model that is off or retired: what a run that asks for it gets instead}, for a direct pool
             "stand_ins": stand_ins(roster, runtime, pool),

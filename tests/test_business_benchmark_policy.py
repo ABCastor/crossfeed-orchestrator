@@ -16,7 +16,7 @@ class BenchmarkPolicyTests(unittest.TestCase):
             'one small admission check',
             'a handful of tasks on cheap lanes',
             'keep a receipt',
-            'only when the owner asks',
+            'only when the operator asks',
         ):
             self.assertIn(requirement, rule)
 

@@ -159,7 +159,7 @@ class MeterTests(unittest.TestCase):
         self.assertEqual(selected["choice"]["worker_level"], "xhigh")
         receipt = json.loads(Path(selected["selection_file"]).read_text())
         self.assertIn("Pro paused", receipt["choice"]["pro_fallback"]["reason"])
-        # Missing quality evidence must not override the owner's fallback order.
+        # Missing quality evidence must not override the operator's fallback order.
         evidence.write_text(json.dumps({"rows": [quality_row("chatgpt:latest-high", "high", mean=.5, family="reasoning")]}))
         selected = selector.select_option(self.roster, {}, self.root, "hard-reasoning", mode="read-only",
                                           target=("chatgpt-chat", "chatgpt:latest-pro"))

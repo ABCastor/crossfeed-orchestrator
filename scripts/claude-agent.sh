@@ -163,7 +163,7 @@ if [ "$EFFORT" != provider-default ]; then
   args+=( --effort "$EFFORT" )
 fi
 
-crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+crossfeed_vault_guard   # no worker writes into the operator's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 if [ "$DRY_RUN" = 1 ]; then
   # The very array the run below would start claude with, so the two cannot drift apart.

@@ -17,7 +17,7 @@ Codex: `codex exec --skip-git-repo-check [-i ref.png ...] < prompt.txt`. Origina
 
 Gemini image defaults to its script's admitted Pro image model, with --cheap selecting the admitted Flash image route. Both are paid: explicit authorization and daily budget apply. It reserves before calls and retains ambiguous failures, so retries cannot quietly reset spend. Gemini media admits only gemini-flash-lite-latest, uploads and counts tokens, then reserves full output allowance before generateContent. Its default wall budget is 600 seconds and default cap $1/local calendar day. Unknown MIME, upload/key/timeout/budget errors stop the run; interrupted requests retain reservations for the day.
 
-Image, native media and fleet gemini-metered accounting are separate mechanisms, not a shared atomic budget. Do not claim unified cap protection. Raising an environment cap needs the owner's instruction. Paid Google OpenCode routes use start-of-run estimated-spend admission, so one in-flight call can overshoot; provider budgets/request caps supply the billing backstop.
+Image, native media and fleet gemini-metered accounting are separate mechanisms, not a shared atomic budget. Do not claim unified cap protection. Raising an environment cap needs the operator's instruction. Paid Google OpenCode routes use start-of-run estimated-spend admission, so one in-flight call can overshoot; provider budgets/request caps supply the billing backstop.
 
 Audio/video do not go through agy (no file flag) or the currently unproved OpenCode binary-file path. swarm media-review routes audio/video to native Gemini and image to the admitted OpenCode profile. Retest source capabilities only when delivered transport changes.
 

@@ -302,10 +302,8 @@ fi
 # code does. The doc must name the actual contract, not the retired one.
 echo "I6  docs match behaviour"
 if [ -f "$SKILL_MD" ]; then
-  # A NEGATIVE mention ("we removed the idle watchdog") must not satisfy a docs check.
-  # AND the doc must carry the SAME NUMBER the code actually uses. Prose agreement is not agreement:
-  # the wrappers moved to 2400 while the doc still said 1200, the scanner went green, and that
-  # declared-vs-runtime gap is precisely the seam this invariant exists to close.
+  # Require an affirmative description of the idle watchdog and the same timeout as the wrappers.
+  # A mention of an absent watchdog or a mismatched timeout does not establish runtime agreement.
   doc_ok=1
   grep -iE 'idle watchdog' "$SKILL_MD" | grep -qivE '(remov|delet|drop|no longer|retired|without)' || doc_ok=0
   if [ "$doc_ok" -eq 0 ]; then

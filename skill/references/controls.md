@@ -1,4 +1,4 @@
-Load when the owner changes a spend level or model switch, a stand-in appears, or pins look wrong.
+Load when the operator changes a spend level or model switch, a stand-in appears, or pins look wrong.
 
 # Controls
 
@@ -6,11 +6,11 @@ Run `python3 scripts/fleetctl.py brief` before planning. `brief --verbose` gives
 
 BR-SWITCH-001 in `BUSINESS-RULES.md` (checkout or installed root) is the authority for control changes. The CLI enforces it, and the hook gives an early refusal. Read the actor shown beside the console's switches and levels before changing them.
 
-CLI changes default to `agent`. Console changes use `owner`. An explicit owner instruction can use `--owner`; agents must not use that flag to impersonate an owner instruction. Add `--reason "short explanation"` to record context. Attribution and compact append-only history live in runtime.json beside switch state (`control_records`, `control_history`, `control_limits`). Existing state without attribution displays “Actor not recorded”; it is not retroactively assigned to anyone. The owner can reapply a control to establish attribution. An agent's later off/lower write does not erase the owner's limit. An owner write replaces or releases it. No history entries are truncated or rewritten.
+CLI changes default to `agent`. Console changes use `owner`. An explicit operator instruction can use `--owner`; agents must not use that flag to impersonate an operator instruction. Add `--reason "short explanation"` to record context. Attribution and compact append-only history live in runtime.json beside switch state (`control_records`, `control_history`, `control_limits`). Existing state without attribution displays “Actor not recorded”; it is not retroactively assigned to anyone. The operator can reapply a control to establish attribution. An agent's later off/lower write does not erase the operator's limit. An operator write replaces or releases it. No history entries are truncated or rewritten.
 
 ## Owner spend profiles
 
-Apply the matching preset with `fleetctl.py profile NAME --because "<owner's words>" --who "<agent identity>"`, use `--owner` only for an explicit owner instruction, then report the command's exact changes in one line. Each changed pool records who, when and the phrase in local runtime `profile_changes`. No-op profiles report `no level changes`.
+Apply the matching preset with `fleetctl.py profile NAME --because "<operator's wording>" --who "<agent identity>"`, use `--owner` only for an explicit operator instruction, then report the command's exact changes in one line. Each changed pool records who, when and the phrase in local runtime `profile_changes`. No-op profiles report `no level changes`.
 
 | Owner phrase or intent | Profile | Levels |
 |---|---|---|
@@ -38,7 +38,7 @@ When the lead's observed quota is CONSERVE, CRITICAL or EXHAUSTED, or its spend 
 
 Claude, Codex and Copilot wrappers enforce off and low themselves: at low each run takes the pool's one slot (`pool-slot`), and a second run waits `FLEET_POOL_WAIT_S` (default 900 s) and then exits 5; for them high is advice only.
 
-Inspect with `fleetctl.py level [pool]`; an authorized change uses `level <pool> <level>`. Older `switch <pool> off|on|auto` maps to off/forced/normal. Use `model-toggle <pool> <model>` to inspect a model; changes require the owner. `model-choice` changes a whole pool's model set, so do not use it as a local dispatch workaround.
+Inspect with `fleetctl.py level [pool]`; an authorized change uses `level <pool> <level>`. Older `switch <pool> off|on|auto` maps to off/forced/normal. Use `model-toggle <pool> <model>` to inspect a model; changes require operator authorization. `model-choice` changes a whole pool's model set, so do not use it as a local dispatch workaround.
 
 The console wins over model names everywhere. `model-run <pool> [model]` resolves direct-wrapper stand-ins; `model-gate <model>` tests routed/media gates, with optional `--harness`, `--provider`, `--pool` and `--reason-only` filters/output. Codex and Claude can replace a switched-off requested model with an enabled stand-in; other transports may refuse instead. Report `actual_model` only when confirmed by the model receipt. If it is null or unconfirmed, report the selected model as selected, with that uncertainty. An Auto/free router's underlying identity must never be guessed. `--last` receives a `.crossfeed.json` sidecar; stderr carries receipt diagnostics, stdout carries final text. Codex schema mode preserves original JSON unchanged on stdout and in `--last`; the sidecar holds its receipt.
 
@@ -62,7 +62,7 @@ The model card's older_model_reasons object holds one record per funding pool:
 }
 ```
 
-All five fields must be nonempty. Advantage is cheaper, faster or better; compared_to must name a current model runnable on that same pool. These are owner-supplied records, not benchmarks automatically run by Crossfeed. Recheck when the current model changes: a comparison against a superseded model no longer qualifies. Existing better_than_successor_at records also qualify when capability, this/successor measurements and source are present, and that successor is current on the pool.
+All five fields must be nonempty. Advantage is cheaper, faster or better; compared_to must name a current model runnable on that same pool. These are owner-supplied records, not benchmarks automatically run by Crossfeed. Recheck when the current model changes: a comparison qualifies only while the comparator is current. Existing better_than_successor_at records also qualify when capability, this/successor measurements and source are present, and that successor is current on the pool.
 
 `older-models list` reads switches/reasons. `older-models apply --dry-run` previews and `older-models apply` persists off switches for unjustified older models; both support `--json`. Apply never enables a model or edits the roster. Adding a reason does not authorize an agent to turn a model on.
 

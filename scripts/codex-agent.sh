@@ -27,7 +27,7 @@
 # Silence can be healthy server-side reasoning. Default supervision reports silence every
 # ten minutes; only an explicit --idle-timeout opts into killing a silent process group.
 # Output growth or process-group CPU progress resets the silence diagnostic.
-# Owner 2026-10-04: no wasted work.
+# This keeps productive work running through quiet periods.
 #
 # Prints the agent's FINAL message to stdout. Diagnostics go to stderr.
 # Exit codes: 0 success; 2 usage; 4 exited 0 with a blank deliverable; 124 wall-clock kill; 125 idle kill;
@@ -182,7 +182,7 @@ case "${_parent_comm##*/}" in
     ;;
 esac
 
-crossfeed_vault_guard   # no worker writes into the owner's notes: refuse (exit 5) or set CROSSFEED_JAIL
+crossfeed_vault_guard   # no worker writes into the operator's notes: refuse (exit 5) or set CROSSFEED_JAIL
 
 # Creating the caller's workspace silently turns a mistyped, deleted, or renamed worktree path into
 # a fresh empty directory, and the agent then does its work somewhere nobody is looking. Still

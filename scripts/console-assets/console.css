@@ -303,8 +303,8 @@ details.older{margin-top:.35rem}
 /* The console is obvious at a glance: every limit shown in a minimal way with its reset, a refresh icon, a copy
    control on what agents read, a page for every model. Read here as
    Apple's clarity worn in the Castor world (paper, ink, the three faces), not as Apple's own typeface: each thing says
-   what it is, what state it is in and what a click does. The limits are grey bars with names, so they no longer look
-   like the teal control beside them; terracotta, on a limit, means nearly spent. */
+   what it is, what state it is in and what a click does. Named grey limit bars are distinct from
+   the teal control beside them; terracotta on a limit means nearly spent. */
 .limits{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(3.4rem,max-content) minmax(3rem,1fr) max-content;column-gap:.75rem;row-gap:.6rem}
 .lim{grid-column:1/-1;display:grid;grid-template-columns:subgrid;align-items:center;row-gap:.12rem}
 .lim .ln{grid-row:span 2;align-self:start;max-width:6.6rem;font:500 13.5px/1.25 var(--face);color:var(--ink)}
@@ -458,7 +458,7 @@ h1{margin-top:calc(17px + var(--line-w))}
 .mast .here{position:absolute;top:calc(100% + var(--line-w) / 2 - 4px);left:calc(anchor(--here center, 50%) - 4px);width:8px;height:8px;border-radius:50%;background:var(--between);box-shadow:0 0 0 2px var(--paper);pointer-events:none}
 .mast::before{content:"";position:absolute;top:100%;left:var(--line-x0,0px);right:50%;right:anchor(--here center,50%);height:var(--line-w);background:var(--human);pointer-events:none}
 .mast:has(> .here)::after{background-image:linear-gradient(var(--machine),var(--machine))}
-/* The selected tab: bold and ink, and underlined in olive — the knot's colour, the owner's mark. */
+/* The selected tab: bold and ink, and underlined in olive — the knot colour that marks the operator's selection. */
 .nav a[aria-current]{text-decoration:underline;text-decoration-color:var(--between);text-underline-offset:6px}
 
 /* Below desktop size the header is in the flow: the tabs take a row above the name, which keeps its foot on the line

@@ -49,7 +49,7 @@ def catalog_models(value, current_rows=("Latest",)):
         if label is None or selector in seen or not isinstance(row.get("saved"), bool):
             raise Rejected(6, "duplicate or invalid gateway model selector")
         seen.add(selector)
-        # A previously contacted but unsaved label has no wake configuration.
+        # An unsaved label has no wake configuration, even if it has answered requests.
         if not row["saved"]:
             continue
         name, position = row.get("row"), row.get("level")

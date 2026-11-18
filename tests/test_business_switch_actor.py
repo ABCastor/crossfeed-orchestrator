@@ -66,7 +66,7 @@ class SwitchActorTests(Sandbox):
         self.denied('profile', 'max-quality', '--because', 'codex')
         self.fleet('level', 'codex', 'off')
         self.denied('level', 'codex', 'normal')
-        self.fleet('level', 'codex', 'low')  # still within the owner's ceiling
+        self.fleet('level', 'codex', 'low')  # still within the operator's ceiling
         self.fleet('level', 'codex', 'high', '--owner')
         self.fleet('level', 'codex', 'off')
         self.fleet('level', 'codex', 'normal')

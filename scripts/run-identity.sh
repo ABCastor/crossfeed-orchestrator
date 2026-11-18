@@ -46,7 +46,7 @@ crossfeed_finish() {
       return 8
     }
   fi
-  # Run-private scratch, outside the owner's folders; no durable data is deleted.
+  # Run-private scratch stays outside the operator's folders; cleanup leaves durable data intact.
   [ -z "$CROSSFEED_IDENTITY" ] || unlink "$CROSSFEED_IDENTITY"
 }
 

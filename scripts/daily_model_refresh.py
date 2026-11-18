@@ -48,7 +48,7 @@ def cli_listing(command):
     try:
         run = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env)
     except FileNotFoundError:
-        # A scheduler without the owner's PATH looks exactly like this; name it.
+        # A scheduler can omit the operator's PATH entries; report the missing executable.
         return None, f'{command[0]} not found on PATH'
     except subprocess.TimeoutExpired:
         return None, f'{command[0]} timed out after 60 s'
@@ -185,7 +185,7 @@ def discover(roster):
         return listings[tuple(command)]
     for provider in sorted({l['provider'] for l in lanes if l.get('harness') == 'opencode'} | (
             {'opencode'} if any(l.get('provider') == 'opencode-go' for l in lanes) else set())):
-        # v2 supports --standalone, avoiding the owner's background service.
+        # Use v2's --standalone to list models without the operator's background service.
         rows, why = catalog_rows(OPENCODE_LISTING, prefix=provider, listing=listing(OPENCODE_LISTING))
         # Zen's paid catalog is not a Go entitlement. Only free promotions enter
         # a separate zero-cost pool; disappearing promotions retire that pool only.
@@ -404,7 +404,7 @@ def rerank(roster, changes, today, fresh, successful):
     if (number(floor) is None or number(cap) is None or type(limit) is not int or not 0 <= limit <= 2
             or floor < DEFAULT_BOUNDS['aa_floor'] or cap > DEFAULT_BOUNDS['helper_usd_cap']):
         raise patcher.PatchError('model_refresh bounds can only tighten the fixed defaults')
-    # Lanes the owner pinned to their cheap roles: a move that would demote one
+    # Lanes the operator pins to their cheap roles: a move that would demote one
     # is held for review instead of applied (BR-REFRESH-002).
     keep = bounds.get('keep_roles', [])
     if not isinstance(keep, list) or not all(isinstance(x, str) for x in keep):
