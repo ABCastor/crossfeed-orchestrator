@@ -81,8 +81,9 @@ class EvidenceRound2(unittest.TestCase):
                     ("synthetic-model-high", "2026-09-01", .7),
                     ("synthetic-model-high", "2026-10-01", .6),
                     ("synthetic-model-20260813-low", "2026-08-13", .9)]]
+        payload = {"data": rows, "pagination": {"page": 1, "total_pages": 1, "has_more": False}}
         with mock.patch.dict(os.environ, {"AA_API_KEY": "fixture"}), \
-             mock.patch.object(ef.market.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps({"data": rows}).encode())):
+             mock.patch.object(ef.market.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
             result = ef.market.fetch_artificial_analysis({"synthetic-model": ["syntheticmodel"]})
         high = result["synthetic-model"]["levels"]["high"]
         self.assertEqual(high.get("release_date"), "2026-10-01", "use latest served release, not ambiguous old snapshots")

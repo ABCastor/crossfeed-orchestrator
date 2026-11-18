@@ -12,7 +12,7 @@ python3 scripts/fleetctl.py dispatch --role implementation --prompt-file task.tx
   --dir "$PWD" --mode write --last result.txt
 ```
 
-Market refresh writes `evidence/levels.json` under `FLEET_STATE_DIR`. Benchmark payloads, measured task costs and selection receipts stay in local state.
+Market refresh writes `evidence/levels.json` under `FLEET_STATE_DIR`. Benchmark payloads, measured task costs and selection receipts stay in local state. With an optional Artificial Analysis key, the refresh reads the [V2 Free language-model feed](https://artificialanalysis.ai/data-api/docs). It uses a complete paginated snapshot or marks that source unavailable. Metrics omitted by the free tier stay unknown; provider mean performance is kept separate from the older median telemetry.
 
 ## Benchmark evidence and model cards
 

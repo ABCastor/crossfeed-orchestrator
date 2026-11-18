@@ -2128,9 +2128,11 @@ class EffortTests(unittest.TestCase):
         market = importlib.util.module_from_spec(spec); spec.loader.exec_module(market)
         def row(slug, index):
             return {'slug': slug, 'name': slug, 'evaluations': {'artificial_analysis_intelligence_index': index,
-                    'terminal_bench_4': 0}, 'median_time_to_first_answer_token': 3,
+                    'terminal_bench_4': 0}, 'performance': {'median_time_to_first_answer_token_seconds': 3},
                     'pricing': {'price_1m_input_tokens': 2}}
-        payload = {'index_version': '4.3.2', 'data': [row('model-low', 40), row('model-high', 50), row('model-high-older', 48)]}
+        payload = {'intelligence_index_version': '4.3.2',
+                   'pagination': {'page': 1, 'total_pages': 1, 'has_more': False},
+                   'data': [row('model-low', 40), row('model-high', 50), row('model-high-older', 48)]}
         with patch.dict(os.environ, {'AA_API_KEY': 'test-not-a-secret'}), patch.object(market.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(payload).encode())):
             result = market.fetch_artificial_analysis({'model': ['model']})
         self.assertEqual(set(result['model']['levels']), {'low', 'high'})

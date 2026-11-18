@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Refresh the model market catalog from public machine-readable sources.
 
-Sources (all no-auth, fetched best-effort; one failing source never kills the run):
+Sources (best-effort; one failing source never kills the run):
   - models.dev api.json      -> specs, pricing, modalities, context (the feed OpenCode itself uses)
   - OpenRouter /api/v1/models -> pricing/availability cross-check
   - Aider polyglot leaderboard YAML -> coding role prior
   - SWE-bench leaderboards.json     -> agentic-coding role prior
+  - Artificial Analysis V2 Free language models (optional key) -> per-effort benchmark priors
 
 Output is host-local state, never git-tracked and never fingerprinted:
   ~/.local/state/orchestrator/market/market-catalog.json
@@ -51,6 +52,41 @@ SOURCES = {
 
 
 AA_EXTRA_TOKENS = ["gemini3", "claudefable", "claudeopus", "claudesonnet", "gpt56"]
+AA_FREE_MODELS = "https://artificialanalysis.ai/api/v2/language/models/free"
+AA_PAGE_SIZE = 200
+AA_MAX_PAGES = 20
+
+
+def fetch_aa_pages(key: str) -> tuple[list[dict], int | str | None]:
+    """Return one complete free-tier snapshot, or raise without using partial rows."""
+    rows = []
+    version = total_pages = None
+    for page in range(1, AA_MAX_PAGES + 1):
+        request = urllib.request.Request(
+            f"{AA_FREE_MODELS}?page={page}&page_size={AA_PAGE_SIZE}",
+            headers={"x-api-key": key, "User-Agent": "fleet-market-refresh/1"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read())
+        pagination = payload.get("pagination") if isinstance(payload, dict) else None
+        if not isinstance(pagination, dict) or pagination.get("page") != page:
+            raise ValueError("missing or unexpected page number")
+        page_total = pagination.get("total_pages")
+        page_version = payload.get("intelligence_index_version")
+        if (type(page_total) is not int or not page <= page_total <= AA_MAX_PAGES
+                or pagination.get("has_more") is not (page < page_total)):
+            raise ValueError("inconsistent pagination or page limit exceeded")
+        if page == 1:
+            total_pages, version = page_total, page_version
+        elif (page_total, page_version) != (total_pages, version):
+            raise ValueError("catalog changed between pages")
+        data = payload.get("data")
+        if not isinstance(data, list) or not data or not all(isinstance(row, dict) for row in data):
+            raise ValueError("missing or malformed model rows")
+        rows.extend(data)
+        if page == total_pages:
+            return rows, version
+    raise ValueError("page limit exceeded")
 
 
 def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None = None) -> dict:
@@ -61,18 +97,13 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
     )
     if not key:
         return {}
-    request = urllib.request.Request(
-        "https://artificialanalysis.ai/api/v2/data/llms/models",
-        headers={"x-api-key": key, "User-Agent": "fleet-market-refresh/1"},
-    )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
-    except Exception as exc:  # noqa: BLE001
+        models, version = fetch_aa_pages(key)
+    except (OSError, ValueError) as exc:
         print(f"market-refresh: WARN artificialanalysis: {exc}")
         return {}
     matches: dict[str, dict] = {}
-    for model in payload.get("data", []):
+    for model in models:
         slug = norm(str(model.get("slug") or ""))
         hit = None
         for model_key, keys in sorted(tokens.items(), key=lambda item: -max(map(len, item[1]))):
@@ -83,6 +114,7 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
             continue
         evaluations = model.get("evaluations") or {}
         pricing = model.get("pricing") or {}
+        performance = model.get("performance") or {}
         entry = {
             "id": model.get("id"),
             "name": model.get("name"),
@@ -93,13 +125,14 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
             "intelligence_index": evaluations.get("artificial_analysis_intelligence_index"),
             "coding_index": evaluations.get("artificial_analysis_coding_index"),
             "price_1m_blended": pricing.get("price_1m_blended_3_to_1"),
-            "median_tokens_per_second": model.get("median_output_tokens_per_second"),
+            "median_tokens_per_second": performance.get("median_output_tokens_per_second"),
+            "performance_v3": model.get("performance_v3"),
             "terminal_bench_4": evaluations.get("terminalbench_v4_0", evaluations.get("terminal_bench_4", evaluations.get("terminal_bench_4_0"))),
-            "ttfa_s": model.get("median_time_to_first_answer_token"),
+            "ttfa_s": performance.get("median_time_to_first_answer_token_seconds"),
             "price_1m_input": pricing.get("price_1m_input_tokens"),
             "price_1m_output": pricing.get("price_1m_output_tokens"),
             "index_version": evaluations.get("artificial_analysis_intelligence_index_version")
-                or payload.get("index_version") or (payload.get("meta") or {}).get("intelligence_index_version"),
+                or version,
         }
         label = str(model.get("slug") or "") + " " + str(model.get("name") or "")
         found = re.search(r"(?<![a-z])(xhigh|max|ultra|medium|high|low|none|minimal|thinking)(?![a-z])", label.lower())
@@ -332,6 +365,7 @@ def main() -> int:
         "attribution": "Benchmark indices courtesy of Artificial Analysis (artificialanalysis.ai).",
         "prior_not_verdict": "Public scores rank the weights, not the opencode-go route.",
     }
+    catalog["sources_ok"]["artificial_analysis"] = bool(catalog["artificial_analysis"])
     arena_config = ((overlay.get("policy") or {}).get("evidence") or {}).get("lmarena") or {}
     arena_source = os.environ.get("LMARENA_LEADERBOARD") or arena_config.get("path") or arena_config.get("url")
     catalog["lmarena"] = load_lmarena(arena_source)

@@ -36,10 +36,35 @@ def cell(result, level="high"):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_aa_free_feed_collects_all_pages_and_keeps_measurement_units(self):
+        def response(page, level, **extra):
+            return io.BytesIO(json.dumps({"tier": "free", "intelligence_index_version": 5,
+                "pagination": {"page": page, "page_size": 200, "total_pages": 2, "has_more": page == 1},
+                "data": [{"id": level, "slug": "synthetic-model-" + level, **extra}]}).encode())
+
+        high = response(2, "high", performance={"median_time_to_first_answer_token_seconds": 7},
+                        performance_v3={"mean_time_to_first_answer_token_seconds": 9})
+        with mock.patch.dict(os.environ, {"AA_API_KEY": "fixture"}), \
+             mock.patch.object(market.urllib.request, "urlopen", side_effect=[response(1, "low"), high]) as fetch:
+            variants = market.fetch_artificial_analysis({"synthetic-model": ["syntheticmodel"]})["synthetic-model"]["levels"]
+        self.assertEqual([c.args[0].full_url for c in fetch.call_args_list], [
+            f"https://artificialanalysis.ai/api/v2/language/models/free?page={page}&page_size=200" for page in (1, 2)])
+        self.assertEqual(set(variants), {"low", "high"})
+        self.assertEqual(variants["high"]["index_version"], 5)
+        self.assertEqual(variants["high"]["ttfa_s"], 7)
+        self.assertEqual(variants["high"]["performance_v3"]["mean_time_to_first_answer_token_seconds"], 9)
+        self.assertIsNone(variants["low"]["ttfa_s"])
+
+        with mock.patch.dict(os.environ, {"AA_API_KEY": "fixture"}), \
+             mock.patch.object(market.urllib.request, "urlopen", side_effect=[response(1, "low"), response(1, "high")]):
+            self.assertEqual(market.fetch_artificial_analysis({"synthetic-model": ["syntheticmodel"]}), {},
+                             "a repeated page must not return a partial leaderboard")
+
     def test_aa_fetch_preserves_all_variants_ids_dates_and_evaluations(self):
         metrics = {"artificial_analysis_intelligence_index": 65, "artificial_analysis_coding_index": 75,
                    "terminalbench_v4_0": .8, "tau2": .7, "lcr": .6, "ifbench": .9, "future_eval": .123}
-        raw = {"data": [{"id": "fixture-" + level, "slug": "synthetic-model-" + level,
+        raw = {"pagination": {"page": 1, "total_pages": 1, "has_more": False},
+               "data": [{"id": "fixture-" + level, "slug": "synthetic-model-" + level,
                           "name": "Synthetic " + level, "release_date": "2026-09-01",
                           "evaluations": metrics, "pricing": {"price_1m_input_tokens": 2, "price_1m_output_tokens": 4}}
                          for level in ("low", "high")]}
