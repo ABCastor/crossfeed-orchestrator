@@ -15,6 +15,15 @@ import uuid
 import math
 from pathlib import Path
 
+try:
+    import funding
+except ModuleNotFoundError:
+    try:
+        from scripts import funding
+    except ModuleNotFoundError:
+        # The receipt helper is also used standalone (without the fleet modules).
+        funding = None
+
 SCHEMA = "crossfeed-model-run/v1"
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
 
@@ -222,12 +231,8 @@ def observed_usage(wrapper, events):
                 continue
             if not isinstance(event, dict):
                 continue
-            if event.get("type") == "crossfeed.cash" and "cash" not in result:
-                try:
-                    from funding import receipt_fields
-                except ModuleNotFoundError:
-                    from scripts.funding import receipt_fields
-                cash = receipt_fields(event.get("cash"))
+            if event.get("type") == "crossfeed.cash" and "cash" not in result and funding:
+                cash = funding.receipt_fields(event.get("cash"))
                 if cash:
                     result["cash"] = cash
             if event.get("type") == "crossfeed.openrouter_usage" and "cost" not in result:
@@ -285,10 +290,6 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
     Invalid/stale receipts are explicit missing selection, never an unrelated
     dispatch's replay record. This does not invent task correctness or usage.
     """
-    try:
-        import funding
-    except ModuleNotFoundError:
-        from scripts import funding
     result = {"effort": effort or None, "role": role or None, "family": family or None,
               "selection": None}
     source = selection if selection is not None else os.environ.get("FLEET_SELECTION_FILE")
@@ -345,7 +346,7 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
                                   if (v := numeric(raw["q"].get(k))) is not None}
                     if type(raw["q"].get("unknown")) is bool:
                         clean["q"]["unknown"] = raw["q"]["unknown"]
-                if (cash := funding.receipt_fields(raw.get("cash"))) is not None:
+                if funding and (cash := funding.receipt_fields(raw.get("cash"))) is not None:
                     clean["cash"] = cash
                 fallback = raw.get("pro_fallback")
                 if isinstance(fallback, dict) and isinstance(fallback.get("requested_model"), str):
@@ -413,12 +414,11 @@ def begin(wrapper, requested, selected, lane, role, effort=None, selection=None,
             "afk_attempt_id": os.environ.get("AFK_ATTEMPT_ID")}
     record.update(selection_metadata(selection, model=record["selected_model"], lane_id=record["lane_id"],
                                      effort=effort, pool=pool, harness=wrapper, role=role, family=family))
-    try:
-        import funding
-    except ModuleNotFoundError:
-        from scripts import funding
-    selected_cash = ((record.get("selection") or {}).get("choice") or {}).get("cash")
-    record["cash"] = selected_cash or funding.quote(funding.classify(data, pool, item))
+    if funding:
+        selected_cash = ((record.get("selection") or {}).get("choice") or {}).get("cash")
+        record["cash"] = selected_cash or funding.quote(funding.classify(data, pool, item))
+    else:
+        record["cash"] = {"funding": "unknown"}
     record["model_identity"] = canonical_model(record["selected_model"], data)
     return record
 
@@ -564,8 +564,8 @@ def finish(path, events, returncode, last, schema, database=None, result_file=No
     # OpenCode retains its separate priced telemetry; Pi reports native usage here.
     observed = observed_usage(record["harness"], events)
     if "cash" in observed:
-        observed["cash"] = {**record["cash"], **observed["cash"],
-                            "estimate_usd": record["cash"].get("estimate_usd")}
+        quoted = record.get("cash", {})
+        observed["cash"] = {**quoted, **observed["cash"], "estimate_usd": quoted.get("estimate_usd")}
     record.update(observed)
     if model_identity_drift(record):
         print(f"Crossfeed WARNING: MODEL IDENTITY DRIFT: selected {record['selected_model']}; "

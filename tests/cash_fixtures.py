@@ -1,4 +1,5 @@
 """Synthetic owner settings and ledger setup; never touches the real home."""
+import hashlib
 import json
 
 
@@ -17,6 +18,7 @@ def configure(roster, endpoint, **limits):
             lane["paid_route"] = {
                 "profile": "catalog-sse-v1", "endpoint": endpoint, "account": ACCOUNT,
                 "model": lane["selector"], "provider": "fixture-upstream", "roles": lane["roles"],
+                "approved_prompt_sha256": [hashlib.sha256(b"Return PONG").hexdigest()],
                 "tariff": {"input": "1000", "output": "1000", "context_tokens": 100,
                            "max_output_tokens": 100, "max_input_bytes": 4000,
                            "source": "synthetic catalog", "valid_until": "2099-01-02T00:00:00Z"},

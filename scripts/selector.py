@@ -22,10 +22,12 @@ from typing import Any
 
 try:
     import funding
+    from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
     from scripts import funding
+    from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
@@ -107,7 +109,7 @@ def _lineage(roster: dict, option: dict) -> str:
 def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | None = None,
                       modality: str = "text", exclude_lineage: str | None = None,
                       fleet: Any = None, explicit_pools: set[str] | None = None,
-                      data_class: str | None = None) -> tuple[list[dict], list[str]]:
+                      data_class: str | None = None, prompt: str | None = None) -> tuple[list[dict], list[str]]:
     """Return admitted actual (pool, harness, model, level) options and refusals."""
     fleet = _fleet(fleet)
     policy = roster.get("policy", {}).get("selector", {})
@@ -144,7 +146,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         # BR-MIMO-001: paid pools require an explicit allow-list entry.
         elif (lane.get("paid_mimo") or roster.get("quota_pools", {}).get(pool, {}).get("explicit_only")) and pool not in (explicit_pools or set()):
             why = "paid pool requires explicit --allow"
-        elif fleet.data_policy_refusal(lane, "code") and (harness != "opencode" or mode != "read-only"):
+        elif (cash_class != "metered" and fleet.data_policy_refusal(lane, "code")
+              and (harness != "opencode" or mode != "read-only")):
             why = "public-only lane requires prompt-contained OpenCode read-only call"
         # BR-CASH-001
         elif funding.explicitly_unknown(roster, pool, lane, cash_class):
@@ -208,6 +211,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 if mode != "read-only" or modality != "text":
                     raise BudgetError("paid route is prompt-only read-only text")
                 route, rates, bounds, budget = route_config(roster, lane, role)
+                # BR-CASH-003: metadata-only select checks the class; dispatch also has the exact text.
+                if reason := paid_refusal(route, data_class, prompt):
+                    raise BudgetError(reason)
                 worst = ceiling_usd(rates, *bounds[:2])
                 paid_cash = funding.quote("metered", budget.snapshot(require=worst), worst_case=float(worst))
                 paid_cash.update(tariff_source=route["tariff"]["source"],
@@ -751,7 +757,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   exclude_lineage: str | None = None, mode: str | None = None,
                   modality: str = "text", allow: str | Path | None = None,
                   lead: str | None = None, fleet: Any = None,
-                  target: tuple[str, str] | None = None, data_class: str | None = None) -> dict:
+                  target: tuple[str, str] | None = None, data_class: str | None = None,
+                  prompt: str | None = None) -> dict:
     """Return choice/top3/lambdas and write an immutable replay receipt."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -765,7 +772,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     allow_list = parse_allow(allow, fleet)
     explicit_pools = {entry.split(":", 1)[0] for entry in allow_list or []}
     options, rejected = enumerate_options(roster, runtime, role, mode=mode, modality=modality,
-                                          exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools, data_class=data_class)
+                                          exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools,
+                                          data_class=data_class, prompt=prompt)
     if target is not None:
         requested = next((lane for lane in roster.get("lanes", [])
                           if (lane.get("harness"), lane.get("model_key")) == target), {})

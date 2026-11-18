@@ -124,7 +124,7 @@ class LanesAPI:
             target = (matches[0]["harness"], matches[0]["model_key"])
         try:
             selection = fleetctl.select_option(roster, runtime, self.state_dir, self.role,
-                                               mode="read-only", modality="text", target=target,
+                                               mode="read-only", modality="text", target=target, prompt=prompt,
                                                lead=fleetctl.resolve_lead_pool(roster))
         except fleetctl.FleetError:
             raise APIError(429, "no admitted lane is available; check fleet quota, switches and selector receipts", "lane_unavailable") from None

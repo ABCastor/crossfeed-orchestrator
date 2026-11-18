@@ -3190,7 +3190,7 @@ def select_option(
     exclude_lineage: str | None = None, mode: str | None = None, modality: str = "text",
     allow: str | Path | None = None, lead: str | None = None,
     target: tuple[str, str] | None = None,
-    data_class: str | None = None,
+    data_class: str | None = None, prompt: str | None = None,
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -3200,7 +3200,7 @@ def select_option(
         roster, runtime, state_dir, role, stakes=stakes, family=family,
         exclude_lineage=exclude_lineage, mode=mode, modality=modality, allow=allow, lead=lead,
         fleet=types.SimpleNamespace(**globals()),
-        target=target, data_class=data_class,
+        target=target, data_class=data_class, prompt=prompt,
     )
 
 
@@ -3254,6 +3254,11 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
             options.append(option)
             seen.add(option["selection_file"])
     for index, option in enumerate(options):
+        # BR-CASH-003: an older or separately prepared receipt cannot relabel today's input.
+        if option.get("funding") == "metered" and option.get("data_class") != _data_policy.classification(
+                getattr(args, "data_class", None)):
+            print("fleetctl: paid selection material class no longer matches the dispatch", file=sys.stderr)
+            return 5
         dispatch_id = str(uuid.uuid4())
         attempt_dir = state_dir.resolve() / "dispatches" / dispatch_id
         last = attempt_dir / "answer.txt"
@@ -6215,6 +6220,7 @@ def main() -> int:
                 family=args.family, exclude_lineage=args.exclude_lineage,
                 mode=args.mode, modality=getattr(args, "modality", "text"), allow=args.allow,
                 lead=resolve_lead_pool(roster, args.lead), data_class=args.data_class,
+                prompt=prompt if args.command == "dispatch" else None,
             )
             if args.command == "dispatch":
                 return dispatch_selection(selection, args, state_dir, prompt)

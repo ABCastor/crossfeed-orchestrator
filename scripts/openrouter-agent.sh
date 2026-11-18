@@ -92,7 +92,14 @@ _is_seconds "$KILL_AFTER" || _usage_error "--kill-after must be a non-negative w
 
 if [ -n "$PROMPT_FILE" ] && [ -z "$PROMPT" ]; then
   [ -f "$PROMPT_FILE" ] || _usage_error "prompt-file not found: $PROMPT_FILE"
-  PROMPT="$(<"$PROMPT_FILE")"
+  if [ "$PAID" = 1 ]; then
+    # read-to-NUL preserves final newlines; a successful read means NUL was found.
+    if IFS= read -r -d '' PROMPT <"$PROMPT_FILE"; then
+      _usage_error "paid prompt-file must not contain NUL"
+    fi
+  else
+    PROMPT="$(<"$PROMPT_FILE")"
+  fi
 fi
 [ -n "$PROMPT" ] || _usage_error "--prompt or --prompt-file is required"
 
@@ -141,6 +148,10 @@ if [ "$PAID_MIMO" = 1 ]; then
   [ "$(jq -r '.quota_pool' <<<"$lane_json")" = openrouter-mimo ] || { echo "openrouter-agent: paid MiMo requires the openrouter-mimo pool" >&2; exit 5; }
 elif [ "$PAID" = 1 ] && [ "$(jq -r '.quota_pool' <<<"$lane_json")" = openrouter-mimo ]; then
   echo "openrouter-agent: MiMo requires --paid-mimo" >&2
+  exit 5
+elif [ "$PAID" = 0 ] && jq -e '.paid_route or .paid_mimo or .funding == "metered" or .quota_pool == "openrouter-mimo"' \
+    <<<"$lane_json" >/dev/null; then
+  echo "openrouter-agent: metered lane is not free right now; the free transport cannot send it" >&2
   exit 5
 fi
 if [ -n "$MAX_TOKENS" ]; then
@@ -390,7 +401,7 @@ set -m
 # at a local server that stalls, dribbles, or hangs, and assert the real exit codes. It is a
 # test seam, not a routing knob - never point it at a third party, the API key travels with it.
 OPENROUTER_MODEL="$MODEL" OPENROUTER_KEY="$KEY" OPENROUTER_PROMPT="$PROMPT" \
-OPENROUTER_API_BASE="${OPENROUTER_API_BASE:-https://openrouter.ai/api/v1}" \
+OPENROUTER_API_BASE="${OPENROUTER_API_BASE-}" \
 OPENROUTER_TIMEOUT="$TIMEOUT" OPENROUTER_IDLE="$IDLE_TIMEOUT" \
 OPENROUTER_PAID="$PAID" OPENROUTER_ROSTER="$ROSTER_PATH" OPENROUTER_LANE="$LANE" OPENROUTER_ROLE="$ROLE" \
 OPENROUTER_MAX_TOKENS="$MAX_TOKENS" OPENROUTER_SCRIPT_DIR="$HERE" \
@@ -415,7 +426,8 @@ wall_raw = os.environ.get("OPENROUTER_TIMEOUT", "").strip()
 wall_s = int(wall_raw) if wall_raw else 0
 idle_s = int(os.environ["OPENROUTER_IDLE"])
 
-API = os.environ["OPENROUTER_API_BASE"]
+API = os.environ["OPENROUTER_API_BASE"] or "https://openrouter.ai/api/v1"
+open_request = urllib.request.urlopen
 deadline = (time.monotonic() + wall_s) if wall_s > 0 else None
 
 stream_bytes = 0
@@ -512,7 +524,7 @@ def request_json(request: urllib.request.Request, error_code: int) -> dict:
     body = b""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            with urllib.request.urlopen(request, timeout=sock_timeout()) as response:
+            with open_request(request, timeout=sock_timeout()) as response:
                 body = response.read()
             beat(force=True)
             break
@@ -548,8 +560,9 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
         parts: list[str] = []
         usage: dict | None = None
         done = False
+        observed_model = False
         try:
-            with urllib.request.urlopen(request, timeout=sock_timeout()) as response:
+            with open_request(request, timeout=sock_timeout()) as response:
                 streaming = True
                 with open(out_path, "w") as sink:
                     for raw in response:
@@ -569,8 +582,18 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                         try:
                             chunk = json.loads(payload, parse_float=Decimal) if paid else json.loads(payload)
                         except json.JSONDecodeError:
+                            if paid:
+                                fail(6, "paid stream returned invalid JSON; reservation retained")
                             continue
+                        if not isinstance(chunk, dict):
+                            if paid:
+                                fail(6, "paid stream returned an invalid message; reservation retained")
+                            continue
+                        if paid and (("model" in chunk and chunk["model"] != model)
+                                     or ("provider" in chunk and chunk["provider"] != route["provider"])):
+                            fail(6, "paid stream did not match the pinned model/provider; reservation retained")
                         if chunk.get("model"):
+                            observed_model = True
                             with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as identity:
                                 identity.write(json.dumps({"type": "crossfeed.provider_model", "model": chunk["model"]}) + "\n")
                         if chunk.get("error"):
@@ -578,6 +601,8 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                                 fail(6, "paid stream carried an error; reservation retained")
                             fail(6, f"stream carried an error: {json.dumps(chunk['error'])[:600]}")
                         if chunk.get("usage"):
+                            if paid and usage is not None:
+                                fail(6, "paid stream returned ambiguous usage; reservation retained")
                             usage = chunk["usage"]
                         for choice in chunk.get("choices") or []:
                             piece = ((choice.get("delta") or {}).get("content")) or ""
@@ -587,8 +612,8 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                                 sink.write(piece)
                                 sink.flush()
             beat(force=True)
-            if paid and not done:
-                fail(6, "paid stream ended without a final marker; reservation retained")
+            if paid and (not done or not observed_model):
+                fail(6, "paid stream did not confirm completion and the exact model; reservation retained")
             return "".join(parts), usage
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:600]
@@ -616,11 +641,16 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
 
 beat(force=True)
 
-# BR-CASH-002 / BR-MIMO-001
+# BR-CASH-002 / BR-CASH-003 / BR-MIMO-001
 if paid:
+    if os.environ["OPENROUTER_API_BASE"]:
+        fail(5, "paid endpoint overrides are refused; use the owner-pinned route")
     sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
     from openrouter_budget import BudgetError, ceiling_usd, owner_overlay, priced_request, route_config
-    from providers import ProviderError, resolve_key
+    from data_policy import paid_refusal
+    from funding import classify
+    from providers import NoRedirect, ProviderError, resolve_key
+    open_request = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open
 
     def approved_route():
         roster = owner_overlay(os.environ["OPENROUTER_ROSTER"])
@@ -628,7 +658,12 @@ if paid:
         if len(matches) != 1 or matches[0].get("selector") != model:
             raise BudgetError("paid route identity changed")
         lane = matches[0]
-        return lane, route_config(roster, lane, os.environ["OPENROUTER_ROLE"])
+        if classify(roster, lane.get("quota_pool"), lane) != "metered":
+            raise BudgetError("paid route needs an explicit metered funding class")
+        checked = route_config(roster, lane, os.environ["OPENROUTER_ROLE"])
+        if reason := paid_refusal(checked[0], prompt=prompt):
+            raise BudgetError(reason)
+        return lane, checked
 
     try:
         lane, (route, rates, bounds, budget) = approved_route()
@@ -649,11 +684,14 @@ catalog = request_json(
     urllib.request.Request(f"{API}/models", headers={"User-Agent": "crossfeed-orchestrator-openrouter-agent/1"}),
     6,
 )
-entry = next((m for m in catalog.get("data", []) if m.get("id") == model), None)
-if entry is None:
-    fail(5, f"model '{model}' not found in the live OpenRouter catalog; refusing an unpriced call")
+entries = catalog.get("data") if isinstance(catalog, dict) else None
+matches = [row for row in entries if isinstance(row, dict) and row.get("id") == model] if isinstance(entries, list) else []
+if len(matches) != 1:
+    fail(5, f"model '{model}' missing or ambiguous in the live catalog; refusing an unpriced call")
 
-output_modalities = (entry.get("architecture") or {}).get("output_modalities") or []
+entry = matches[0]
+architecture = entry.get("architecture")
+output_modalities = architecture.get("output_modalities") if isinstance(architecture, dict) else []
 if output_modalities != ["text"]:
     fail(
         5,
@@ -661,10 +699,11 @@ if output_modalities != ["text"]:
         "priced outside prompt/completion, so this wrapper only admits text-out models",
     )
 
-pricing = entry.get("pricing") or {}
-non_zero = {k: v for k, v in pricing.items() if str(v) != "0"}
-if non_zero and not paid:
-    fail(5, f"model '{model}' is not free right now (non-zero pricing fields: {non_zero}); refusing")
+if not paid:
+    pricing = entry.get("pricing")
+    if (not isinstance(pricing, dict) or not {"prompt", "completion"} <= pricing.keys()
+            or any(str(value) != "0" for value in pricing.values())):
+        fail(5, f"model '{model}' is not free right now (incomplete or non-zero pricing); refusing")
 
 body = {
     "model": model,

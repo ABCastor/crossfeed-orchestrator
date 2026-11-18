@@ -44,6 +44,12 @@ Shared-identity regression: `tests/test_shared_models.py:SharedRoutingTests.test
 
 Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.test_alias_does_not_bypass_paid_explicit_allow_or_cap` keeps paid admission blocked at the existing cap even when a Go route shares the model identity.
 
+## BR-CASH-003 — Paid transport sends only approved public bytes [DECIDED · supplied cash-aware routing build brief and council, 18 Nov 2026] (MUST NOT)
+
+- RULE: Do not disclose private, code, unclassified or substituted material to the paid prompt-only transport. This release accepts only explicitly public text with an exact owner-approved digest, no workspace, attachments or tools. Send only to the owner-pinned endpoint, upstream provider and exact model. No HTTP redirects, proxy environment overrides or provider fallback.
+- implemented-by: `scripts/data_policy.py:paid_refusal`, `scripts/openrouter-agent.sh:main`, `scripts/selector.py:enumerate_options`, `scripts/fleetctl.py:dispatch_selection`.
+- tested-by: `tests/test_openrouter_mimo.py:MimoTests.test_direct_private_prompt_refuses_before_even_fetching_catalog`, `test_dispatch_private_prompt_refuses_without_outbound_http`, `test_public_label_does_not_authorize_substituted_bytes`, `test_paid_http_redirects_do_not_reach_replacement_endpoint`, `test_legacy_endpoint_override_cannot_send_paid_prompt`, `test_unexpected_served_model_leaves_an_unsettled_hold`. Positive control: `test_explicit_paid_route_publishes_and_accounts_cost` observes the exact approved text, bounded request and settlement at the loopback boundary.
+
 ## BR-SELECT-001 — Configured Haiku judgment refusals precede scoring [DECIDED · supplied R10-SELECT brief, 13 Oct 2026]
 
 - RULE: When the operator applies the Haiku policy fragment, current and legacy Haiku are ineligible for review, reviewer, audit, second-opinion, audit-retry, hard-reasoning and judgment. Stakes, exploration, explicit selector allow lists and targets grant no exception. Read roles retain their existing admission. The fragment changes no spend level, switch, cap or scoring weight.

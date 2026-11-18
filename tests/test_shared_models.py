@@ -375,14 +375,14 @@ class SharedRoutingTests(unittest.TestCase):
             self.assertTrue(any(r['lane_id'] == 'go-flash' for r in options))
             self.assertFalse(any(r['pool'] == 'openrouter-mimo' for r in options))
             options, _ = selector.enumerate_options(paid, {}, 'hard-reasoning', fleet=fleetctl,
-                                                    explicit_pools={'openrouter-mimo'})
+                                                    explicit_pools={'openrouter-mimo'}, data_class='public')
             self.assertTrue(any(r['pool'] == 'openrouter-mimo' for r in options))
             budget = openrouter_budget.Budget(ACCOUNT, paid['cash_accounts'][ACCOUNT])
             token = budget.reserve('xiaomi/mimo-v2.6-flash', '5')
             budget.settle(token, '5')
             with self.assertRaisesRegex(fleetctl.FleetError, 'cap'):
                 selector.select_option(paid, {}, self.state, 'hard-reasoning', fleet=fleetctl,
-                                       allow='openrouter-mimo:mimo-v2.6-flash:*')
+                                       allow='openrouter-mimo:mimo-v2.6-flash:*', data_class='public')
 
 
 if __name__ == '__main__':

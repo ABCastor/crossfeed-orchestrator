@@ -31,6 +31,10 @@ class MimoTests(unittest.TestCase):
         seed(self.ledger)
         self.posts = []
         self.post_paths = []
+        self.get_paths = []
+        self.redirect_catalog = False
+        self.redirect_post = False
+        self.response_model = None
         self.models = ['xiaomi/mimo-v2.6-flash', 'xiaomi/mimo-v2.6-pro', 'openrouter/free', 'fixture/other-text']
         self.price = '0.001'
         self.cost = 0.001
@@ -44,6 +48,12 @@ class MimoTests(unittest.TestCase):
                 pass
 
             def do_GET(self):
+                owner.get_paths.append(self.path)
+                if owner.redirect_catalog and self.path.endswith("/models"):
+                    self.send_response(302)
+                    self.send_header("Location", "/unapproved")
+                    self.end_headers()
+                    return
                 if owner.catalog_barrier:
                     owner.catalog_barrier.wait(timeout=10)
                 entries = []
@@ -59,6 +69,11 @@ class MimoTests(unittest.TestCase):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 owner.posts.append(body)
                 owner.post_paths.append(self.path)
+                if owner.redirect_post:
+                    self.send_response(302)
+                    self.send_header("Location", "/unapproved")
+                    self.end_headers()
+                    return
                 self.send_response(owner.status)
                 self.end_headers()
                 if owner.stall:
@@ -67,7 +82,7 @@ class MimoTests(unittest.TestCase):
                 if owner.status != 200:
                     self.wfile.write(b'{"error":"synthetic failure"}')
                     return
-                self.wfile.write(('data: '+json.dumps({'model': body['model'], 'choices': [{'delta': {'content':'PONG'}}]})+'\n\n').encode())
+                self.wfile.write(('data: '+json.dumps({'model': owner.response_model or body['model'], 'choices': [{'delta': {'content':'PONG'}}]})+'\n\n').encode())
                 if owner.cost is not None:
                     self.wfile.write(('data: '+json.dumps({'usage': {'cost': owner.cost, 'prompt_tokens':1, 'completion_tokens':1}})+'\n\n').encode())
                 self.wfile.write(b'data: [DONE]\n\n')
@@ -87,7 +102,7 @@ class MimoTests(unittest.TestCase):
         self.overlay.write_text(json.dumps(self.roster))
         self.overlay.chmod(0o600)
         self.env = dict(os.environ, HOME=str(self.root), ACCESS_OVERLAY=str(self.overlay),
-                        FLEET_STATE_DIR=str(self.root/'state'), OPENROUTER_API_BASE=base,
+                        FLEET_STATE_DIR=str(self.root/'state'), OPENROUTER_API_BASE='', FLEET_DATA_CLASS='public',
                         OP_SERVICE_ACCOUNT_TOKEN='', OP_SERVICE_ACCOUNT_TOKEN_FILE=str(self.root/'no-token'),
                         PATH=str(bindir)+os.pathsep+os.environ['PATH'], FLEET_QUOTA_POLICY='off', FLEET_IGNORE_QUOTA='1')
 
@@ -174,6 +189,69 @@ class MimoTests(unittest.TestCase):
         self.assertEqual(budget.snapshot()["held_usd"], 0)
         self.assertEqual(budget.snapshot()["available_usd"], 4.8)
 
+    # BR-CASH-003
+    def test_direct_private_prompt_refuses_before_even_fetching_catalog(self):
+        result = self.run_wrapper("--paid-mimo", env={"FLEET_DATA_CLASS": "private"})
+        self.assertEqual(self.posts, [], result.stderr)
+        self.assertEqual(self.get_paths, [])
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("private", result.stderr)
+
+    # BR-CASH-003
+    def test_dispatch_private_prompt_refuses_without_outbound_http(self):
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/fleetctl.py'), '--overlay', str(self.overlay),
+                                 '--state-dir', str(self.root/'private-selection'), 'dispatch', '--no-refresh',
+                                 '--role', 'hard-reasoning', '--data-class', 'private',
+                                 '--allow', 'openrouter-mimo:mimo-v2.6-flash:*', '--prompt', 'Return PONG',
+                                 '--dir', str(self.root)], env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(self.posts, [], result.stderr)
+        self.assertEqual(self.get_paths, [])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("private", result.stderr)
+
+    # BR-CASH-003
+    def test_public_label_does_not_authorize_substituted_bytes(self):
+        result = self.run_wrapper("--paid-mimo", "--prompt", "Unapproved content",
+                                  env={"FLEET_DATA_CLASS": "public"})
+        self.assertEqual(self.posts, [], result.stderr)
+        self.assertEqual(self.get_paths, [])
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("approved", result.stderr)
+
+    # BR-CASH-003
+    def test_paid_http_redirects_do_not_reach_replacement_endpoint(self):
+        self.redirect_catalog = True
+        result = self.run_wrapper("--paid-mimo", env={"FLEET_DATA_CLASS": "public"})
+        self.assertEqual(self.get_paths, ["/v1/models"], result.stderr)
+        self.assertEqual(self.posts, [])
+        self.assertNotEqual(result.returncode, 0)
+        self.get_paths.clear()
+        self.redirect_catalog, self.redirect_post = False, True
+        result = self.run_wrapper("--paid-mimo", env={"FLEET_DATA_CLASS": "public"})
+        self.assertEqual(self.get_paths, ["/v1/models"], result.stderr)
+        self.assertEqual(self.post_paths, ["/v1/chat/completions"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(next(iter(self.budget().values()))["cost_usd"])
+
+    # BR-CASH-003
+    def test_legacy_endpoint_override_cannot_send_paid_prompt(self):
+        result = self.run_wrapper("--paid-mimo", env={
+            "OPENROUTER_API_BASE": f"http://127.0.0.1:{self.server.server_port}/unapproved",
+            "FLEET_DATA_CLASS": "public",
+        })
+        self.assertEqual(self.posts, [], result.stderr)
+        self.assertEqual(self.get_paths, [])
+        self.assertIn("endpoint", result.stderr)
+
+    # BR-CASH-003
+    def test_unexpected_served_model_leaves_an_unsettled_hold(self):
+        self.response_model = "fixture/other-text"
+        result = self.run_wrapper("--paid-mimo", env={"FLEET_DATA_CLASS": "public"})
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertEqual(len(self.posts), 1)
+        self.assertFalse((self.root/"answer").exists())
+        self.assertIsNone(next(iter(self.budget().values()))["cost_usd"])
+
     # BR-CASH-002
     def test_explicit_paid_flag_does_not_authorize_spend_without_an_envelope(self):
         self.roster.pop("cash_accounts", None)
@@ -206,6 +284,8 @@ class MimoTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), 'PONG')
         self.assertEqual(self.posts[0]['max_tokens'], 8)
+        self.assertEqual(self.posts[0]["messages"], [{"role": "user", "content": "Return PONG"}])
+        self.assertNotIn("tools", self.posts[0])
         self.assertFalse(self.posts[0]['provider']['allow_fallbacks'])
         self.assertEqual(self.posts[0]['provider']['max_price'], {'prompt':1000, 'completion':1000})
         self.assertEqual(next(iter(self.budget().values()))['cost_usd'], '0.001')
