@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 
+OPENROUTER_BILLING_INCIDENT = 8
 CLASSES = frozenset({"included", "verified-free", "metered", "unknown"})
 CASH_FIELDS = ("estimate_usd", "worst_case_usd", "per_call_cap_usd", "cap_usd",
                "settled_usd", "held_usd", "available_usd", "reported_usd")
@@ -74,9 +75,16 @@ def explicitly_unknown(roster, pool, lane, value):
     )
 
 
-def is_metered(option):
+def legacy_gemini(pool, harness):
+    """The pre-existing explicit tool loop is capped by estimates, not reservations."""
+    return pool == "gemini-metered" and harness in {"opencode", "pi"}
+
+
+def requires_reservation(option):
+    if legacy_gemini(option.get("pool"), option.get("harness")):
+        return False
     return (option.get("funding") == "metered" or (option.get("cash") or {}).get("funding") == "metered"
-            or option.get("paid_mimo") is True or option.get("pool") in {"openrouter-mimo", "gemini-metered"})
+            or option.get("paid_mimo") is True or option.get("pool") == "openrouter-mimo")
 
 
 def quote(funding, budget=None, *, estimate=None, worst_case=None):
@@ -100,17 +108,17 @@ def legacy_budget(pool, config, metered=None):
 
 def account_budget(roster, account):
     try:
-        from openrouter_budget import Budget, BudgetError, envelope
+        from openrouter_budget import Budget, BudgetError
     except ModuleNotFoundError:
-        from scripts.openrouter_budget import Budget, BudgetError, envelope
+        from scripts.openrouter_budget import Budget, BudgetError
     try:
-        raw, (per_call, cap, _) = envelope(roster, account)
+        budget = Budget.from_roster(roster, account)
     except BudgetError:
         return {}
     try:
-        return Budget(account, raw).snapshot()
+        return budget.snapshot()
     except (BudgetError, OSError):
-        return {"account": account, "per_call_cap_usd": float(per_call), "cap_usd": float(cap)}
+        return {"account": account, "per_call_cap_usd": float(budget.per_call), "cap_usd": float(budget.daily)}
 
 
 def paid_lane_quote(roster, route):
@@ -132,6 +140,8 @@ def summary(cash, *, symbol="$"):
         return "unknown" if value is None else f"{symbol}{value:.8g}"
     text = (f"{cash['funding']}, estimated {usd(cash.get('estimate_usd'))}, "
             f"worst case {usd(cash.get('worst_case_usd'))}")
+    if cash.get("api_equivalent_usd") is not None:
+        text += f", API-equivalent {usd(cash['api_equivalent_usd'])}"
     if cash["funding"] == "metered":
         if cash.get("account"):
             text += f", account {cash['account']}"
@@ -141,12 +151,12 @@ def summary(cash, *, symbol="$"):
             text += f", per-call cap {usd(cash['per_call_cap_usd'])}"
         text += ", " + ", ".join(f"{key} {usd(cash.get(key + '_usd'))}"
                                   for key in ("cap", "settled", "held", "available"))
-        if cash.get("reported_usd") is not None:
-            text += f", reported {usd(cash['reported_usd'])}"
-        if cash.get("frozen"):
-            text += ", frozen"
         if cash.get("tariff_source"):
             text += f", quote {cash['tariff_source']} ({cash.get('tariff_age_s', '?')}s old)"
+    if cash.get("reported_usd") is not None:
+        text += f", reported {usd(cash['reported_usd'])}"
+    if cash.get("frozen"):
+        text += ", frozen"
     return text
 
 
@@ -154,7 +164,7 @@ def receipt_fields(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("funding"), str) or raw["funding"] not in CLASSES:
         return None
     result = {"funding": raw["funding"]}
-    for key in (*CASH_FIELDS, "estimated_spent_usd"):
+    for key in (*CASH_FIELDS, "estimated_spent_usd", "api_equivalent_usd"):
         value = number(raw.get(key))
         if key in raw:
             result[key] = value if value is not None and value >= 0 else None

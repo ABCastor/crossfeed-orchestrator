@@ -7,6 +7,7 @@ data. An API-equivalent cost is an estimate, not a measured subscription debit.
 
 from __future__ import annotations
 
+from decimal import Decimal
 import importlib
 import json
 import math
@@ -138,21 +139,24 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         label = lane.get("lane_id") or f"{pool}/{key}"
         why = None
         cash_class = funding.classify(roster, pool, lane)
+        legacy_gemini = funding.legacy_gemini(pool, harness)
+        bounded_cash = cash_class == "metered" and not legacy_gemini
         privacy_reason = fleet.data_policy_refusal(lane, data_class)
         if privacy_reason:
             why = privacy_reason
         elif not key or not pool or harness not in WRAPPERS:
             why = "missing model/pool or unsupported wrapper"
-        # BR-MIMO-001: paid pools require an explicit allow-list entry.
-        elif (lane.get("paid_mimo") or roster.get("quota_pools", {}).get(pool, {}).get("explicit_only")) and pool not in (explicit_pools or set()):
+        # BR-MIMO-001 / BR-CASH-002: documented explicit-only routes.
+        elif (legacy_gemini or lane.get("paid_mimo")
+              or roster.get("quota_pools", {}).get(pool, {}).get("explicit_only")) and pool not in (explicit_pools or set()):
             why = "paid pool requires explicit --allow"
-        elif (cash_class != "metered" and fleet.data_policy_refusal(lane, "code")
+        elif (not bounded_cash and fleet.data_policy_refusal(lane, "code")
               and (harness != "opencode" or mode != "read-only")):
             why = "public-only lane requires prompt-contained OpenCode read-only call"
         # BR-CASH-001
         elif funding.explicitly_unknown(roster, pool, lane, cash_class):
             why = "funding is unknown"
-        elif cash_class == "metered" and "price_1m" in lane and funding.rates(lane["price_1m"]) is None:
+        elif bounded_cash and "price_1m" in lane and funding.rates(lane["price_1m"]) is None:
             why = "missing or invalid tariff"
         elif allowed is not None and pool not in allowed:
             why = "pool forbidden for role"
@@ -205,8 +209,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 continue
         paid_cash = None
         cash_tariff = None
-        # BR-CASH-002: estimate-only tool loops are not bounded selector options.
-        if cash_class == "metered":
+        # BR-CASH-002: the explicit legacy Gemini tool loop keeps the pre-reservation gates.
+        if bounded_cash:
             try:
                 if mode != "read-only" or modality != "text":
                     raise BudgetError("paid route is prompt-only read-only text")
@@ -572,13 +576,13 @@ def _vary(scored: list, greedy: dict, stakes: str, weights: dict, variety: dict,
 # BR-CASH-004
 def _cash_band(scored, greedy, stakes, weights, variety, pace_of):
     """Compare cash only among measured peers without replacing the quota/latency score."""
-    if stakes == "irreversible" or greedy["q"]["unknown"] or not any(map(funding.is_metered, scored)):
+    if stakes == "irreversible" or greedy["q"]["unknown"] or not any(map(funding.requires_reservation, scored)):
         return scored, None
     band = variety["quality_band"].get(stakes, 0)
     peers = [item for item in scored if not item["q"]["unknown"] and not item.get("pro_fallback")
              and item["quality"] >= greedy["quality"] - band
              and item["score"] >= greedy["score"] - weights[stakes] * band]
-    if not any(map(funding.is_metered, peers)):
+    if not any(map(funding.requires_reservation, peers)):
         return scored, None  # Leave today's nonmetered variety and tie-breaks alone.
     expiring = [item for item in peers if item["funding"] == "included"
                 and pace_of(item["pool"], item["model_key"])["value"] > 0]
@@ -623,18 +627,29 @@ def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
     return amount
 
 
+def _legacy_pair(value):
+    if not isinstance(value, dict):
+        return None
+    pair = tuple(_number(value.get(side)) for side in ("in", "out"))
+    return pair if all(number is not None and number >= 0 for number in pair) else None
+
+
 def _cost(row: dict, allowance: float | None) -> tuple[float | None, float | None]:
-    prices = funding.rates(row.get("price_1m"))
-    tokens = row.get("tokens_per_task")
-    if prices is None or not isinstance(tokens, dict):
+    """Legacy score inputs: do not normalize price aliases or change its arithmetic."""
+    tokens, prices = (_legacy_pair(row.get(key)) for key in ("tokens_per_task", "price_1m"))
+    if tokens is None or prices is None:
         return None, None
-    incoming, outgoing = (_number(tokens.get(side)) for side in ("in", "out"))
-    if any(value is None or value < 0 for value in (incoming, outgoing)):
-        return None, None
-    usd = incoming * (prices[0] / 1_000_000) + outgoing * (prices[1] / 1_000_000)
-    if not math.isfinite(usd):
-        return None, None
+    usd = (tokens[0] * prices[0] + tokens[1] * prices[1]) / 1_000_000
     return usd, usd / allowance * 100 if allowance is not None else None
+
+
+def _display_usd(row, prices):
+    tokens = _legacy_pair(row.get("tokens_per_task"))
+    if tokens is None or prices is None:
+        return None
+    amount = float(sum(Decimal(str(token)) * Decimal(str(price))
+                       for token, price in zip(tokens, prices)) / 1_000_000)
+    return amount if math.isfinite(amount) else None
 
 
 def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
@@ -642,7 +657,7 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
     pool = option["pool"]
     if binding.get("projection_basis") == "none-known":
         chat = option.get("harness") == "chatgpt-chat" or pool == "chatgpt-work"
-        usd = None if chat else _cost(row, None)[0]
+        usd = None if chat else _display_usd(row, _legacy_pair(row.get("price_1m")))
         return {"estimated_usd": usd, "percent": None, "allowance_usd": None,
                 "estimated": True, "unknown": True, "basis": "no_known_limit",
                 "penalty_percent": 0.0}, ["chat_usage_unpriced" if chat else "usage_unpriced"]
@@ -848,7 +863,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     for option in options:
         pool = option["pool"]
         daily_cap = _number(roster.get("quota_pools", {}).get(pool, {}).get("daily_usd_cap"))
-        if daily_cap is not None and pool not in capped and option["funding"] != "metered":
+        if daily_cap is not None and pool not in capped and not funding.requires_reservation(option):
             spent = fleet.pool_spent_since(state_dir, roster, pool, fleet.local_day_start())
             if spent >= float(daily_cap):
                 capped.add(pool)
@@ -892,7 +907,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
         # BR-CASH-004: an owner floor applies to the exact task family and effort.
-        if funding.is_metered(option):
+        if funding.requires_reservation(option):
             floors = option.get("cash_quality_floors")
             floor = _number(floors.get(family)) if isinstance(floors, dict) else None
             if (unknown or q.get("imputation") is not None or floor is None
@@ -920,9 +935,13 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             penalty = min(penalty, high_cost_cap)
         score = quality if stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
         cash = option.get("cash") or funding.quote(option["funding"])
+        if funding.legacy_gemini(option["pool"], option["harness"]):
+            cash = pool_cash[option["pool"]]
+        if (api_equivalent := _display_usd(row, funding.rates(row.get("price_1m")))) is not None:
+            cash = dict(cash, api_equivalent_usd=api_equivalent)
         if option.get("cash_tariff_1m") is not None:
             # Model-market prices never estimate bills for a specific funding account.
-            estimate, _ = _cost(dict(row, price_1m=option["cash_tariff_1m"]), None)
+            estimate = _display_usd(row, funding.rates(option["cash_tariff_1m"]))
             if estimate is not None and estimate > cash["worst_case_usd"]:
                 estimate = None  # Recorded tokens outside this route's bound do not price this task.
             cash = dict(cash, estimate_usd=estimate)

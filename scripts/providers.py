@@ -121,13 +121,23 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def openrouter_pricing(row):
     """Catalog dollars per token become Pi's dollars per million tokens."""
-    prices = row.get("pricing") or {}
+    prices = row.get("pricing")
+    if not isinstance(prices, dict):
+        return None
+
+    def price(value):
+        # The wire format also permits decimal strings, not truth values or other coercibles.
+        if type(value) not in (int, float) and not (
+                isinstance(value, str) and re.fullmatch(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value)):
+            raise ValueError
+        return float(value)
+
     try:
-        prompt, completion = float(prices["prompt"]), float(prices["completion"])
+        prompt, completion = price(prices["prompt"]), price(prices["completion"])
         rates = {"input": prompt * 1000000, "output": completion * 1000000,
-                 "cacheRead": float(prices.get("input_cache_read", prompt)) * 1000000,
-                 "cacheWrite": float(prices.get("input_cache_write", prompt)) * 1000000,
-                 "request_usd": float(prices.get("request", 0))}
+                 "cacheRead": price(prices.get("input_cache_read", prompt)) * 1000000,
+                 "cacheWrite": price(prices.get("input_cache_write", prompt)) * 1000000,
+                 "request_usd": price(prices.get("request", 0))}
         if any(not math.isfinite(v) or v < 0 for v in rates.values()):
             return None
         return rates
@@ -369,10 +379,11 @@ def add(path, *, id, kind, label="", base_url="", credential_ref="", key="", mod
                     if isinstance(ranking, list):
                         ranking.extend(source["lane_ids"])
         if source["owns_pool"]:
-            roster.setdefault("quota_pools", {})[pool] = {"label": label, "plan": {"name": label, "billing": "unknown"}}
+            # BR-CASH-001: discovery proves neither entitlement nor free billing.
+            roster.setdefault("quota_pools", {})[pool] = {
+                "label": label, "funding": "unknown", "plan": {"name": label, "billing": "unknown"}}
             if kind in {"openai-compatible", "openrouter"}:
-                # BR-CASH-001: key and catalogue access prove neither entitlement nor free billing.
-                roster["quota_pools"][pool].update(funding="unknown", daily_usd_cap=cap)
+                roster["quota_pools"][pool]["daily_usd_cap"] = cap
         sources[id] = source
     return {"id": id, "models": result["selected"], "message": result["message"] + (
         " Saved. New lanes are unverified; review and verify them in the overlay before routing." if kind != "crossfeed-chat"

@@ -36,6 +36,7 @@
 # Prints the model's final text to stdout. Diagnostics go to stderr.
 # Exit codes: 0 success; 2 usage; 3 lane rejected by roster or key missing; 4 lease failure;
 # 5 model failed the live free-only gate; 6 API/network error; 7 empty output;
+# 8 free-route billing incident (terminal and frozen pending owner reconciliation);
 # 124 wall-clock kill; 125 idle-watchdog kill; 127 missing dep.
 # Parse the complete body before starting, so an in-flight edit cannot change this run.
 main() {
@@ -397,24 +398,27 @@ fi
 EVENTS="$(mktemp "${TMPDIR:-/tmp}/openrouter-model.XXXXXX")"
 CROSSFEED_STARTED=1
 set -m
-# OPENROUTER_API_BASE is a free-transport test seam for loopback watchdog fixtures; never
-# point it at a third party. Paid transport refuses it and reads the owner-pinned route.
 OPENROUTER_MODEL="$MODEL" OPENROUTER_KEY="$KEY" OPENROUTER_PROMPT="$PROMPT" \
-OPENROUTER_API_BASE="${OPENROUTER_API_BASE-}" \
 OPENROUTER_TIMEOUT="$TIMEOUT" OPENROUTER_IDLE="$IDLE_TIMEOUT" \
 OPENROUTER_PAID="$PAID" OPENROUTER_ROSTER="$ROSTER_PATH" OPENROUTER_LANE="$LANE" OPENROUTER_ROLE="$ROLE" \
 OPENROUTER_MAX_TOKENS="$MAX_TOKENS" OPENROUTER_SCRIPT_DIR="$HERE" \
 OPENROUTER_MODEL_EVENTS="$EVENTS" OPENROUTER_OUT="$RUN_LAST" OPENROUTER_PROGRESS="$PROGRESS" \
-  python3 - >"$RUNOUT" <<'PY' &
+  python3 -I - >"$RUNOUT" <<'PY' &
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
+from funding import OPENROUTER_BILLING_INCIDENT, number, quote, summary
+from openrouter_budget import (BudgetError, FREE_API, check_free_route, dollars,
+                               free_incident_path, record_free_charge)
+from providers import NoRedirect, ProviderError, resolve_key
 
 model = os.environ["OPENROUTER_MODEL"]
 key = os.environ["OPENROUTER_KEY"]
@@ -425,8 +429,8 @@ wall_raw = os.environ.get("OPENROUTER_TIMEOUT", "").strip()
 wall_s = int(wall_raw) if wall_raw else 0
 idle_s = int(os.environ["OPENROUTER_IDLE"])
 
-API = os.environ["OPENROUTER_API_BASE"] or "https://openrouter.ai/api/v1"
-open_request = urllib.request.urlopen
+API = FREE_API
+open_request = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open
 deadline = (time.monotonic() + wall_s) if wall_s > 0 else None
 
 stream_bytes = 0
@@ -543,6 +547,43 @@ def request_json(request: urllib.request.Request, error_code: int) -> dict:
         fail(error_code, "API returned non-JSON data")
 
 
+def guard_free_route():
+    try:
+        check_free_route(incident_path)
+    except (BudgetError, OSError) as exc:
+        fail(OPENROUTER_BILLING_INCIDENT, f"free route refused: {exc}")
+
+
+def check_free_charge(usage):
+    raw_cost = usage.get("cost") if isinstance(usage, dict) else None
+    if raw_cost is None:
+        return
+    try:
+        if type(raw_cost) not in (int, Decimal, str):
+            raise InvalidOperation
+        cost = Decimal(raw_cost)
+        if not cost.is_finite() or cost < 0:
+            raise InvalidOperation
+    except InvalidOperation:
+        fail(6, "free stream returned malformed cost")
+    if not cost:
+        return
+    try:
+        record_free_charge(incident_path, model, cost)
+        outcome = f"route frozen for owner reconciliation ({incident_path})"
+        frozen = True
+    except OSError as exc:
+        outcome = f"STOP: could not persist the freeze record: {exc}"
+        frozen = False
+    cash = quote("verified-free", {"reported_usd": number(float(cost)), "frozen": frozen})
+    try:
+        with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
+            events.write(json.dumps({"type": "crossfeed.cash", "cash": cash}) + "\n")
+    except OSError:
+        pass
+    fail(OPENROUTER_BILLING_INCIDENT, f"OpenRouter reported a non-zero cost (USD {cost}); {outcome}")
+
+
 def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None]:
     """Read the SSE response, writing content deltas to disk as they arrive.
 
@@ -560,6 +601,8 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
         usage: dict | None = None
         done = False
         observed_model = False
+        if not paid:
+            guard_free_route()
         try:
             with open_request(request, timeout=sock_timeout()) as response:
                 streaming = True
@@ -579,7 +622,7 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                             done = True
                             break
                         try:
-                            chunk = json.loads(payload, parse_float=Decimal) if paid else json.loads(payload)
+                            chunk = json.loads(payload, parse_float=Decimal)
                         except json.JSONDecodeError:
                             if paid:
                                 fail(6, "paid stream returned invalid JSON; reservation retained")
@@ -591,14 +634,16 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                         if paid and (("model" in chunk and chunk["model"] != model)
                                      or ("provider" in chunk and chunk["provider"] != route["provider"])):
                             fail(6, "paid stream did not match the pinned model/provider; reservation retained")
-                        if chunk.get("model"):
+                        if not paid:
+                            check_free_charge(chunk.get("usage"))
+                        if isinstance(chunk.get("model"), str) and chunk["model"]:
                             observed_model = True
                             with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as identity:
                                 identity.write(json.dumps({"type": "crossfeed.provider_model", "model": chunk["model"]}) + "\n")
                         if chunk.get("error"):
                             if paid:
                                 fail(6, "paid stream carried an error; reservation retained")
-                            fail(6, f"stream carried an error: {json.dumps(chunk['error'])[:600]}")
+                            fail(6, f"stream carried an error: {json.dumps(chunk['error'], default=str)[:600]}")
                         if chunk.get("usage"):
                             if paid and usage is not None:
                                 fail(6, "paid stream returned ambiguous usage; reservation retained")
@@ -642,15 +687,11 @@ beat(force=True)
 
 # BR-CASH-002 / BR-CASH-003 / BR-MIMO-001
 if paid:
-    if os.environ["OPENROUTER_API_BASE"]:
+    if os.environ.get("OPENROUTER_API_BASE"):
         fail(5, "paid endpoint overrides are refused; use the owner-pinned route")
-    sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
-    from openrouter_budget import (BudgetError, ceiling_usd, dollars, owner_overlay,
-                                   priced_request, route_config, tariff_metadata)
+    from openrouter_budget import ceiling_usd, owner_overlay, priced_request, route_config, tariff_metadata
     from data_policy import paid_refusal
     from funding import classify
-    from providers import NoRedirect, ProviderError, resolve_key
-    open_request = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open
 
     def approved_route():
         roster = owner_overlay(os.environ["OPENROUTER_ROSTER"])
@@ -682,6 +723,12 @@ if paid:
         fail(3, "paid route credential could not be read")
     except (BudgetError, OSError) as exc:
         fail(5, f"paid route refused: {exc}")
+else:
+    try:
+        incident_path = free_incident_path(model)
+    except (BudgetError, OSError) as exc:
+        fail(OPENROUTER_BILLING_INCIDENT, f"cannot use owner free-route incident directory: {exc}")
+    guard_free_route()
 
 # FREE-ONLY GATE: live-checked on every call, never trusted from the roster entry alone.
 catalog = request_json(
@@ -736,7 +783,6 @@ request = urllib.request.Request(
         method="POST",
 )
 if paid:
-    from funding import quote, summary
     try:
         reservation = budget.reserve(model, ceiling)
         cash = quote("metered", budget.snapshot(), worst_case=float(ceiling))
@@ -769,19 +815,13 @@ if paid:
         events.write(json.dumps({"type": "crossfeed.cash", "cash": cash}) + "\n")
     print(f"openrouter-agent: paid cost USD {cost}; {summary(cash)}; reservation {reservation}", file=sys.stderr, flush=True)
 elif usage is None:
-    # The pre-flight catalog gate already refused non-zero pricing, so this is not a billing
-    # risk, but it does mean the post-hoc confirmation did not run. Say so rather than implying
-    # a check that never happened.
+    # A catalog price is not proof of what this request was charged.
     print(
         "openrouter-agent: NOTE - the stream carried no usage block, so the post-hoc zero-cost "
         "confirmation did not run; the pre-flight free-only gate did pass.",
         file=sys.stderr,
         flush=True,
     )
-else:
-    cost = usage.get("cost")
-    if cost not in (None, 0, 0.0, "0"):
-        fail(6, f"OpenRouter reported a non-zero cost ({cost!r}) for a call the free-gate approved; stop and investigate")
 
 text = text.strip()
 if not text:

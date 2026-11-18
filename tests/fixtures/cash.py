@@ -1,9 +1,20 @@
 """Synthetic owner settings and ledger setup; never touches the real home."""
 import hashlib
 import json
+import shutil
 
 
 ACCOUNT = "fixture-cash"
+
+
+def copy_cash_scripts(source, owner, free_api):
+    """Process integration seam: only a disposable copy gets a synthetic owner and endpoint."""
+    assert free_api.startswith("http://127.0.0.1:")
+    scripts = owner / "scripts"
+    shutil.copytree(source, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+    with (scripts / "openrouter_budget.py").open("a") as handle:
+        handle.write(f"\nFREE_API = {free_api!r}\ndef owner_home(): return Path({str(owner)!r})\n")
+    return scripts
 
 
 def envelope(**overrides):

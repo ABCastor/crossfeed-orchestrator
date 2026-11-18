@@ -5,15 +5,19 @@ from contextlib import contextmanager
 import datetime as dt
 from decimal import Decimal, InvalidOperation
 import fcntl
+from hashlib import sha256
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import stat
 import tempfile
 import urllib.parse
 import uuid
+from zoneinfo import ZoneInfo
 
+FREE_API = 'https://openrouter.ai/api/v1'
 MODELS = frozenset({"xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-flash"})
 POOL = "openrouter-mimo"
 SCHEMA = "crossfeed-cash-budget/v1"
@@ -94,17 +98,79 @@ def _owner_directory(path):
         raise BudgetError("cash directory must be owned by the operator and not writable by others")
 
 
+def owner_home():
+    try:
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if home.is_absolute():
+            return home
+    except KeyError:
+        pass
+    raise BudgetError("cash authority requires an OS account with an absolute home")
+
+
 def ledger_path():
-    # Never partition cash by --state-dir, FLEET_STATE_DIR or XDG_STATE_HOME.
-    return Path.home() / ".local/state/orchestrator/cash-budget.json"
+    # Do not partition authorization or spend by caller HOME, XDG or --state-dir.
+    return owner_home() / ".local/state/orchestrator/cash-budget.json"
 
 
 def owner_overlay(path):
-    expected = Path.home() / ".config/orchestrator/access-overlay.json"
-    if Path(path).expanduser().resolve() != expected.resolve():
+    expected = owner_home() / ".config/orchestrator/access-overlay.json"
+    if Path(path).resolve() != expected.resolve():
         raise BudgetError("paid transport requires the canonical owner access overlay")
     _owner_directory(expected.parent)
     return _owner_json(expected, "owner access overlay")
+
+
+# BR-CASH-005: independent of envelopes and keyed by the exact free selector.
+def free_incident_path(model):
+    directory = ledger_path().parent
+    directory.mkdir(parents=True, exist_ok=True)
+    _owner_directory(directory)
+    incidents = directory / "free-billing-incidents"
+    incidents.mkdir(mode=0o700, exist_ok=True)
+    _owner_directory(incidents)
+    return incidents / (sha256(model.encode()).hexdigest() + ".json")
+
+
+def check_free_route(path):
+    try:
+        path.lstat()  # A corrupt or partially written record must also block sends.
+    except FileNotFoundError:
+        return
+    raise BudgetError(f"free route is frozen; owner reconciliation required ({path})")
+
+
+def record_free_charge(path, model, cost):
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return  # The first reported charge already froze this route.
+    with os.fdopen(fd, "w") as handle:
+        json.dump({"model": model, "reported_usd": str(cost),
+                   "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    for directory in (path.parent, path.parent.parent):
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _billing_zone(settings):
+    name = settings.get("timezone", "UTC")
+    if name == "UTC":
+        return dt.timezone.utc
+    # Use the system zone database, not TZ or a worker's PYTHONTZPATH.
+    if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_+\-]+(?:/[A-Za-z0-9_+\-]+)*", name):
+        try:
+            with (Path("/usr/share/zoneinfo") / name).open("rb") as handle:
+                return ZoneInfo.from_file(handle, key=name)
+        except (OSError, ValueError):
+            pass
+    raise BudgetError("invalid cash envelope timezone; use an installed IANA name")
 
 
 # BR-CASH-002 / BR-MIMO-002
@@ -119,7 +185,7 @@ def envelope(roster, account):
         raise BudgetError("cash envelope needs positive ordered per-call, daily and pilot limits")
     if "automatic" in raw and type(raw["automatic"]) is not bool:
         raise BudgetError("invalid automatic grant in cash envelope")
-    return raw, values
+    return raw, values, _billing_zone(raw)
 
 
 def endpoint(value):
@@ -159,8 +225,7 @@ def route_config(roster, lane, role):
         raise BudgetError("paid route requires a 1Password key reference")
     rates, bounds = parse_tariff(route.get("tariff"))
     endpoint(route.get("endpoint"))
-    raw, _ = envelope(roster, route.get("account"))
-    return route, rates, bounds, Budget(route["account"], raw)
+    return route, rates, bounds, Budget.from_roster(roster, route.get("account"))
 
 
 def parse_tariff(tariff):
@@ -237,9 +302,18 @@ def priced_request(entry, body, max_tokens="", *, route=None, rates=None, bounds
 class Budget:
     # BR-CASH-002 / BR-MIMO-002
     def __init__(self, account, settings, *, path=None):
+        if not isinstance(account, str):
+            raise BudgetError("no owner cash envelope for the funding account")
         self.account = account
-        self.settings, (self.per_call, self.daily, self.pilot) = envelope({"cash_accounts": {account: settings}}, account)
+        self.settings, (self.per_call, self.daily, self.pilot), self.timezone = envelope(
+            {"cash_accounts": {account: settings}}, account)
         self.path = Path(path) if path is not None else ledger_path()
+
+    @classmethod
+    def from_roster(cls, roster, account):
+        accounts = roster.get("cash_accounts")
+        settings = accounts.get(account) if isinstance(accounts, dict) and isinstance(account, str) else None
+        return cls(account, settings)
 
     @contextmanager
     def _locked(self, *, write=False):
@@ -300,9 +374,8 @@ class Budget:
         except (ValueError, TypeError, KeyError):
             raise BudgetError("corrupt cash ledger call") from None
 
-    @staticmethod
-    def _today():
-        return dt.datetime.now().astimezone().date().isoformat()
+    def _today(self):
+        return dt.datetime.now(self.timezone).date().isoformat()
 
     def _totals(self, calls, today):
         settled = held = lifetime = Decimal(0)

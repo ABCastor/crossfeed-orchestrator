@@ -418,7 +418,9 @@ def begin(wrapper, requested, selected, lane, role, effort=None, selection=None,
                                      effort=effort, pool=pool, harness=wrapper, role=role, family=family))
     if funding:
         selected_cash = ((record.get("selection") or {}).get("choice") or {}).get("cash")
-        record["cash"] = selected_cash or funding.quote(funding.classify(data, pool, item))
+        budget = (funding.legacy_budget(pool, data.get("quota_pools", {}).get(pool, {}))
+                  if funding.legacy_gemini(pool, wrapper) else None)
+        record["cash"] = selected_cash or funding.quote(funding.classify(data, pool, item), budget)
     else:
         record["cash"] = {"funding": "unknown"}
     record["model_identity"] = canonical_model(record["selected_model"], data)

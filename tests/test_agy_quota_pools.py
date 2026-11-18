@@ -173,6 +173,40 @@ class QuotaPoolTests(unittest.TestCase):
 
 
 class WrapperQuotaTests(Sandbox):
+    def test_explicit_legacy_gemini_dispatch_keeps_estimate_cap_and_data_policy(self):
+        roster = self.roster
+        lane = next(lane for lane in roster['lanes'] if lane['lane_id'] == 'gemini-metered-flash-lite')
+        lane['roles'] = ['review']
+        key = lane['model_key']
+        roster['policy']['selector'].pop('allowed_pools_by_role', None)
+        # Exercise an explicit legacy request, not a newly enrolled paid route.
+        roster['quota_pools']['gemini-metered'].update(explicit_only=True, daily_usd_cap=1)
+        self.write_roster(roster)
+        profile = self.home / '.config/opencode/fleet-worker'
+        profile.mkdir(parents=True)
+        (profile / 'opencode.json').write_text('{}')
+        (profile / 'AGENTS.md').write_text('Synthetic worker profile\n')
+        auth = self.home / '.local/share/opencode/auth.json'
+        auth.parent.mkdir(parents=True)
+        auth.write_text('{}')
+        cli = self.fake_cli('opencode', "printf '%s\\n' '{\"type\":\"step_start\"}' '{\"type\":\"text\",\"part\":{\"text\":\"PONG\"}}'\n")
+        answer = self.root / 'answer'
+        allow = f'gemini-metered:{key}:*'
+        args = ('--no-refresh', '--role', 'review', '--allow', allow)
+        result = self.fleet('dispatch', *args, '--prompt', 'synthetic private marker',
+                            '--data-class', 'private', '--dir', str(self.root), '--last', str(answer), check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('synthetic private marker', cli.read_text())
+        receipt = json.loads(answer.with_suffix('.crossfeed.json').read_text())
+        self.assertEqual(receipt['cash']['budget_basis'], 'estimate-only')
+        self.assertEqual(receipt['cash']['cap_usd'], 1)
+        self.assertFalse(receipt['cash'].get('reservation_id'))
+        (self.state / 'runs.jsonl').write_text(json.dumps({'quota_pool': 'gemini-metered',
+            'ended_at': fleetctl.iso(), 'cost': {'estimated_usd': 1}}) + '\n')
+        capped = self.fleet('select', *args, '--data-class', 'private', '--json', check=False)
+        self.assertNotEqual(capped.returncode, 0)
+        self.assertIn('daily spend cap', capped.stderr)
+
     def setUp(self):
         super().setUp()
         data = json.loads((ROOT/'examples/access-overlay.example.json').read_text())

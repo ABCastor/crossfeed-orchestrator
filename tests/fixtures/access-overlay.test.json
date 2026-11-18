@@ -1312,7 +1312,7 @@
       "quota_pool": "openrouter-mimo",
       "paid_mimo": true,
       "auth": {
-        "key_ref": "op://4kr2jxlokteecriaokqrdsnixm/OpenRouter API Key - Orchestrator/credential"
+        "key_ref": "op://00000000000000000000000000/DUMMY-NOT-A-REAL-ITEM/credential"
       },
       "max_parallel": 1,
       "max_tasks_per_run": 1,
@@ -1349,7 +1349,7 @@
       "quota_pool": "openrouter-mimo",
       "paid_mimo": true,
       "auth": {
-        "key_ref": "op://4kr2jxlokteecriaokqrdsnixm/OpenRouter API Key - Orchestrator/credential"
+        "key_ref": "op://00000000000000000000000000/DUMMY-NOT-A-REAL-ITEM/credential"
       },
       "max_parallel": 1,
       "max_tasks_per_run": 1,

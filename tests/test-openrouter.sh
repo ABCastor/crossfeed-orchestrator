@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deterministic tests for scripts/openrouter-agent.sh. No call ever leaves this machine:
-# OPENROUTER_API_BASE points at a local server that can stall, dribble keepalives, or lie about
-# pricing on demand, so the idle watchdog and the free-only gate are PROVEN rather than asserted.
+# Only the disposable copy pins a loopback server that can stall, dribble keepalives or lie
+# about pricing, so the idle watchdog and free-only gate are PROVEN rather than asserted.
 #
 # The point of the stall tests: check-dispatch-invariants.sh can only prove the watchdog is
 # WRITTEN. Only these prove it FIRES, and with which exit code.
@@ -16,6 +16,7 @@ FIXTURE_DIR="$TEST_ROOT/fixture/scripts"
 mkdir -p "$FIXTURE_DIR"
 cp "$SOURCE_WRAPPER" "$FIXTURE_DIR/openrouter-agent.sh"
 cp "$SCRIPT_DIR/scripts/run-identity.sh" "$SCRIPT_DIR/scripts/run_identity.py" "$SCRIPT_DIR/scripts/vault_guard.py" "$FIXTURE_DIR/"
+cp "$SCRIPT_DIR/scripts/providers.py" "$SCRIPT_DIR/scripts/funding.py" "$FIXTURE_DIR/"
 export FLEET_STATE_DIR="$TEST_ROOT/model-state"
 chmod +x "$FIXTURE_DIR/openrouter-agent.sh"
 WRAPPER="$FIXTURE_DIR/openrouter-agent.sh"
@@ -65,7 +66,7 @@ printf 'sk-fake-test-key\n' >"$KEY_FILE"
 
 # ---------------------------------------------------------------------------
 # Fake OpenRouter. The mode is the first path segment, so one server serves all
-# behaviours and each test just points OPENROUTER_API_BASE at a different mode.
+# behaviours; each test pins a different mode in the disposable module.
 # ---------------------------------------------------------------------------
 cat >"$TEST_ROOT/fake-openrouter.py" <<'FAKE_SERVER'
 import json
@@ -182,7 +183,15 @@ bad()  { printf 'FAIL  %s\n' "$1"; fail=$((fail+1)); }
 run() {  # run MODE [extra wrapper args...]; sets RC, OUT, ERR
   local mode="$1"; shift
   OUT="$TEST_ROOT/out"; ERR="$TEST_ROOT/err"
-  OPENROUTER_API_BASE="http://127.0.0.1:$PORT/$mode" \
+  cp "$SCRIPT_DIR/scripts/openrouter_budget.py" "$FIXTURE_DIR/"
+  python3 - "$FIXTURE_DIR/openrouter_budget.py" "$TEST_ROOT" "$PORT" "$mode" <<'PY_FIXTURE'
+from pathlib import Path
+import sys
+module, owner, port, mode = sys.argv[1:]
+with Path(module).open("a") as handle:
+    api = f"http://127.0.0.1:{port}/{mode}"
+    handle.write(f"\nFREE_API = {api!r}\ndef owner_home(): return Path({owner!r})\n")
+PY_FIXTURE
   OPENROUTER_KEY_FILE="$KEY_FILE" \
   FAKE_TTL_FILE="$TEST_ROOT/ttl" \
     "$WRAPPER" --lane fake-lane --prompt "hello" "$@" >"$OUT" 2>"$ERR"
@@ -228,8 +237,6 @@ else bad "expected 'ALIVE', got: $(cat "$OUT")"; fi
 echo "== the free-only gate is unchanged by streaming"
 run paid
 expect_rc "a model with non-zero pricing is refused before the request" 5
-run costly
-expect_rc "a stream reporting a non-zero cost is refused after the fact" 6
 
 echo "== a stream with no content is not published as success"
 run reasoning-only
@@ -245,6 +252,12 @@ else bad "expected lease ttl 160, got $(cat "$TEST_ROOT/ttl")"; fi
 run ok --timeout 50
 if [ "$(cat "$TEST_ROOT/ttl")" = "110" ]; then ok "capped run leases timeout+60"
 else bad "expected lease ttl 110, got $(cat "$TEST_ROOT/ttl")"; fi
+
+echo "== an unexpected charge freezes the route"
+run costly
+expect_rc "a stream reporting a non-zero cost stops with a billing incident" 8
+run ok
+expect_rc "the route is still frozen on the next invocation" 8
 
 echo
 printf '%s passed, %s failed\n' "$pass" "$fail"

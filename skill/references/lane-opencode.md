@@ -18,7 +18,7 @@ Media requires `--file` and `--modality` and an admitted input capability. Adver
 
 Ordinary local read-only workers do not need web search. Never transmit secrets/customer/production/regulated records. Sensitive evidence stays on approved private transports unless the owner authorizes this specific model/provider.
 
-Go cost telemetry is local equivalent cost, not quota debit. Keep Use balance disabled. Legacy direct Google lanes use an estimate-only daily cap; an in-flight tool loop can overshoot. They are not eligible for bounded paid selection, dispatch retry or swarm fallback. See [quota](quota.md) for measurement truth boundaries.
+Go cost telemetry is local equivalent cost, not quota debit. Keep Use balance disabled. Legacy Google text lanes use an estimate-only daily cap outside the hard ledger. An in-flight tool loop can overshoot; these lanes must be requested explicitly and are never automatic. See [quota](quota.md) for measurement truth boundaries.
 
 Exit 4 is overloaded: lease/capacity refusal or invalid JSON events. Exit 5 may be a prelaunch gate or session error; provider.auth errors explicitly name the account sign-in command. Exit 6 means no successful terminal step, 7 empty text, 8 telemetry failure (deliverable may exist). V2 completion accepts native exit 0, a started step and nonempty final-step text even when step_finish is absent; an explicit non-stop finish, error or empty final step still fails. Text chunks from the final step are joined. Usage is recorded when supplied, with usage_reported=false when absent. Inspect evidence before retrying; raw 4/5 is never enough to justify a second worker.
 

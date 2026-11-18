@@ -1,5 +1,6 @@
 """Business-boundary tests for the owner-approved paid MiMo route, using real HTTP/wrapper."""
 from concurrent.futures import ThreadPoolExecutor
+import datetime as dt
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import copy
@@ -10,13 +11,16 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import fleetctl
-from openrouter_budget import Budget, BudgetError, priced_request
-from tests.cash_fixtures import ACCOUNT, configure, envelope, seed, seed_reasoning
+from openrouter_budget import Budget, BudgetError, ledger_path, owner_overlay, priced_request
+from tests.fixtures.cash import ACCOUNT, configure, copy_cash_scripts, envelope, seed, seed_reasoning
 
 
 class MimoTests(unittest.TestCase):
@@ -98,6 +102,7 @@ class MimoTests(unittest.TestCase):
         op.write_text('#!/bin/sh\nprintf "synthetic-test-key"\n')
         op.chmod(0o755)
         base = f'http://127.0.0.1:{self.server.server_port}'
+        self.scripts = copy_cash_scripts(ROOT/'scripts', self.root, base + '/v1')
         configure(self.roster, base + '/v1', automatic=True)
         seed_reasoning(self.root/'selection', "mimo-v2.6-flash", "mimo-v2.6-pro")
         seed_reasoning(self.root/'different-state', "fixture-other")
@@ -114,7 +119,7 @@ class MimoTests(unittest.TestCase):
         self.thread.join()
 
     def run_wrapper(self, *args, lane='openrouter-mimo-v2.6-flash', env=None):
-        return subprocess.run([str(ROOT/'scripts/openrouter-agent.sh'), '--lane', lane,
+        return subprocess.run([str(self.scripts/'openrouter-agent.sh'), '--lane', lane,
                                '--prompt', 'Return PONG', '--last', str(self.root/'answer'), *args],
                               env={**self.env, **(env or {})}, text=True, capture_output=True, timeout=20)
 
@@ -160,7 +165,7 @@ class MimoTests(unittest.TestCase):
     def test_second_provider_overlay_only_and_alternate_dispatch_state_share_cash(self):
         self.add_second_provider()
         self.cost = .15
-        result = subprocess.run([sys.executable, str(ROOT/'scripts/fleetctl.py'),
+        result = subprocess.run([sys.executable, str(self.scripts/'fleetctl.py'),
                                  '--overlay', str(self.overlay), '--state-dir', str(self.root/'different-state'),
                                  'dispatch', '--role', 'hard-reasoning', '--no-refresh',
                                  '--allow', 'fixture-billing:fixture-other:*', '--prompt', 'Return PONG',
@@ -191,6 +196,102 @@ class MimoTests(unittest.TestCase):
         self.assertEqual(budget.snapshot()["held_usd"], 0)
         self.assertEqual(budget.snapshot()["available_usd"], 4.8)
 
+    def test_cash_authority_uses_os_account_not_worker_environment(self):
+        alternate = self.root / 'alternate'
+        fake_overlay = alternate / '.config/orchestrator/access-overlay.json'
+        fake_overlay.parent.mkdir(parents=True)
+        fake_overlay.write_text('{"false_approval": true}')
+        fake_overlay.chmod(0o600)
+        seed(alternate / '.local/state/orchestrator/cash-budget.json')
+        with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_dir=str(self.root))) as account, \
+                patch.dict(os.environ, {'HOME': str(alternate), 'XDG_CONFIG_HOME': str(fake_overlay.parent.parent),
+                                        'XDG_STATE_HOME': str(alternate / '.local/state')}):
+            with self.assertRaisesRegex(BudgetError, 'canonical owner'):
+                owner_overlay(fake_overlay)
+            self.assertEqual(owner_overlay(self.overlay), self.roster)
+            self.assertEqual(ledger_path(), self.ledger)
+            account.assert_called_with(os.getuid())
+
+    @unittest.skipUnless(hasattr(time, 'tzset'), 'requires worker TZ support')
+    def test_accounting_day_does_not_follow_worker_tz(self):
+        budget = self.isolated_budget('tz', per_call_usd='1', daily_usd='1')
+        try:
+            with patch.dict(os.environ, {'TZ': 'Pacific/Kiritimati'}):
+                time.tzset()
+                budget.settle(budget.reserve('fixture/other-text', '1'), '1')
+                os.environ['TZ'] = 'Pacific/Pago_Pago'
+                time.tzset()
+                snapshot = budget.snapshot()
+                self.assertEqual(snapshot['settled_usd'], 1)
+                self.assertEqual(snapshot['available_usd'], 0)
+        finally:
+            time.tzset()
+
+    def test_envelope_pins_accounting_timezone_defaults_to_utc_and_rejects_bad_zone(self):
+        with self.assertRaisesRegex(BudgetError, 'timezone'):
+            self.isolated_budget('bad-zone', timezone='not/a-zone')
+
+        class Clock(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                now = cls(2026, 11, 18, 2, tzinfo=dt.timezone.utc)
+                return now.astimezone(tz) if tz else now.astimezone().replace(tzinfo=None)
+
+        utc = self.isolated_budget('utc')
+        pacific = self.isolated_budget('pacific', timezone='America/Los_Angeles')
+        with patch('openrouter_budget.dt.datetime', Clock):
+            self.assertEqual(utc._today(), '2026-11-18')
+            self.assertEqual(pacific._today(), '2026-11-17')
+
+    def free_wrapper(self, env=None, lane='openrouter-free-router'):
+        key = self.root / 'free-synthetic-key'
+        key.write_text('synthetic')
+        return self.run_wrapper(lane=lane, env={'OPENROUTER_KEY_FILE': str(key), **(env or {})})
+
+    def test_free_charge_freezes_route_across_worker_state_until_owner_clears(self):
+        self.roster.pop('cash_accounts')
+        self.overlay.write_text(json.dumps(self.roster))
+        self.price = '0'
+        first = self.free_wrapper()
+        receipt = json.loads((self.root/'answer.crossfeed.json').read_text())
+        alternate = self.root / 'alternate'
+        self.cost = 0
+        again = self.free_wrapper(env={'HOME': str(alternate), 'FLEET_STATE_DIR': str(alternate / 'state')})
+        self.assertEqual(len(self.posts), 1, again.stderr)
+        self.assertEqual(first.returncode, 8, first.stderr)
+        self.assertEqual(again.returncode, 8, again.stderr)
+        self.assertEqual(self.get_paths, ['/v1/models'])
+        self.assertFalse((self.root/'answer').exists())
+        self.assertTrue(receipt['cash']['frozen'])
+        self.assertEqual(receipt['cash']['reported_usd'], .001)
+        self.assertEqual(self.budget(), {})
+        files = list(self.ledger.parent.glob('free-billing-incidents/*.json'))
+        self.assertEqual(len(files), 1)
+        incident = json.loads(files[0].read_text())
+        self.assertEqual(incident['model'], 'openrouter/free')
+        self.assertEqual(Decimal(incident['reported_usd']), Decimal('.001'))
+        self.assertNotIn('Return PONG', files[0].read_text())
+        files[0].unlink()
+        released = self.free_wrapper()
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(len(self.posts), 2)
+
+    def test_free_transport_ignores_worker_endpoint_and_refuses_redirects(self):
+        self.price = '0'
+        self.cost = 0
+        self.redirect_catalog = True
+        injected = f'http://127.0.0.1:{self.server.server_port}/worker'
+        result = self.free_wrapper(env={'OPENROUTER_API_BASE': injected})
+        self.assertEqual(self.get_paths, ['/v1/models'], result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.posts, [])
+        self.get_paths.clear()
+        self.redirect_catalog, self.redirect_post = False, True
+        result = self.free_wrapper()
+        self.assertEqual(self.get_paths, ['/v1/models'], result.stderr)
+        self.assertEqual(self.post_paths, ['/v1/chat/completions'])
+        self.assertNotEqual(result.returncode, 0)
+
     # BR-CASH-003
     def test_direct_private_prompt_refuses_before_even_fetching_catalog(self):
         result = self.run_wrapper("--paid-mimo", env={"FLEET_DATA_CLASS": "private"})
@@ -201,7 +302,7 @@ class MimoTests(unittest.TestCase):
 
     # BR-CASH-003
     def test_dispatch_private_prompt_refuses_without_outbound_http(self):
-        result = subprocess.run([sys.executable, str(ROOT/'scripts/fleetctl.py'), '--overlay', str(self.overlay),
+        result = subprocess.run([sys.executable, str(self.scripts/'fleetctl.py'), '--overlay', str(self.overlay),
                                  '--state-dir', str(self.root/'private-selection'), 'dispatch', '--no-refresh',
                                  '--role', 'hard-reasoning', '--data-class', 'private',
                                  '--allow', 'openrouter-mimo:mimo-v2.6-flash:*', '--prompt', 'Return PONG',
@@ -431,7 +532,7 @@ class MimoTests(unittest.TestCase):
 
     # BR-MIMO-001
     def test_paid_lane_cannot_claim_repository_review(self):
-        result = subprocess.run([sys.executable, str(ROOT/'scripts/fleetctl.py'), '--overlay', str(self.overlay),
+        result = subprocess.run([sys.executable, str(self.scripts/'fleetctl.py'), '--overlay', str(self.overlay),
                                  '--state-dir', str(self.root/'selection'), 'select', '--role', 'review',
                                  '--allow', 'openrouter-mimo:mimo-v2.6-flash:*', '--no-refresh', '--json'],
                                 env=self.env, text=True, capture_output=True)
@@ -453,7 +554,7 @@ class MimoTests(unittest.TestCase):
         # A missing overlay hint must not turn paid MiMo into automatic fallback.
         self.roster['quota_pools']['openrouter-mimo'].pop('explicit_only')
         self.overlay.write_text(json.dumps(self.roster))
-        common = [sys.executable, str(ROOT/'scripts/fleetctl.py'), '--overlay', str(self.overlay),
+        common = [sys.executable, str(self.scripts/'fleetctl.py'), '--overlay', str(self.overlay),
                   '--state-dir', str(self.root/'selection')]
         automatic = subprocess.run(common+['select','--role','hard-reasoning','--no-refresh','--json'],
                                    env=self.env, text=True, capture_output=True)

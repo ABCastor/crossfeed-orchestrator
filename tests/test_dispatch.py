@@ -144,6 +144,13 @@ class DispatchTests(unittest.TestCase):
                 self.assertEqual(calls[-1]["label"], first["model_key"])
                 self.assertNotIn(second["model_key"], [call["label"] for call in calls])
 
+    def test_free_billing_incident_never_retries_another_lane(self):
+        first = self.option("charged-free", 8, "valid", "openrouter")
+        first.update(funding="verified-free")
+        rc, calls, diagnostic = self.dispatch(self.selection([first, self.option("unused")]))
+        self.assertEqual(rc, 8, diagnostic)
+        self.assertEqual([call["label"] for call in calls], ["charged-free"])
+
     def test_success_and_cancellation_never_retry(self):
         for code in (0, 129, 130, 143):
             with self.subTest(code=code):

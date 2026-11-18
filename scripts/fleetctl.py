@@ -3246,9 +3246,9 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         return vault_guard.REFUSED
     options = [selection["choice"]]
     seen = {selection["choice"]["selection_file"]}
-    # BR-CASH-004: one paid attempt; nonpaid attempts may only retry nonmetered candidates.
-    for option in [] if funding.is_metered(selection["choice"]) else selection["top3"][:3]:
-        if funding.is_metered(option):
+    # BR-CASH-004: one bounded attempt; the explicit legacy Gemini route keeps its old dispatch rules.
+    for option in [] if funding.requires_reservation(selection["choice"]) else selection["top3"][:3]:
+        if funding.requires_reservation(option):
             continue
         if (selection["choice"].get("worker_level") == "pro" or selection["choice"].get("pro_fallback")) and (
                 option.get("harness") == "chatgpt-chat" and option.get("worker_level") not in {"pro", "xhigh", "high"}):
@@ -3258,7 +3258,7 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
             seen.add(option["selection_file"])
     for index, option in enumerate(options):
         # BR-CASH-003: an older or separately prepared receipt cannot relabel today's input.
-        if funding.is_metered(option) and option.get("data_class") != _data_policy.classification(
+        if funding.requires_reservation(option) and option.get("data_class") != _data_policy.classification(
                 getattr(args, "data_class", None)):
             print("fleetctl: paid selection material class no longer matches the dispatch", file=sys.stderr)
             return 5
@@ -3306,12 +3306,14 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         # Wrappers publish identity only after setting their supervised launch flag.
         # Each attempt has a new path and ID: inherited sidecars never participate.
         launched = identity.exists()
-        if launched and cash["funding"] == "metered":
+        free_incident = option["harness"] == "openrouter" and returncode == funding.OPENROUTER_BILLING_INCIDENT
+        if launched and (cash["funding"] == "metered" or free_incident):
             try:
                 actual = json.loads(identity.read_text())
                 if actual.get("dispatch_id") == dispatch_id:
                     observed = funding.receipt_fields(actual.get("cash"))
-                    if observed and observed.get("reservation_id"):
+                    if observed and (observed.get("reservation_id") or
+                                     (free_incident and observed.get("reported_usd") is not None)):
                         record["cash"] = {**cash, **observed,
                                           "estimate_usd": cash.get("estimate_usd")}
                         print(f"fleetctl: cash result {funding.summary(record['cash'])}", file=sys.stderr,
@@ -3337,7 +3339,8 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
                     sys.stdout.write(stream.read().decode("utf-8", errors="replace"))
             return 0
         # Explicit cancellation must not start fresh work against the caller's wish.
-        if returncode in {129, 130, 143} or index == len(options) - 1:
+        terminal = returncode in {129, 130, 143} or free_incident
+        if terminal or index == len(options) - 1:
             print(f"fleetctl: {option['harness']}:{option['model_key']} failed (exit {returncode}); "
                   "no replacement used", file=sys.stderr, flush=True)
             return returncode
@@ -3381,7 +3384,7 @@ def pool_lane_ids(roster: dict[str, Any], pool: str) -> set[str]:
     return {
         lane["lane_id"]
         for lane in roster.get("lanes", [])
-        if lane.get("quota_pool") == pool
+        if lane.get("quota_pool") == pool and lane.get("lane_id")
     }
 
 
@@ -3403,8 +3406,11 @@ def pool_spent_since(
         for line in handle:
             try:
                 record = json.loads(line)
-                observed = parse_iso(record.get("ended_at") or record.get("started_at"))
-            except (json.JSONDecodeError, TypeError, ValueError):
+                timestamp = (record.get("ended_at") or record.get("started_at")) if isinstance(record, dict) else None
+                if not isinstance(timestamp, str):
+                    continue
+                observed = parse_iso(timestamp)
+            except (TypeError, ValueError):
                 continue
             recorded_pool = record.get("quota_pool")
             if recorded_pool is not None:

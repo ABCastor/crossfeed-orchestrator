@@ -45,6 +45,14 @@ class ProviderTests(unittest.TestCase):
         return providers.add(self.path, id="lab", kind="openai-compatible", base_url="https://example.com/v1",
                              key=KEY, **kwargs)
 
+    def test_catalog_price_rejects_non_numeric_fields_before_conversion(self):
+        valid = {"prompt": "0.000001", "completion": 0.000002}
+        self.assertEqual(providers.openrouter_pricing({"pricing": valid})["output"], 2)
+        for field in ("prompt", "completion", "input_cache_read", "input_cache_write", "request"):
+            for bad in (False, True, [], {}, "NaN", ""):
+                with self.subTest(field=field, value=bad):
+                    self.assertIsNone(providers.openrouter_pricing({"pricing": {**valid, field: bad}}))
+
     def test_discover_before_save_key_protected_and_lane_blocked(self):
         result = self.add(models="test-model")
         request = self.opener.open.call_args[0][0]
@@ -172,6 +180,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual({l['quota_pool'] for l in lanes}, {'first','second'})
         self.assertIsNone(roster['provider_sources']['first']['gateway']['models'])
         self.assertTrue(all(l['access_status'] == 'verified' and l['catalog_state'] == 'sleeping' for l in lanes))
+        self.assertTrue(all(roster['quota_pools'][l['quota_pool']].get('funding') == 'unknown' for l in lanes))
         with patch.object(chatgpt_catalog, 'request', side_effect=chatgpt_catalog.Rejected(6,'unavailable')):
             roster = fleetctl.read_overlay(self.path, self.state)
         self.assertFalse(any(l.get('gateway_service') in {'first','second'} and l['access_status'] == 'verified'

@@ -15,13 +15,13 @@ Prepare a **separate file** from your local roster; never redirect output over t
 ```sh
 python3 scripts/configure-copilot-models.py --roster "$ACCESS_OVERLAY" \
   --pool github-copilot-company --verified-model MODEL_A --verified-model MODEL_B \
-  --max-credits APPROVED_INTEGER > proposed-roster.json
+  --max-credits APPROVED_INTEGER --funding included > proposed-roster.json
 ACCESS_OVERLAY="$PWD/proposed-roster.json" bash scripts/roster.sh validate
 ACCESS_OVERLAY="$PWD/proposed-roster.json" python3 scripts/fleetctl.py select --role review \
   --allow 'github-copilot-company:github-copilot-company-MODEL_A:*,github-copilot-company:github-copilot-company-MODEL_B:*' --no-refresh --json
 ```
 
-For exact selection replace the allow list with `github-copilot-company:github-copilot-company-MODEL_A:*`. Review the proposal and install it through the normal local roster workflow. Named models and Auto are billed to the same pool; the cap is per invocation, not a subscription balance. No company balance or quality advantage is inferred. Named lanes start with review only, text input, read-only tools and provider-chosen effort. Keep one login per roster and reverify after switching accounts. The helper does not change the provider login or live configuration.
+Declare `included` only after verifying the applicable usage will not be metered. If you declare `metered`, the helper records the models but leaves them as candidates: there is no bounded Copilot transport. For exact selection replace the allow list with `github-copilot-company:github-copilot-company-MODEL_A:*`. Review the proposal and install it through the normal local roster workflow. Named models and Auto are billed to the same pool; the cap is per invocation, not a subscription balance. No company balance or quality advantage is inferred. Named lanes start with review only, text input, read-only tools and provider-chosen effort. Keep one login per roster and reverify after switching accounts. The helper does not change the provider login or live configuration.
 
 The CLI can still discover inherited skills. Put the exact question, hard constraints and success criterion directly in the brief; disabling custom instructions does not prove a lean empty context. It may read permitted repo files but its tool policy is not an OS sandbox. No secrets in the working folder.
 

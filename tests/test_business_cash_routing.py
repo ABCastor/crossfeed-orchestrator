@@ -18,7 +18,7 @@ import fleetctl
 import openrouter_budget
 import run_identity
 import selector
-from tests.cash_fixtures import ACCOUNT, configure, seed
+from tests.fixtures.cash import ACCOUNT, configure, seed
 
 
 class CashVisibilityTests(unittest.TestCase):
@@ -191,7 +191,8 @@ class CashVisibilityTests(unittest.TestCase):
     def test_normalized_rate_is_api_equivalent_not_incremental_cash(self):
         pick = self.included()
         choice = pick["choice"]
-        self.assertAlmostEqual(choice["cost"]["estimated_usd"], .021)
+        self.assertIsNone(choice["cost"]["estimated_usd"])
+        self.assertAlmostEqual(choice["cash"]["api_equivalent_usd"], .021)
         self.assertEqual(choice["cash"]["funding"], "included")
         self.assertEqual(choice["cash"]["estimate_usd"], 0)
         self.assertEqual(choice["cash"]["worst_case_usd"], 0)
@@ -207,7 +208,9 @@ class CashVisibilityTests(unittest.TestCase):
         self.roster["model_cards"]["claude-sonnet-5-5"]["price_1m"] = {
             "input": 0, "output": 0, "in": 4, "out": 15,
         }
-        self.assertIsNone(self.included()["choice"]["cost"]["estimated_usd"])
+        choice = self.included()["choice"]
+        self.assertNotIn("api_equivalent_usd", choice["cash"])
+        self.assertAlmostEqual(choice["cost"]["estimated_usd"], .023)
         pro = next(lane for lane in self.roster["lanes"] if lane["lane_id"] == "openrouter-mimo-v2.6-pro")
         pro["price_1m"] = {"input": "bogus", "output": 0}
         pick = self.select(role="hard-reasoning", data_class="public",

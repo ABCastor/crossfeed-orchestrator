@@ -14,7 +14,7 @@ import evidence
 import fleetctl
 import openrouter_budget
 import run_identity
-from tests.cash_fixtures import ACCOUNT, configure, seed
+from tests.fixtures.cash import ACCOUNT, configure, seed
 import selector
 
 

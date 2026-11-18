@@ -60,7 +60,7 @@ For parallel jobs, use `scripts/fanout.sh tasks.jsonl --parallel 3`. Give write-
 
 Copilot defaults to a read-only Auto observer. To select named workers within one subscription, follow the [account setup](../skill/references/lane-copilot.md). Antigravity requires write mode because its wrapper has no proven read-only boundary. Plain ChatGPT lanes are read-only; the optional Pi coding routes use local tools. Both draw from ChatGPT account quota, separate from Codex quota.
 
-Quota exhaustion never authorizes paid dispatch. A bounded public-text paid route needs an owner-set cash envelope and durable reservation before it sends. Automatic selection is a separate owner grant; no retry may enter or leave a paid attempt. See [cash setup and receipts](SELECTOR.md#cash-funding-and-owner-envelopes). Legacy Gemini text's recorded-spend cap is estimate-only, can overshoot in flight and does not enable automatic paid routing. A provider-side cap is a second backstop, not a substitute for the ledger.
+Quota exhaustion never authorizes paid dispatch. A bounded public-text paid route needs an owner-set cash envelope and durable reservation before it sends. Automatic selection is a separate owner grant; no retry may enter or leave a bounded paid attempt. See [cash setup and receipts](SELECTOR.md#cash-funding-and-owner-envelopes). The pre-existing explicit Gemini text route keeps its estimate-only daily cap, outside the hard ledger. It can overshoot in flight and does not enable automatic paid routing. A charge on OpenRouter's free route stops dispatch and freezes that route until the owner reconciles it. A provider-side cap is a second backstop, not a substitute for the ledger.
 
 ```bash
 bash tests/run-all.sh
