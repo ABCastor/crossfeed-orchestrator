@@ -120,7 +120,7 @@ Under `references/`, load as needed:
 | Killed/hung run, wrapper edits | `liveness.md` |
 | Untrusted input, other write isolation | `isolation.md` |
 | Level override | `effort.md` |
-| Setup/admission | `roster-admission.md` |
+| Install, add, replace, or archive a model (required release checklist) | `roster-admission.md` |
 | Codex details | `lane-codex.md` |
 | Scripted `claude -p` | `headless-claude.md` |
 | agy | `lane-antigravity.md` |
