@@ -69,6 +69,11 @@ def explicitly_unknown(roster, pool, lane, value):
     return value == "unknown" and ("funding" in lane or "funding" in roster.get("quota_pools", {}).get(pool, {}))
 
 
+def is_metered(option):
+    return (option.get("funding") == "metered" or (option.get("cash") or {}).get("funding") == "metered"
+            or option.get("paid_mimo") is True or option.get("pool") in {"openrouter-mimo", "gemini-metered"})
+
+
 def quote(funding, budget=None, *, estimate=None, worst_case=None):
     cash = {"funding": funding, **dict.fromkeys(CASH_FIELDS)}
     if funding in _NONCASH:

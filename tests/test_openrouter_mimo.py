@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import fleetctl
 from openrouter_budget import Budget, BudgetError, priced_request
-from tests.cash_fixtures import ACCOUNT, configure, envelope, seed
+from tests.cash_fixtures import ACCOUNT, configure, envelope, seed, seed_reasoning
 
 
 class MimoTests(unittest.TestCase):
@@ -98,7 +98,9 @@ class MimoTests(unittest.TestCase):
         op.write_text('#!/bin/sh\nprintf "synthetic-test-key"\n')
         op.chmod(0o755)
         base = f'http://127.0.0.1:{self.server.server_port}'
-        configure(self.roster, base + '/v1')
+        configure(self.roster, base + '/v1', automatic=True)
+        seed_reasoning(self.root/'selection', "mimo-v2.6-flash", "mimo-v2.6-pro")
+        seed_reasoning(self.root/'different-state', "fixture-other")
         self.overlay.write_text(json.dumps(self.roster))
         self.overlay.chmod(0o600)
         self.env = dict(os.environ, HOME=str(self.root), ACCESS_OVERLAY=str(self.overlay),
@@ -251,6 +253,19 @@ class MimoTests(unittest.TestCase):
         self.assertEqual(len(self.posts), 1)
         self.assertFalse((self.root/"answer").exists())
         self.assertIsNone(next(iter(self.budget().values()))["cost_usd"])
+
+    # BR-CASH-004
+    def test_revoked_automatic_selection_is_rechecked_at_send(self):
+        self.roster["cash_accounts"][ACCOUNT]["automatic"] = False
+        self.overlay.write_text(json.dumps(self.roster))
+        stale = self.run_wrapper("--paid-mimo", env={"CROSSFEED_DISPATCH_ID": "stale"})
+        self.assertEqual(stale.returncode, 5, stale.stderr)
+        self.assertEqual(self.get_paths, [])
+        self.assertEqual(self.posts, [])
+        self.assertIn("no longer grants automatic", stale.stderr)
+        control = self.run_wrapper("--paid-mimo")
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertEqual(len(self.posts), 1)
 
     # BR-CASH-002
     def test_explicit_paid_flag_does_not_authorize_spend_without_an_envelope(self):

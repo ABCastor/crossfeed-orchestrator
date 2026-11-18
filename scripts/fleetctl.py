@@ -3246,7 +3246,10 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         return vault_guard.REFUSED
     options = [selection["choice"]]
     seen = {selection["choice"]["selection_file"]}
-    for option in selection["top3"][:3]:
+    # BR-CASH-004: one paid attempt; nonpaid attempts may only retry nonmetered candidates.
+    for option in [] if funding.is_metered(selection["choice"]) else selection["top3"][:3]:
+        if funding.is_metered(option):
+            continue
         if (selection["choice"].get("worker_level") == "pro" or selection["choice"].get("pro_fallback")) and (
                 option.get("harness") == "chatgpt-chat" and option.get("worker_level") not in {"pro", "xhigh", "high"}):
             continue
@@ -3255,7 +3258,7 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
             seen.add(option["selection_file"])
     for index, option in enumerate(options):
         # BR-CASH-003: an older or separately prepared receipt cannot relabel today's input.
-        if option.get("funding") == "metered" and option.get("data_class") != _data_policy.classification(
+        if funding.is_metered(option) and option.get("data_class") != _data_policy.classification(
                 getattr(args, "data_class", None)):
             print("fleetctl: paid selection material class no longer matches the dispatch", file=sys.stderr)
             return 5
@@ -3274,6 +3277,8 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         notice = (f"fleetctl: selected pool={option['pool']} model={option['model_key']} "
                   f"level={option['level']} selection={option['selection_file']} receipt={receipt} "
                   f"model_receipt={identity} diagnostics={attempt_dir / 'stderr.log'}")
+        if index == 0 and selection.get("cash_preference"):
+            notice += f" preference={selection['cash_preference']}"
         cash = option.get("cash") or funding.quote("unknown")
         print(f"{notice} | cash {funding.summary(cash)}", file=sys.stderr, flush=True)
         if args.dry_run:

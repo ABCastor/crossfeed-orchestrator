@@ -130,6 +130,20 @@ class DispatchTests(unittest.TestCase):
                         self.assertIn("using claude:unused instead", diagnostic)
                         self.assertNotIn("Traceback", diagnostic)
 
+    # BR-CASH-004
+    def test_retry_never_enters_or_leaves_a_metered_attempt(self):
+        self.args.data_class = "public"
+        for first_paid in (False, True):
+            with self.subTest(first_paid=first_paid):
+                first = self.option(f"first-{first_paid}", 6, "valid")
+                second = self.option(f"second-{first_paid}")
+                paid = first if first_paid else second
+                paid.update(funding="metered", data_class="public")
+                rc, calls, diagnostic = self.dispatch(self.selection([first, second]))
+                self.assertEqual(rc, 6, diagnostic)
+                self.assertEqual(calls[-1]["label"], first["model_key"])
+                self.assertNotIn(second["model_key"], [call["label"] for call in calls])
+
     def test_success_and_cancellation_never_retry(self):
         for code in (0, 129, 130, 143):
             with self.subTest(code=code):

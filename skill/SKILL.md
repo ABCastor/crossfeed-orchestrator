@@ -67,7 +67,7 @@ scripts/fanout.sh tasks.jsonl --parallel 3
 scripts/swarm.sh review --dir /project --prompt "Attack PLAN.md against code and tests."
 ```
 
-Load `references/fanout.md` for tasks/profiles. Dispatch retries a top-three candidate only for identified prelaunch refusals (busy lease/gate), never raw 4/5 alone. Inspect partial edits after a started worker fails.
+Load `references/fanout.md` for tasks/profiles. A paid dispatch is one attempt; a nonmetered dispatch cannot retry into paid. For nonmetered work, `dispatch` can try another nonmetered top-three option after any nonzero exit except cancellation, including after a worker started. Exit 4/5 alone does not identify a prelaunch refusal. Inspect partial edits after a started writer fails.
 
 | Wrapper exit | Meaning |
 |---|---|

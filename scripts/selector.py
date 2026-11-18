@@ -214,6 +214,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 # BR-CASH-003: metadata-only select checks the class; dispatch also has the exact text.
                 if reason := paid_refusal(route, data_class, prompt):
                     raise BudgetError(reason)
+                # BR-CASH-004: neither a cap, a target, nor an allow list grants automatic selection.
+                if budget.settings.get("automatic") is not True:
+                    raise BudgetError("cash envelope does not grant automatic selection")
                 worst = ceiling_usd(rates, *bounds[:2])
                 paid_cash = funding.quote("metered", budget.snapshot(require=worst), worst_case=float(worst))
                 paid_cash.update(tariff_source=route["tariff"]["source"],
@@ -233,6 +236,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         if paid_cash is not None:
             option["cash"] = paid_cash
             option["cash_tariff_1m"] = cash_tariff
+            option["cash_quality_floors"] = route.get("quality_floors")
         if fleet.data_policy_refusal(lane, "code"):
             option["public_only"] = True
         if lane.get("paid_mimo") is True:
@@ -566,6 +570,35 @@ def _vary(scored: list, greedy: dict, stakes: str, weights: dict, variety: dict,
     return candidates, probabilities
 
 
+# BR-CASH-004
+def _cash_band(scored, greedy, stakes, weights, variety, pace_of):
+    """Compare cash only among measured peers without replacing the quota/latency score."""
+    if stakes == "irreversible" or greedy["q"]["unknown"] or not any(map(funding.is_metered, scored)):
+        return scored, None
+    band = variety["quality_band"].get(stakes, 0)
+    peers = [item for item in scored if not item["q"]["unknown"] and not item.get("pro_fallback")
+             and item["quality"] >= greedy["quality"] - band
+             and item["score"] >= greedy["score"] - weights[stakes] * band]
+    if not any(map(funding.is_metered, peers)):
+        return scored, None  # Leave today's nonmetered variety and tie-breaks alone.
+    expiring = [item for item in peers if item["funding"] == "included"
+                and pace_of(item["pool"], item["model_key"])["value"] > 0]
+    if expiring:
+        return expiring, "expiring-included-quota"
+
+    def marginal(item):
+        cash = item["cash"]
+        estimate = cash["estimate_usd"]
+        return estimate if estimate is not None else cash["worst_case_usd"]
+
+    known = [(marginal(item), item) for item in peers if marginal(item) is not None]
+    if not known:
+        return scored, None
+    cheapest = min(value for value, _ in known)
+    preferred = [item for value, item in known if value == cheapest]
+    return preferred, "lower-marginal-cash" if len(preferred) < len(peers) else None
+
+
 def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
     plan = roster.get("quota_pools", {}).get(pool, {}).get("plan", {})
     allowance = plan.get("allowance")
@@ -859,6 +892,15 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         mean, sd = _number(q.get("mean")), _number(q.get("sd"))
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
+        # BR-CASH-004: an owner floor applies to the exact task family and effort.
+        if funding.is_metered(option):
+            floors = option.get("cash_quality_floors")
+            floor = _number(floors.get(family)) if isinstance(floors, dict) else None
+            if (unknown or q.get("imputation") is not None or floor is None
+                    or not 0 < floor <= 1 or not floor <= mean <= 1):
+                rejected.append(f"{option['model_key']}/{option['level']}: paid quality must be measured "
+                                f"at the owner floor for {family}")
+                continue
         mean = 0.5 if mean is None else min(1.0, max(0.0, mean))
         sd = max(0.15, sd or 0.0) if unknown else max(0.0, sd if sd is not None else 0.15)
         if stakes == "irreversible" and unknown:
@@ -882,6 +924,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         if option.get("cash_tariff_1m") is not None:
             # Model-market prices never estimate bills for a specific funding account.
             estimate, _ = _cost(dict(row, price_1m=option["cash_tariff_1m"]), None)
+            if estimate is not None and estimate > cash["worst_case_usd"]:
+                estimate = None  # Recorded tokens outside this route's bound do not price this task.
             cash = dict(cash, estimate_usd=estimate)
         scored.append(dict(option, cash=cash, quality=quality, q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
@@ -912,6 +956,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         greedy = scored[0]
         explore = 0.0
     variety = _variety_policy(policy, fleet)
+    cash_preference = None
     if target is not None:
         candidates, probabilities = [greedy], [1.0]   # an explicitly requested model is not varied
     else:
@@ -928,12 +973,13 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                 recent.append(recent_use(state_dir, fleet, variety["recency_half_life_s"]))
             return recent[0]
 
-        candidates, probabilities = _vary(scored, greedy, stakes, weights, variety, pace_of, recency_of)
+        preferred, cash_preference = _cash_band(scored, greedy, stakes, weights, variety, pace_of)
+        candidates, probabilities = _vary(preferred, preferred[0], stakes, weights, variety, pace_of, recency_of)
     exploring = bool(explore and random.random() < explore)
     if exploring:
         choice = random.choice(unknown_options)
     elif len(candidates) == 1:
-        choice = greedy
+        choice = candidates[0]
     else:
         draw, choice = random.random(), candidates[-1]
         for item, probability in zip(candidates, probabilities):
@@ -950,6 +996,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     result = {"schema": "fleet-selection/v1", "choice": choice, "top3": top3,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
               "explore": explore, "unknown_options": len(unknown_options),
+              "cash_preference": cash_preference,
               "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
                           "pace_weight": variety["pace_weight"],
                           "recency_half_life_s": variety["recency_half_life_s"],

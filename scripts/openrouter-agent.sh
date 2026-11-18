@@ -663,6 +663,10 @@ if paid:
         checked = route_config(roster, lane, os.environ["OPENROUTER_ROLE"])
         if reason := paid_refusal(checked[0], prompt=prompt):
             raise BudgetError(reason)
+        # BR-CASH-004: a revoked automatic grant cannot be replayed from a selection receipt.
+        if (os.environ.get("FLEET_SELECTION_FILE") or os.environ.get("CROSSFEED_DISPATCH_ID")) \
+                and checked[3].settings.get("automatic") is not True:
+            raise BudgetError("cash envelope no longer grants automatic selection")
         return lane, checked
 
     try:

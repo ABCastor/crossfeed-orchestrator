@@ -367,7 +367,7 @@ class SharedRoutingTests(unittest.TestCase):
         go = copy.deepcopy(self.roster['lanes'][0])
         go.update(lane_id='go-flash', model_key='go-flash', roles=['hard-reasoning'])
         paid['lanes'].append(go)
-        configure(paid, "http://127.0.0.1:9/v1")
+        configure(paid, "http://127.0.0.1:9/v1", automatic=True)
         ledger = self.state / "cash-budget.json"
         seed(ledger)
         with mock.patch.object(openrouter_budget, 'ledger_path', return_value=ledger):

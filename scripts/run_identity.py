@@ -365,6 +365,8 @@ def selection_metadata(selection=None, *, model, lane_id=None, effort=None,
                 clean["selection_probability"] = probability
             if type(payload.get("exploration")) is bool:
                 clean["exploration"] = payload["exploration"]
+            if payload.get("cash_preference") in ("expiring-included-quota", "lower-marginal-cash"):
+                clean["cash_preference"] = payload["cash_preference"]
             result["selection"] = clean
             result["role"] = role if role and role != "default" else clean.get("role") or role or None
             result["family"] = family or clean.get("family")
