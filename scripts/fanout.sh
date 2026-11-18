@@ -305,15 +305,26 @@ for index, task in enumerate(raw):
     elif agent == "copilot":
         if mode != "read-only":
             raise SystemExit(f"fanout preflight: {task_id}: Copilot Student is read-only")
-        if model not in {"", "auto"}:
-            raise SystemExit(f"fanout preflight: {task_id}: Copilot Student is Auto-only")
-        lane = by_lane["github-copilot-student-auto"]
+        requested_lane = task.get("lane_id")
+        if requested_lane:
+            requested = by_lane.get(requested_lane, {})
+            if requested.get("harness") != "copilot" or (model and model != requested.get("selector")):
+                raise SystemExit(f"fanout preflight: {task_id}: Copilot lane/model mismatch")
+            model = requested["selector"]
+        model = model or "auto"
+        matches = [l for l in by_lane.values() if l.get("harness") == "copilot" and l.get("selector") == model]
+        if len(matches) != 1 or modality != "text" or attachment:
+            raise SystemExit(f"fanout preflight: {task_id}: unknown/ambiguous Copilot model or unsupported input")
+        lane = matches[0]
+        if (lane.get("access_status") != "verified" or lane.get("admission_status") != "active"
+                or mode not in lane.get("allowed_modes", [])
+                or (model != "auto" and (lane["quota_pool"] == "github-copilot-student" or not lane.get("soft_session_credit_cap")))):
+            raise SystemExit(f"fanout preflight: {task_id}: Copilot model not admitted for this account")
         lane_id = lane["lane_id"]
-        model = "auto"
         quota_pool = lane["quota_pool"]
         lane_totals[lane_id] += 1
         if lane_totals[lane_id] > lane["max_tasks_per_run"]:
-            raise SystemExit("fanout preflight: Copilot Student allows one task per campaign")
+            raise SystemExit(f"fanout preflight: {lane_id} exceeds its campaign task limit")
     elif agent == "openrouter":
         # TOOLLESS LANE. openrouter-agent.sh is a single chat completion over raw HTTP: no repo,
         # no file reads, no attachments, no web search. It is therefore only admissible for work
@@ -533,7 +544,7 @@ for id in "${IDS[@]}"; do
         [ -n "$effort" ] && args+=( --effort "$effort" )
         ;;
       copilot)
-        args+=( --read-only --model auto --events "$OUT/$id.events.jsonl" )
+        args+=( --read-only --model "$model" --events "$OUT/$id.events.jsonl" )
         ;;
       agy)
         prompt="$(cat "$OUT/tasks/$id.prompt")"

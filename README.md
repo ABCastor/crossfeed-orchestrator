@@ -46,7 +46,7 @@ Adapters are provided for [Claude Code](https://docs.anthropic.com/en/docs/claud
 
 ## Limits and tests
 
-Missing quota measurements stay unknown. The Copilot wrapper runs one read-only Auto observer at a time; Antigravity requires write mode. ChatGPT relay lanes need dated acceptance of account risk, and their underlying model identity remains unconfirmed. [Full status and limits](docs/USAGE.md#status-and-limits).
+Missing quota measurements stay unknown. Copilot defaults to read-only Auto; accounts with verified named access can [configure model selection](skill/references/lane-copilot.md) within their subscription; Antigravity requires write mode. ChatGPT relay lanes need dated acceptance of account risk, and their underlying model identity remains unconfirmed. [Full status and limits](docs/USAGE.md#status-and-limits).
 
 ```bash
 bash tests/run-all.sh

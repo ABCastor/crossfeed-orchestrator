@@ -2,6 +2,11 @@
 
 Scope: the Benchmarks page and local admission-check policy, the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, pace-aware varied selection, local fit-evidence imports, the proposed OpenCode Go value-routing policy, the daily catalog/data-policy rules, and the OpenCode v2 worker boundary below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
 
+## BR-COPILOT-001: Named models are an account entitlement
+
+- Owner decision, 18 Nov 2026: keep the Student account Auto-only. Allow an operator to admit exact named models verified on a different Copilot login; use one shared account pool, preserve read-only restrictions and require a credit cap. No automatic admission from a provider catalog.
+- Implemented by `scripts/configure-copilot-models.py`, `scripts/copilot-agent.sh`, `scripts/selector.py` and `scripts/fanout.sh`. Regression: `tests/test_named_copilot.py` checks two exact worker arguments, shared funding and refusal before contacting the provider. Recheck when the login, plan or provider changes.
+
 ## BR-BENCH-001 — Outside rankings guide job picks; local checks stay small [DECIDED · owner instruction supplied 19 Oct 2026]
 
 - RULE: Do not start new broad local benchmark campaigns. For each newly admitted model, run one small admission check using a handful of tasks on cheap lanes and keep a receipt. Run more local benchmarking only when the owner asks. Keep existing local results visible and labelled as ours.

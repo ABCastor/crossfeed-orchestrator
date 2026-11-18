@@ -58,7 +58,7 @@ For parallel jobs, use `scripts/fanout.sh tasks.jsonl --parallel 3`. Give write-
 
 **The selector has not yet been proven better than simpler routing policies on hard tasks.** On 5 October 2026, synthetic coding tests passed 12/12 for Sol High, 9/11 for ChatGPT High through Pi and 9/10 for ChatGPT Extra High through Pi. Only 23/36 ChatGPT cells were measured, none of its nine calibration cells ran, and its underlying model identity is unconfirmed. Sol High remains the default; admitted Pi relay workers can provide fallback capacity under quota pressure. The [benchmark harness](../bench/README.md) lets you measure your own tasks.
 
-The Copilot adapter is a single read-only Auto observer. Antigravity requires write mode because its wrapper has no proven read-only boundary. Paid caps use recorded estimates and a run can overshoot, so use provider-side limits too. Plain ChatGPT lanes are read-only; the optional Pi coding routes use local tools. Both draw from ChatGPT account quota, separate from Codex quota.
+Copilot defaults to a read-only Auto observer. To select named workers within one subscription, follow the [account setup](../skill/references/lane-copilot.md). Antigravity requires write mode because its wrapper has no proven read-only boundary. Paid caps use recorded estimates and a run can overshoot, so use provider-side limits too. Plain ChatGPT lanes are read-only; the optional Pi coding routes use local tools. Both draw from ChatGPT account quota, separate from Codex quota.
 
 ```bash
 bash tests/run-all.sh

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# copilot-agent.sh: use GitHub Copilot Student's only honest route, official CLI Auto.
+# copilot-agent.sh: read-only official Copilot CLI workers. Default: Student Auto.
 #
-# This wrapper is intentionally read-only and single-agent. Student has 200 monthly AI
-# credits and no named-model selection; use OpenCode Go, Codex, or Claude for real fan-out.
+# Read-only for all plans. Named models must be active and verified on this login's roster.
+# All models on one subscription use its pool switch, slot policy and per-run credit cap.
 #
 # Usage:
 #   copilot-agent.sh --prompt "<brief review>" [--dir <workdir>]
@@ -18,14 +18,6 @@
 # Parse the complete body before starting, so an in-flight edit cannot change this run.
 main() {
 set -euo pipefail
-if [ "$("$(dirname "$0")/fleetctl.py" switch github-copilot-student 2>/dev/null)" = off ]; then
-  echo "copilot-agent: the github-copilot-student pool is switched off by hand (fleetctl.py switch github-copilot-student auto)" >&2; exit 5
-fi
-# Low means one run at a time on this pool. The gate holds the pool's slot for this process and
-# frees it when the process ends; a second run waits (FLEET_POOL_WAIT_S, default 900s), then
-# refuses with exit 5. A gate that cannot run at all never blocks the dispatch.
-_gate_rc=0; "$(dirname "$0")/fleetctl.py" pool-slot github-copilot-student --pid $$ || _gate_rc=$?
-[ "$_gate_rc" != 5 ] || exit 5
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR="$PWD"; PROMPT=""; PROMPT_FILE=""; MODEL="auto"; CREDITS="30"
@@ -55,9 +47,7 @@ while [ "$#" -gt 0 ]; do
     --events)       _require_value "$@"; EVENTS="$2"; shift 2;;
     --last)         _require_value "$@"; LAST="$2"; shift 2;;
     --write)        _usage_error "Student Auto is observer-only; use OpenCode Go or Codex for writes";;
-    # fanout.sh passes --model auto for every lane. Student is Auto-only by policy, so accept
-    # exactly that and still refuse a named model, which is the rule this wrapper exists to hold.
-    --model)        _require_value "$@"; [ "$2" = "auto" ] || _usage_error "Copilot Student is Auto-only; named models are not admitted (got: $2)"; shift 2;;
+    --model)        _require_value "$@"; MODEL="$2"; [[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || _usage_error 'invalid Copilot model ID'; shift 2;;
     -h|--help)      sed -n '2,16p' "$0"; exit 0;;
     *)               _usage_error "unknown arg: $1";;
   esac
@@ -99,6 +89,22 @@ case "${_parent_comm##*/}" in
 esac
 
 "$HERE/roster.sh" check copilot "$MODEL"
+LANE="$("$HERE/roster.sh" lookup copilot "$MODEL")"
+descriptor="$("$HERE/roster.sh" lane-json "$LANE")"
+POOL="$(jq -er '.quota_pool | select(type=="string" and length>0)' <<<"$descriptor")" || _usage_error 'missing Copilot account pool'
+if [ "$MODEL" != auto ] || [ "$POOL" != github-copilot-student ]; then
+  [ "$POOL" != github-copilot-student ] || _usage_error 'named models not admitted on Student'
+  key="$(jq -er '.model_key' <<<"$descriptor")"
+  CREDITS="$(jq -er '.soft_session_credit_cap | select(type=="number" and .>0 and .==floor)' <<<"$descriptor")" || _usage_error 'named Copilot requires a positive per-run credit cap'
+  [ "$("$HERE/fleetctl.py" model-toggle "$POOL" "$key")" = on ] || { echo 'copilot-agent: named model switched off' >&2; exit 5; }
+fi
+pool_switch="$("$HERE/fleetctl.py" switch "$POOL")" || exit 5
+if [ "$pool_switch" = off ]; then
+  echo "copilot-agent: $POOL switched off" >&2; exit 5
+fi
+_gate_rc=0; "$HERE/fleetctl.py" pool-slot "$POOL" --pid $$ || _gate_rc=$?
+[ "$_gate_rc" != 5 ] || exit 5
+if [ "$MODEL" != auto ] && [ "$_gate_rc" != 0 ]; then exit 5; fi
 echo "copilot-agent: effort service-chosen: the service chooses the level" >&2
 
 tmp_events=""
@@ -134,7 +140,7 @@ crossfeed_prepare copilot
 args=(
   -C "$DIR"
   -p "$PROMPT"
-  --model auto
+  --model "$MODEL"
   --max-ai-credits "$CREDITS"
   --mode interactive
   --deny-tool=shell
@@ -442,7 +448,11 @@ jq -rs -r '[.[] | select(.type == "assistant.message") | .data.content // empty]
 [ -s "$answer_file" ] || { echo "copilot-agent: empty final model output" >&2; exit 6; }
 
 chosen="$(jq -r 'select(.type == "session.auto_mode_resolved") | .data.chosenModel // empty' "$EVENTS" | tail -1)"
-echo "copilot-agent: Auto routed this call to ${chosen:-unknown}; that is not a named Student entitlement" >&2
+if [ "$MODEL" = auto ]; then
+  echo "copilot-agent: Auto routed this call to ${chosen:-unknown}; that is not a named Student entitlement" >&2
+elif [ -n "$chosen" ] && [ "$chosen" != "$MODEL" ]; then
+  echo 'copilot-agent: provider resolved a different model than requested' >&2; exit 5
+fi
 cat "$answer_file"
 [ -n "$LAST" ] && cp "$answer_file" "$LAST"
 exit 0

@@ -65,7 +65,9 @@ case "${1:-}" in
     ;;
   lane-json)
     [ "${FAKE_LANE_UNKNOWN:-0}" = "0" ] || { echo 'unknown lane' >&2; exit 9; }
-    if [[ "$2" = model-* ]]; then
+    if [ "$2" = model-auto ]; then
+      printf '%s\n' '{"selector":"auto","quota_pool":"github-copilot-student"}'
+    elif [[ "$2" = model-* ]]; then
       printf '{"selector":"%s"}\n' "${2#model-}"
     else
       printf '%s\n' '{"selector":"fake-agy-model"}'
@@ -99,6 +101,8 @@ case "${1:-}" in
     [ "${FAKE_LEASE_FAIL:-0}" = "0" ] || { echo 'fake lease refusal'; exit 9; }
     printf '%s\n' fake-lease-token
     ;;
+  switch) echo auto;;
+  pool-slot) exit 0;;
   release) exit 0;;
   *) exit 9;;
 esac

@@ -247,8 +247,10 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 continue
             level = resolved["effort"] or entry.get("default")
             if harness == "copilot":
-                if lane.get("selector") != "auto" or level != "service-chosen":
-                    rejected.append(f"{label}: Copilot requires Auto/service-chosen")
+                if (level != "service-chosen" or mode != "read-only" or modality != "text"
+                        or (lane.get("selector") != "auto" and (pool == "github-copilot-student"
+                            or role not in lane.get("roles", []) or not lane.get("soft_session_credit_cap")))):
+                    rejected.append(f"{label}: unsupported Copilot model, role, mode or budget")
                     continue
             if harness == "openrouter" and requested is not None:
                 rejected.append(f"{label}/{requested}: wrapper has no effort flag")
@@ -639,7 +641,7 @@ def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> li
             if option.get("public_only"):
                 argv += ["--direct"]
     elif harness == "copilot":
-        argv += ["--model", "auto"]
+        argv += ["--model", option["run_as"]]
     elif harness == "pi":
         argv += ["run", "--lane", option["lane_id"], "--effort-role", role, "--mode", "ro" if option["mode"] == "read-only" else "rw"]
     elif harness == "chatgpt-chat":
