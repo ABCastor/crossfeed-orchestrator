@@ -43,7 +43,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROMPT=""; PROMPT_FILE=""; MODEL=""; MODEL_KEY=""; LANE=""; LAST=""
-TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"; PAID_MIMO=0; MAX_TOKENS=""
+TIMEOUT=""; IDLE_TIMEOUT="0"; KILL_AFTER="30"; PAID=0; PAID_MIMO=0; MAX_TOKENS=""; ROLE=""
 
 _usage_error() {
   echo "openrouter-agent: $1" >&2
@@ -64,7 +64,9 @@ while [ $# -gt 0 ]; do
     --timeout)      _require_value "$@"; TIMEOUT="$2"; shift 2;;
     --idle-timeout) _require_value "$@"; IDLE_TIMEOUT="$2"; shift 2;;
     --kill-after)   _require_value "$@"; KILL_AFTER="$2"; shift 2;;
-    --paid-mimo)    PAID_MIMO=1; shift;;
+    --paid-mimo)    PAID=1; PAID_MIMO=1; shift;;
+    --paid)         PAID=1; shift;;
+    --role)         _require_value "$@"; ROLE="$2"; shift 2;;
     --max-tokens)   _require_value "$@"; MAX_TOKENS="$2"; shift 2;;
     --last)         _require_value "$@"; LAST="$2"; shift 2;;
     -h|--help)      sed -n '2,39p' "$0"; exit 0;;
@@ -72,6 +74,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+[ "$PAID_MIMO" = 0 ] || ROLE="${ROLE:-hard-reasoning}"
+[ "$PAID" = 0 ] || [ -n "$ROLE" ] || _usage_error "--paid requires --role"
 source "${BASH_SOURCE[0]%/*}/run-identity.sh"
 
 _is_seconds() {
@@ -130,26 +134,28 @@ lane_json="$("$HERE/roster.sh" lane-json "$LANE")" || {
   exit 2; }
 [ "$(jq -r '.harness' <<<"$lane_json")" = "openrouter" ] || { echo "openrouter-agent: lane $LANE is not an OpenRouter lane" >&2; exit 2; }
 MODEL="$(jq -r '.selector' <<<"$lane_json")"
-# BR-MIMO-001
-PAID_CAP=""
+# BR-MIMO-001 / BR-CASH-002
+ROSTER_PATH="${ACCESS_OVERLAY:-${XDG_CONFIG_HOME:-$HOME/.config}/orchestrator/access-overlay.json}"
 if [ "$PAID_MIMO" = 1 ]; then
   case "$MODEL" in xiaomi/mimo-v2.6-pro|xiaomi/mimo-v2.6-flash) ;; *) echo "openrouter-agent: --paid-mimo only permits MiMo V2.6 Pro and Flash" >&2; exit 5;; esac
   [ "$(jq -r '.quota_pool' <<<"$lane_json")" = openrouter-mimo ] || { echo "openrouter-agent: paid MiMo requires the openrouter-mimo pool" >&2; exit 5; }
-  ROSTER_PATH="${ACCESS_OVERLAY:-${XDG_CONFIG_HOME:-$HOME/.config}/orchestrator/access-overlay.json}"
-  PAID_CAP="$(jq -r '.quota_pools["openrouter-mimo"].daily_usd_cap // 5' "$ROSTER_PATH")"
+elif [ "$PAID" = 1 ] && [ "$(jq -r '.quota_pool' <<<"$lane_json")" = openrouter-mimo ]; then
+  echo "openrouter-agent: MiMo requires --paid-mimo" >&2
+  exit 5
 fi
 if [ -n "$MAX_TOKENS" ]; then
   [[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || _usage_error "--max-tokens must be a positive whole number"
-  [ "$PAID_MIMO" = 1 ] || _usage_error "--max-tokens requires --paid-mimo"
+  [ "$PAID" = 1 ] || _usage_error "--max-tokens requires a bounded paid route"
 fi
 echo "openrouter-agent: effort service-chosen: the service chooses the level" >&2
 "$HERE/roster.sh" check-lane "$LANE" "read-only"
 
+KEY=""
 KEY_REF="$(jq -r '.auth.key_ref // empty' <<<"$lane_json")"
-if [ "$PAID_MIMO" = 1 ]; then
-  case "$KEY_REF" in op://*) ;; *) echo "openrouter-agent: paid MiMo requires a 1Password key reference" >&2; exit 3;; esac
-fi
-if [ -n "$KEY_REF" ]; then
+if [ "$PAID" = 1 ]; then
+  # Resolve paid credentials only inside the transport, after its owner gates pass.
+  case "$KEY_REF" in op://*) ;; *) echo "openrouter-agent: paid route requires a 1Password key reference" >&2; exit 3;; esac
+elif [ -n "$KEY_REF" ]; then
   KEY="$(python3 - "$HERE" "$KEY_REF" <<'PYKEY'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -372,7 +378,11 @@ fi
 
 # Job control gives the request its own process group, so the watchdog can signal the whole group
 # and nothing the child spawns can outlive a killed run.
+PAID_PROMPT="$PROMPT"
 crossfeed_prepare openrouter
+if [ "$PAID" = 1 ]; then
+  PROMPT="$PAID_PROMPT"
+fi
 EVENTS="$(mktemp "${TMPDIR:-/tmp}/openrouter-model.XXXXXX")"
 CROSSFEED_STARTED=1
 set -m
@@ -382,12 +392,13 @@ set -m
 OPENROUTER_MODEL="$MODEL" OPENROUTER_KEY="$KEY" OPENROUTER_PROMPT="$PROMPT" \
 OPENROUTER_API_BASE="${OPENROUTER_API_BASE:-https://openrouter.ai/api/v1}" \
 OPENROUTER_TIMEOUT="$TIMEOUT" OPENROUTER_IDLE="$IDLE_TIMEOUT" \
-OPENROUTER_PAID_MIMO="$PAID_MIMO" OPENROUTER_PAID_CAP="$PAID_CAP" \
+OPENROUTER_PAID="$PAID" OPENROUTER_ROSTER="$ROSTER_PATH" OPENROUTER_LANE="$LANE" OPENROUTER_ROLE="$ROLE" \
 OPENROUTER_MAX_TOKENS="$MAX_TOKENS" OPENROUTER_SCRIPT_DIR="$HERE" \
 OPENROUTER_MODEL_EVENTS="$EVENTS" OPENROUTER_OUT="$RUN_LAST" OPENROUTER_PROGRESS="$PROGRESS" \
   python3 - >"$RUNOUT" <<'PY' &
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import os
 import sys
@@ -474,9 +485,9 @@ def beat(force: bool = False) -> None:
 # what the roster forbids). Retries are bounded, honour the caller's deadline, and never apply
 # to a 4xx that means the request itself is wrong.
 RETRY_STATUS = {429, 500, 502, 503, 504}
-paid_mimo = os.environ["OPENROUTER_PAID_MIMO"] == "1"
+paid = os.environ["OPENROUTER_PAID"] == "1"
 # Paid failures can have billed tokens even before text arrives. Never retry them.
-MAX_ATTEMPTS = 1 if paid_mimo else 5
+MAX_ATTEMPTS = 1 if paid else 5
 
 
 def backoff_or_fail(attempt: int, backoff: float, last: str, code: int) -> float:
@@ -536,6 +547,7 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
         streaming = False
         parts: list[str] = []
         usage: dict | None = None
+        done = False
         try:
             with urllib.request.urlopen(request, timeout=sock_timeout()) as response:
                 streaming = True
@@ -552,15 +564,18 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                             continue
                         payload = line[len("data:"):].strip()
                         if payload == "[DONE]":
+                            done = True
                             break
                         try:
-                            chunk = json.loads(payload)
+                            chunk = json.loads(payload, parse_float=Decimal) if paid else json.loads(payload)
                         except json.JSONDecodeError:
                             continue
                         if chunk.get("model"):
                             with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as identity:
                                 identity.write(json.dumps({"type": "crossfeed.provider_model", "model": chunk["model"]}) + "\n")
                         if chunk.get("error"):
+                            if paid:
+                                fail(6, "paid stream carried an error; reservation retained")
                             fail(6, f"stream carried an error: {json.dumps(chunk['error'])[:600]}")
                         if chunk.get("usage"):
                             usage = chunk["usage"]
@@ -572,6 +587,8 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
                                 sink.write(piece)
                                 sink.flush()
             beat(force=True)
+            if paid and not done:
+                fail(6, "paid stream ended without a final marker; reservation retained")
             return "".join(parts), usage
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:600]
@@ -599,6 +616,34 @@ def stream_completion(request: urllib.request.Request) -> tuple[str, dict | None
 
 beat(force=True)
 
+# BR-CASH-002 / BR-MIMO-001
+if paid:
+    sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
+    from openrouter_budget import BudgetError, ceiling_usd, owner_overlay, priced_request, route_config
+    from providers import ProviderError, resolve_key
+
+    def approved_route():
+        roster = owner_overlay(os.environ["OPENROUTER_ROSTER"])
+        matches = [lane for lane in roster.get("lanes", []) if lane.get("lane_id") == os.environ["OPENROUTER_LANE"]]
+        if len(matches) != 1 or matches[0].get("selector") != model:
+            raise BudgetError("paid route identity changed")
+        lane = matches[0]
+        return lane, route_config(roster, lane, os.environ["OPENROUTER_ROLE"])
+
+    try:
+        lane, (route, rates, bounds, budget) = approved_route()
+        if len(prompt.encode()) > bounds[2]:
+            raise BudgetError("prompt exceeds paid route byte bound")
+        max_tokens = os.environ["OPENROUTER_MAX_TOKENS"]
+        output_bound = min(bounds[1], int(max_tokens)) if max_tokens else bounds[1]
+        budget.snapshot(require=ceiling_usd(rates, bounds[0], output_bound))
+        API = route["endpoint"]
+        key = resolve_key(lane["auth"]["key_ref"])
+    except ProviderError:
+        fail(3, "paid route credential could not be read")
+    except (BudgetError, OSError) as exc:
+        fail(5, f"paid route refused: {exc}")
+
 # FREE-ONLY GATE: live-checked on every call, never trusted from the roster entry alone.
 catalog = request_json(
     urllib.request.Request(f"{API}/models", headers={"User-Agent": "crossfeed-orchestrator-openrouter-agent/1"}),
@@ -618,7 +663,7 @@ if output_modalities != ["text"]:
 
 pricing = entry.get("pricing") or {}
 non_zero = {k: v for k, v in pricing.items() if str(v) != "0"}
-if non_zero and not paid_mimo:
+if non_zero and not paid:
     fail(5, f"model '{model}' is not free right now (non-zero pricing fields: {non_zero}); refusing")
 
 body = {
@@ -627,20 +672,16 @@ body = {
     "stream": True,
     "usage": {"include": True},
 }
-# BR-MIMO-001 / BR-MIMO-002
-budget = None
-if paid_mimo:
-    sys.path.insert(0, os.environ["OPENROUTER_SCRIPT_DIR"])
-    from openrouter_budget import Budget, BudgetError, priced_request
-    from run_identity import state_dir
+# BR-CASH-002 / BR-MIMO-002
+if paid:
     try:
-        body, ceiling = priced_request(entry, body, os.environ["OPENROUTER_MAX_TOKENS"])
-        budget = Budget(state_dir(), os.environ["OPENROUTER_PAID_CAP"])
-        reservation = budget.reserve(model, ceiling)
-    except (BudgetError, OSError, ValueError):
-        fail(5, "paid MiMo pricing/budget admission refused; check the cap and budget ledger")
-text, usage = stream_completion(
-    urllib.request.Request(
+        current, (checked_route, _, _, checked_budget) = approved_route()
+        if current != lane or checked_route != route or checked_budget.settings != budget.settings:
+            raise BudgetError("owner route or envelope changed during preflight")
+        body, ceiling = priced_request(entry, body, max_tokens, route=route, rates=rates, bounds=bounds)
+    except (BudgetError, OSError, ValueError, AttributeError, TypeError) as exc:
+        fail(5, f"paid pricing admission refused: {exc}")
+request = urllib.request.Request(
         f"{API}/chat/completions",
         data=json.dumps(body).encode(),
         headers={
@@ -650,17 +691,32 @@ text, usage = stream_completion(
             "User-Agent": "crossfeed-orchestrator-openrouter-agent/1",
         },
         method="POST",
-    )
 )
-
-if paid_mimo:
+if paid:
+    from funding import quote, summary
     try:
-        cost = budget.settle(reservation, (usage or {}).get("cost"))
+        reservation = budget.reserve(model, ceiling)
+        cash = quote("metered", budget.snapshot(), worst_case=float(ceiling))
+        cash["reservation_id"] = reservation
+        with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
+            events.write(json.dumps({"type": "crossfeed.cash", "cash": cash}) + "\n")
+    except (BudgetError, OSError, ValueError) as exc:
+        fail(5, f"paid reservation refused: {exc}")
+text, usage = stream_completion(request)
+
+if paid:
+    try:
+        cost = budget.settle(reservation, usage.get("cost") if isinstance(usage, dict) else None)
+        cash.update(budget.snapshot(), reported_usd=float(cost))
     except (BudgetError, OSError, ValueError):
-        fail(6, "paid MiMo usage missing/invalid or exceeded reservation; reservation retained, no retry")
+        fail(6, "paid usage missing/invalid or exceeded reservation; reservation retained, no retry")
     with open(os.environ["OPENROUTER_MODEL_EVENTS"], "a") as events:
-        events.write(json.dumps({"type": "crossfeed.openrouter_usage", "usage": usage}) + "\n")
-    print(f"openrouter-agent: paid MiMo cost USD {cost}", file=sys.stderr, flush=True)
+        events.write(json.dumps({"type": "crossfeed.openrouter_usage",
+                                 "usage": {"cost": str(cost), **{key: usage[key] for key in
+                                            ("prompt_tokens", "completion_tokens")
+                                            if type(usage.get(key)) is int}}}) + "\n")
+        events.write(json.dumps({"type": "crossfeed.cash", "cash": cash}) + "\n")
+    print(f"openrouter-agent: paid cost USD {cost}; {summary(cash)}; reservation {reservation}", file=sys.stderr, flush=True)
 elif usage is None:
     # The pre-flight catalog gate already refused non-zero pricing, so this is not a billing
     # risk, but it does mean the post-hoc confirmation did not run. Say so rather than implying

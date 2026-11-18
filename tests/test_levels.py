@@ -261,18 +261,20 @@ class LevelCliTests(unittest.TestCase):
         # A header, one line per level in use, then the limits: a heading and one line per plan
         # that has a limit to show (with no quota readings, only the paid pool's daily budget),
         # and the additive selector command in the footer.
-        self.assertEqual(len(text), 9)
+        self.assertEqual(len(text), 15)
         self.assertEqual([line.split(" ")[0] for line in text[1:6]], ["FORCED", "HIGH", "NORMAL", "LOW", "OFF"])
         self.assertTrue(text[6].startswith("Limits ("))
-        self.assertEqual(text[7], "  gemini-metered: daily budget $0.00 of $1.00, resets at midnight")
-        self.assertEqual(text[8], "Pick with: fleetctl.py select --role R")
+        self.assertEqual(text[7], "  gemini-metered: daily estimate-only budget $0.00 of $1.00, resets at midnight")
+        self.assertEqual(text[8], "Cash (USD, separate from quota pressure):")
+        self.assertEqual(len(text[9:-1]), 5)
+        self.assertEqual(text[-1], "Pick with: fleetctl.py select --role R")
         self.assertIn("no quota readings", text[0])
         body = "\n".join(text)
         for word in ("FORCED", "HIGH", "NORMAL", "LOW", "OFF"):
             self.assertIn(word, body)
         self.assertIn("opencode-go", [line for line in text if line.startswith("LOW")][0])
         self.assertIn("Go $10/mo ≈$60 of model value a month", body)
-        self.assertIn("gemini-metered $0.00/$1.00 today paid per token", body)
+        self.assertIn("gemini-metered $0.00/$1.00 today (estimate-only) paid per token", body)
 
     def test_compact_brief_has_one_pool_row_without_codexbar(self):
         levels = {"opencode-go": "low", "codex": "high", "claude": "forced",
@@ -280,13 +282,15 @@ class LevelCliTests(unittest.TestCase):
         for pool, level in levels.items():
             self.run_cli("level", pool, level)
         text = self.run_cli("brief", "--no-refresh").stdout.strip().splitlines()
-        self.assertEqual(len(text), len(levels) + 3)
+        self.assertEqual(len(text), 2 * len(levels) + 4)
         self.assertEqual(text[0], "pool | level | binding window | used | resets | price | models on")
-        rows = [line.split(" | ") for line in text[1:-2]]
+        rows = [line.split(" | ") for line in text[1:1 + len(levels)]]
         self.assertTrue(all(len(row) == 7 for row in rows))
         self.assertEqual({row[0]: row[1] for row in rows}, levels)
         self.assertTrue(all(row[5] == "~0.50" for row in rows))
-        self.assertEqual(text[-2], "off: none")
+        self.assertEqual(text[1 + len(levels)], "off: none")
+        self.assertEqual(text[2 + len(levels)], "Cash (USD, separate from quota pressure):")
+        self.assertEqual({line.strip().split(": ")[0] for line in text[3 + len(levels):-1]}, set(levels))
         self.assertEqual(text[-1], "pick: fleetctl.py select --role R [--stakes S]")
 
     def test_brief_json_carries_plan_and_measured_quota(self):

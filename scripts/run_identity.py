@@ -214,16 +214,27 @@ def pi_assistant_messages(event):
 def observed_usage(wrapper, events):
     """Keep native Pi usage prompt-free and count each assistant message once."""
     if wrapper == "openrouter" and events and events.is_file():
+        result = {}
         for line in reversed(events.read_text(errors="replace").splitlines()):
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
-            if event.get("type") == "crossfeed.openrouter_usage":
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "crossfeed.cash" and "cash" not in result:
+                try:
+                    from funding import receipt_fields
+                except ModuleNotFoundError:
+                    from scripts.funding import receipt_fields
+                cash = receipt_fields(event.get("cash"))
+                if cash:
+                    result["cash"] = cash
+            if event.get("type") == "crossfeed.openrouter_usage" and "cost" not in result:
                 usage = event["usage"]
-                return {"tokens": {"input": usage.get("prompt_tokens"), "output": usage.get("completion_tokens")},
-                        "cost": {"estimated_usd": float(usage["cost"]), "source": "openrouter-reported"}}
-        return {}
+                result.update(tokens={"input": usage.get("prompt_tokens"), "output": usage.get("completion_tokens")},
+                              cost={"estimated_usd": float(usage["cost"]), "source": "openrouter-reported"})
+        return result
     if wrapper != "pi" or not events or not events.is_file():
         return {}
     ended, snapshot = [], []
@@ -551,7 +562,11 @@ def finish(path, events, returncode, last, schema, database=None, result_file=No
     if returncode in {124, 125}:
         record["status"] = "timeout" if returncode == 124 else "idle-killed"
     # OpenCode retains its separate priced telemetry; Pi reports native usage here.
-    record.update(observed_usage(record["harness"], events))
+    observed = observed_usage(record["harness"], events)
+    if "cash" in observed:
+        observed["cash"] = {**record["cash"], **observed["cash"],
+                            "estimate_usd": record["cash"].get("estimate_usd")}
+    record.update(observed)
     if model_identity_drift(record):
         print(f"Crossfeed WARNING: MODEL IDENTITY DRIFT: selected {record['selected_model']}; "
               f"provider reported {record['actual_model']}; run {record['run_id']}.", file=sys.stderr)

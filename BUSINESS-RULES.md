@@ -30,12 +30,17 @@ Scope: the Benchmarks page and local admission-check policy, the opt-in paid MiM
 
 Shared-identity regression: `tests/test_shared_models.py:SharedRoutingTests.test_alias_does_not_bypass_paid_explicit_allow_or_cap` observes automatic refusal and explicit admission through the real selector. Model identity grants no paid admission.
 
-## BR-MIMO-002 — Reserve within a shared daily cap before sending [DECIDED · supplied lane brief]
+## BR-MIMO-002 — Reserve within a shared daily cap before sending [RETIRED · superseded by BR-CASH-002 on 18 Nov 2026]
 
-- RULE: Pro and Flash share a provisional $5/day cap, configurable by the owner. Before each paid call, reserve its worst-case cost from live pricing. Concurrent/incomplete requests count against the same cap. Replace a reservation only with valid reported cost; missing usage, interruptions and ambiguous failures retain it. No automatic paid retries. Unexpected excess billing blocks future paid admission pending owner reconciliation.
-- Authority: the lane brief requires a hard daily cap enforced before each call from live prices. Reservation and no-retry accounting implement that bound; they do not grant broader paid access. Reported costs belong to their local settlement day; unresolved calls remain reserved across resets.
+- Former rule (supplied MiMo lane brief): Pro and Flash shared a provisional $5/day; reserve against live pricing, retain ambiguous holds, stop on overrun and never retry.
+- The accounting controls remain in BR-CASH-002. The former $5 default is not spending authorization.
+
+## BR-CASH-002 — No metered request without a funded reservation [DECIDED · supplied cash-aware routing build brief and council, 18 Nov 2026]
+
+- RULE: An owner-set envelope is required for the bounded prompt-only transport. There is no default envelope or implicit dollar amount. Envelopes set positive per-call, local-calendar-day and pilot-total dollar limits and an expiry. Reserve the worst case immediately before sending; all metered endpoints on an account share the same local ledger regardless of dispatch state. If authority, tariff or ledger is unusable, do not send. Replace a hold once with valid final reported cost; interrupted or ambiguous requests retain holds across midnight. Overruns freeze the account until the owner reconciles. Unsupported tool loops are not bounded selector options; the legacy Gemini direct cap is estimate-only.
+- Authority: the build brief and the stricter council controls; nothing here approves a concrete funding account, credential or amount.
 - implemented-by: `scripts/openrouter_budget.py:Budget`, `scripts/openrouter_budget.py:priced_request`, `scripts/openrouter-agent.sh:main`.
-- tested-by: `tests/test_openrouter_mimo.py:MimoTests.test_price_jump_is_refused_before_post`, `test_pro_and_flash_share_one_cap`, `test_missing_cost_keeps_reservation_and_refuses_followup`, `test_paid_http_failure_has_no_retry_and_keeps_reservation`, `test_concurrent_reservations_cannot_overspend`, `test_bad_costs_and_corrupt_ledger_fail_closed`, `test_billing_overrun_blocks_new_calls`, `test_extra_fees_and_missing_prices_are_refused`, `test_timeout_keeps_paid_reservation`, `test_midnight_resets_settled_cost_but_keeps_unknown_reservations`.
+- tested-by: `tests/test_openrouter_mimo.py:MimoTests.test_explicit_paid_flag_does_not_authorize_spend_without_an_envelope` (control: `test_explicit_paid_route_publishes_and_accounts_cost`), `test_missing_ledger_refuses_even_with_an_envelope`, `test_second_provider_overlay_only_and_alternate_dispatch_state_share_cash`, `test_per_call_limit_and_duplicate_settlement`, `test_price_jump_is_refused_before_post`, `test_pro_and_flash_share_one_cap`, `test_missing_cost_keeps_reservation_and_refuses_followup`, `test_paid_http_failure_has_no_retry_and_keeps_reservation`, `test_concurrent_reservations_cannot_overspend`, `test_bad_costs_and_corrupt_ledger_fail_closed`, `test_billing_overrun_blocks_new_calls`, `test_extra_fees_and_missing_prices_are_refused`, `test_timeout_keeps_paid_reservation`, `test_midnight_resets_settled_cost_but_keeps_unknown_reservations`.
 
 Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.test_alias_does_not_bypass_paid_explicit_allow_or_cap` keeps paid admission blocked at the existing cap even when a Go route shares the model identity.
 

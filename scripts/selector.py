@@ -22,9 +22,11 @@ from typing import Any
 
 try:
     import funding
+    from openrouter_budget import BudgetError, ceiling_usd, route_config
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
     from scripts import funding
+    from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
 
@@ -198,6 +200,22 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             if lane.get("lane_id") not in admitted:
                 rejected.append(f"{label}: outside CRITICAL role allowlist")
                 continue
+        paid_cash = None
+        cash_tariff = None
+        # BR-CASH-002: estimate-only tool loops are not bounded selector options.
+        if cash_class == "metered":
+            try:
+                if mode != "read-only" or modality != "text":
+                    raise BudgetError("paid route is prompt-only read-only text")
+                route, rates, bounds, budget = route_config(roster, lane, role)
+                worst = ceiling_usd(rates, *bounds[:2])
+                paid_cash = funding.quote("metered", budget.snapshot(require=worst), worst_case=float(worst))
+                paid_cash.update(tariff_source=route["tariff"]["source"],
+                                 tariff_valid_until=route["tariff"]["valid_until"])
+                cash_tariff = dict(zip(("in", "out"), map(float, rates)))
+            except (BudgetError, OSError) as exc:
+                rejected.append(f"{label}: {exc}")
+                continue
         option = {"pool": pool, "harness": harness, "model_key": key, "model": key,
                   "model_identity": canonical_model(key, roster),
                   "run_as": lane.get("model") or lane.get("selector") or key,
@@ -206,6 +224,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
         if "price_1m" in lane:
             option["source_price_1m"] = lane["price_1m"]
+        if paid_cash is not None:
+            option["cash"] = paid_cash
+            option["cash_tariff_1m"] = cash_tariff
         if fleet.data_policy_refusal(lane, "code"):
             option["public_only"] = True
         if lane.get("paid_mimo") is True:
@@ -644,8 +665,8 @@ def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> li
         argv += ["--lane", option["lane_id"], "--model", option["run_as"], "--role", role]
     elif harness in {"opencode", "openrouter"}:
         argv += ["--lane", option["lane_id"]]
-        if harness == "openrouter" and option.get("paid_mimo"):
-            argv += ["--paid-mimo"]
+        if harness == "openrouter" and option.get("funding") == "metered":
+            argv += ["--paid-mimo" if option.get("paid_mimo") else "--paid", "--role", role]
         if harness == "opencode":
             argv += ["--effort-role", role]
             if option.get("public_only"):
@@ -786,8 +807,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     capped = set()
     for option in options:
         pool = option["pool"]
-        daily_cap = roster.get("quota_pools", {}).get(pool, {}).get("daily_usd_cap")
-        if daily_cap is not None and pool not in capped:
+        daily_cap = _number(roster.get("quota_pools", {}).get(pool, {}).get("daily_usd_cap"))
+        if daily_cap is not None and pool not in capped and option["funding"] != "metered":
             spent = fleet.pool_spent_since(state_dir, roster, pool, fleet.local_day_start())
             if spent >= float(daily_cap):
                 capped.add(pool)
@@ -849,13 +870,11 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         if stakes == "high":
             penalty = min(penalty, high_cost_cap)
         score = quality if stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
-        cash_class = option["funding"]
-        budget = ({k: v for k, v in pool_cash.get(option["pool"], {}).items()
-                   if k not in ("funding", "estimate_usd", "worst_case_usd")}
-                  if cash_class == "metered" else {})
-        # A market/API-equivalent price is not authority to quote a cash tariff.
-        estimate = cost["estimated_usd"] if "source_price_1m" in option else None
-        cash = funding.quote(cash_class, budget, estimate=estimate)
+        cash = option.get("cash") or funding.quote(option["funding"])
+        if option.get("cash_tariff_1m") is not None:
+            # Model-market prices never estimate bills for a specific funding account.
+            estimate, _ = _cost(dict(row, price_1m=option["cash_tariff_1m"]), None)
+            cash = dict(cash, estimate_usd=estimate)
         scored.append(dict(option, cash=cash, quality=quality, q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +

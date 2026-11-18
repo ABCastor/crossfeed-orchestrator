@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import copy
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import fleetctl
 from openrouter_budget import Budget, BudgetError, priced_request
+from tests.cash_fixtures import ACCOUNT, configure, envelope, seed
 
 
 class MimoTests(unittest.TestCase):
@@ -23,13 +25,18 @@ class MimoTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.roster = json.loads((ROOT/'tests/fixtures/access-overlay.test.json').read_text())
-        self.overlay = self.root/'roster.json'
-        self.overlay.write_text(json.dumps(self.roster))
+        self.overlay = self.root/'.config/orchestrator/access-overlay.json'
+        self.overlay.parent.mkdir(parents=True)
+        self.ledger = self.root/'.local/state/orchestrator/cash-budget.json'
+        seed(self.ledger)
         self.posts = []
+        self.post_paths = []
+        self.models = ['xiaomi/mimo-v2.6-flash', 'xiaomi/mimo-v2.6-pro', 'openrouter/free', 'fixture/other-text']
         self.price = '0.001'
         self.cost = 0.001
         self.status = 200
         self.stall = False
+        self.catalog_barrier = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -37,8 +44,10 @@ class MimoTests(unittest.TestCase):
                 pass
 
             def do_GET(self):
+                if owner.catalog_barrier:
+                    owner.catalog_barrier.wait(timeout=10)
                 entries = []
-                for model in ('xiaomi/mimo-v2.6-flash', 'xiaomi/mimo-v2.6-pro', 'openrouter/free'):
+                for model in owner.models:
                     entries.append({'id': model, 'architecture': {'output_modalities': ['text']},
                                     'pricing': {'prompt': owner.price, 'completion': owner.price},
                                     'context_length': 100, 'top_provider': {'max_completion_tokens': 100}})
@@ -49,6 +58,7 @@ class MimoTests(unittest.TestCase):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 owner.posts.append(body)
+                owner.post_paths.append(self.path)
                 self.send_response(owner.status)
                 self.end_headers()
                 if owner.stall:
@@ -72,8 +82,13 @@ class MimoTests(unittest.TestCase):
         op = bindir/'op'
         op.write_text('#!/bin/sh\nprintf "synthetic-test-key"\n')
         op.chmod(0o755)
-        self.env = dict(os.environ, ACCESS_OVERLAY=str(self.overlay), FLEET_STATE_DIR=str(self.root/'state'),
-                        OPENROUTER_API_BASE=f'http://127.0.0.1:{self.server.server_port}',
+        base = f'http://127.0.0.1:{self.server.server_port}'
+        configure(self.roster, base + '/v1')
+        self.overlay.write_text(json.dumps(self.roster))
+        self.overlay.chmod(0o600)
+        self.env = dict(os.environ, HOME=str(self.root), ACCESS_OVERLAY=str(self.overlay),
+                        FLEET_STATE_DIR=str(self.root/'state'), OPENROUTER_API_BASE=base,
+                        OP_SERVICE_ACCOUNT_TOKEN='', OP_SERVICE_ACCOUNT_TOKEN_FILE=str(self.root/'no-token'),
                         PATH=str(bindir)+os.pathsep+os.environ['PATH'], FLEET_QUOTA_POLICY='off', FLEET_IGNORE_QUOTA='1')
 
     def stop(self):
@@ -81,13 +96,102 @@ class MimoTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def run_wrapper(self, *args, lane='openrouter-mimo-v2.6-flash'):
+    def run_wrapper(self, *args, lane='openrouter-mimo-v2.6-flash', env=None):
         return subprocess.run([str(ROOT/'scripts/openrouter-agent.sh'), '--lane', lane,
                                '--prompt', 'Return PONG', '--last', str(self.root/'answer'), *args],
-                              env=self.env, text=True, capture_output=True, timeout=20)
+                              env={**self.env, **(env or {})}, text=True, capture_output=True, timeout=20)
 
     def budget(self):
-        return json.loads((self.root/'state/openrouter-mimo-budget.json').read_text())['calls']
+        return json.loads(self.ledger.read_text())['accounts'][ACCOUNT]['calls']
+
+    def isolated_budget(self, name, **limits):
+        path = self.root / name / 'cash-budget.json'
+        seed(path)
+        return Budget(ACCOUNT, envelope(**limits), path=path)
+
+    def add_second_provider(self):
+        template = next(lane for lane in self.roster["lanes"] if lane["lane_id"] == "openrouter-mimo-v2.6-flash")
+        lane = copy.deepcopy(template)
+        lane.pop("paid_mimo")
+        lane.update(lane_id="fixture-other", model_key="fixture-other", provider="fixture",
+                    selector="fixture/other-text", quota_pool="fixture-billing")
+        lane["paid_route"].update(
+            model=lane["selector"], provider="fixture-other-upstream",
+            endpoint=f"http://127.0.0.1:{self.server.server_port}/other/v1")
+        self.roster["quota_pools"]["fixture-billing"] = {"funding": "metered"}
+        self.roster["effort"]["fixture-other"] = copy.deepcopy(self.roster["effort"][template["model_key"]])
+        self.roster["lanes"].append(lane)
+        self.roster["cash_accounts"][ACCOUNT].update(per_call_usd=".25", daily_usd=".25")
+        self.overlay.write_text(json.dumps(self.roster))
+
+    # BR-CASH-002
+    def test_two_provider_processes_cannot_race_past_last_headroom(self):
+        self.add_second_provider()
+        self.catalog_barrier = threading.Barrier(2)
+        self.cost = .15
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            mimo = workers.submit(self.run_wrapper, "--paid-mimo")
+            other = workers.submit(self.run_wrapper, "--paid", "--role", "hard-reasoning", lane="fixture-other",
+                                   env={"FLEET_STATE_DIR": str(self.root / "alternate")})
+            results = [job.result() for job in (mimo, other)]
+        self.assertEqual(sorted(result.returncode for result in results), [0, 5],
+                         [result.stderr for result in results])
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(len(self.budget()), 1)
+
+    # BR-CASH-002
+    def test_second_provider_overlay_only_and_alternate_dispatch_state_share_cash(self):
+        self.add_second_provider()
+        self.cost = .15
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/fleetctl.py'),
+                                 '--overlay', str(self.overlay), '--state-dir', str(self.root/'different-state'),
+                                 'dispatch', '--role', 'hard-reasoning', '--no-refresh',
+                                 '--allow', 'fixture-billing:fixture-other:*', '--prompt', 'Return PONG',
+                                 '--dir', str(self.root), '--last', str(self.root/'third-party-answer')],
+                                env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.post_paths, ["/other/v1/chat/completions"])
+        self.assertEqual(self.posts[0]["provider"]["only"], ["fixture-other-upstream"])
+        self.assertEqual(self.posts[0]["model"], "fixture/other-text")
+        receipt = json.loads((self.root/'third-party-answer.crossfeed.json').read_text())
+        self.assertEqual(receipt["cash"]["reported_usd"], .15)
+        self.assertIn(receipt["cash"]["reservation_id"], self.budget())
+        blocked = self.run_wrapper("--paid-mimo")
+        self.assertEqual(blocked.returncode, 5, blocked.stderr)
+        self.assertIn("cap", blocked.stderr)
+        self.assertEqual(len(self.posts), 1)
+
+    # BR-CASH-002
+    def test_per_call_limit_and_duplicate_settlement(self):
+        budget = self.isolated_budget("single", per_call_usd=".25")
+        with self.assertRaisesRegex(BudgetError, "per-call"):
+            budget.reserve("fixture/other-text", ".251")
+        token = budget.reserve("fixture/other-text", ".25")
+        budget.settle(token, ".2")
+        with self.assertRaisesRegex(BudgetError, "outstanding"):
+            budget.settle(token, "0")
+        self.assertEqual(budget.snapshot()["settled_usd"], .2)
+        self.assertEqual(budget.snapshot()["held_usd"], 0)
+        self.assertEqual(budget.snapshot()["available_usd"], 4.8)
+
+    # BR-CASH-002
+    def test_explicit_paid_flag_does_not_authorize_spend_without_an_envelope(self):
+        self.roster.pop("cash_accounts", None)
+        self.overlay.write_text(json.dumps(self.roster))
+        result = self.run_wrapper('--paid-mimo')
+        self.assertEqual(self.posts, [])
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("envelope", result.stderr)
+
+    # BR-CASH-002
+    def test_missing_ledger_refuses_even_with_an_envelope(self):
+        budget_path = self.root / '.local/state/orchestrator/cash-budget.json'
+        budget_path.unlink(missing_ok=True)
+        result = self.run_wrapper('--paid-mimo')
+        self.assertEqual(self.posts, [])
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("ledger", result.stderr)
+        self.assertFalse(budget_path.exists())
 
     # BR-MIMO-001: prohibition and observable control share the same endpoint.
     def test_paid_model_without_opt_in_cannot_generate(self):
@@ -122,11 +226,11 @@ class MimoTests(unittest.TestCase):
         result = self.run_wrapper('--paid-mimo')
         self.assertEqual(result.returncode, 5, result.stderr)
         self.assertEqual(len(self.posts), 0)
-        self.assertFalse((self.root/'state/openrouter-mimo-budget.json').exists())
+        self.assertEqual(self.budget(), {})
 
     # BR-MIMO-002
     def test_pro_and_flash_share_one_cap(self):
-        self.roster['quota_pools']['openrouter-mimo']['daily_usd_cap'] = .25
+        self.roster['cash_accounts'][ACCOUNT].update(per_call_usd="0.25", daily_usd="0.25")
         self.overlay.write_text(json.dumps(self.roster))
         self.cost = .15
         first = self.run_wrapper('--paid-mimo')
@@ -137,7 +241,7 @@ class MimoTests(unittest.TestCase):
 
     # BR-MIMO-002
     def test_missing_cost_keeps_reservation_and_refuses_followup(self):
-        self.roster['quota_pools']['openrouter-mimo']['daily_usd_cap'] = .25
+        self.roster['cash_accounts'][ACCOUNT].update(per_call_usd="0.25", daily_usd="0.25")
         self.overlay.write_text(json.dumps(self.roster))
         self.cost = None
         first = self.run_wrapper('--paid-mimo')
@@ -158,9 +262,10 @@ class MimoTests(unittest.TestCase):
 
     # BR-MIMO-002
     def test_concurrent_reservations_cannot_overspend(self):
+        budget = self.isolated_budget("atomic", per_call_usd="1", daily_usd="1")
         def reserve(model):
             try:
-                Budget(self.root/'atomic', '1').reserve(model, Decimal('.6'))
+                Budget(ACCOUNT, budget.settings, path=budget.path).reserve(model, Decimal('.6'))
                 return True
             except BudgetError:
                 return False
@@ -170,7 +275,7 @@ class MimoTests(unittest.TestCase):
 
     # BR-MIMO-002
     def test_bad_costs_and_corrupt_ledger_fail_closed(self):
-        budget = Budget(self.root/'strict')
+        budget = self.isolated_budget('strict')
         token = budget.reserve('xiaomi/mimo-v2.6-flash', Decimal('.2'))
         for cost in (None, 'NaN', '-1', True):
             with self.subTest(cost=cost), self.assertRaises(BudgetError):
@@ -181,7 +286,7 @@ class MimoTests(unittest.TestCase):
 
     # BR-MIMO-002
     def test_billing_overrun_blocks_new_calls(self):
-        budget = Budget(self.root/'overrun')
+        budget = self.isolated_budget('overrun')
         token = budget.reserve('xiaomi/mimo-v2.6-flash', '.1')
         with self.assertRaises(BudgetError):
             budget.settle(token, '.2')
@@ -199,20 +304,20 @@ class MimoTests(unittest.TestCase):
 
     # BR-MIMO-002
     def test_midnight_resets_settled_cost_but_keeps_unknown_reservations(self):
-        budget = Budget(self.root/'days', '1')
+        budget = self.isolated_budget('days', per_call_usd="1", daily_usd="1")
         known = budget.reserve('xiaomi/mimo-v2.6-flash', '.6')
         budget.settle(known, '.6')
         ledger = json.loads(budget.path.read_text())
-        ledger['calls'][known]['day'] = '2000-01-01'
+        ledger['accounts'][ACCOUNT]['calls'][known]['day'] = '2000-01-01'
         budget.path.write_text(json.dumps(ledger))
         pending = budget.reserve('xiaomi/mimo-v2.6-pro', '.6')
         ledger = json.loads(budget.path.read_text())
-        ledger['calls'][pending]['day'] = '2000-01-01'
+        ledger['accounts'][ACCOUNT]['calls'][pending]['day'] = '2000-01-01'
         budget.path.write_text(json.dumps(ledger))
         with self.assertRaises(BudgetError):
             budget.reserve('xiaomi/mimo-v2.6-flash', '.6')
         budget.settle(pending, '.3')
-        today = json.loads(budget.path.read_text())['calls'][pending]['day']
+        today = json.loads(budget.path.read_text())['accounts'][ACCOUNT]['calls'][pending]['day']
         self.assertNotEqual(today, '2000-01-01', 'reported spend must count on the settlement day')
         with self.assertRaises(BudgetError):
             budget.reserve('xiaomi/mimo-v2.6-flash', '.8')

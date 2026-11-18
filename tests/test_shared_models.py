@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import evidence
 import fleetctl
+import openrouter_budget
 import run_identity
+from tests.cash_fixtures import ACCOUNT, configure, seed
 import selector
 
 
@@ -365,13 +367,19 @@ class SharedRoutingTests(unittest.TestCase):
         go = copy.deepcopy(self.roster['lanes'][0])
         go.update(lane_id='go-flash', model_key='go-flash', roles=['hard-reasoning'])
         paid['lanes'].append(go)
-        options, rejected = selector.enumerate_options(paid, {}, 'hard-reasoning', fleet=fleetctl)
-        self.assertTrue(any(r['lane_id'] == 'go-flash' for r in options))
-        self.assertFalse(any(r['pool'] == 'openrouter-mimo' for r in options))
-        options, _ = selector.enumerate_options(paid, {}, 'hard-reasoning', fleet=fleetctl,
-                                                explicit_pools={'openrouter-mimo'})
-        self.assertTrue(any(r['pool'] == 'openrouter-mimo' for r in options))
-        with mock.patch.object(fleetctl, 'pool_spent_since', return_value=5):
+        configure(paid, "http://127.0.0.1:9/v1")
+        ledger = self.state / "cash-budget.json"
+        seed(ledger)
+        with mock.patch.object(openrouter_budget, 'ledger_path', return_value=ledger):
+            options, rejected = selector.enumerate_options(paid, {}, 'hard-reasoning', fleet=fleetctl)
+            self.assertTrue(any(r['lane_id'] == 'go-flash' for r in options))
+            self.assertFalse(any(r['pool'] == 'openrouter-mimo' for r in options))
+            options, _ = selector.enumerate_options(paid, {}, 'hard-reasoning', fleet=fleetctl,
+                                                    explicit_pools={'openrouter-mimo'})
+            self.assertTrue(any(r['pool'] == 'openrouter-mimo' for r in options))
+            budget = openrouter_budget.Budget(ACCOUNT, paid['cash_accounts'][ACCOUNT])
+            token = budget.reserve('xiaomi/mimo-v2.6-flash', '5')
+            budget.settle(token, '5')
             with self.assertRaisesRegex(fleetctl.FleetError, 'cap'):
                 selector.select_option(paid, {}, self.state, 'hard-reasoning', fleet=fleetctl,
                                        allow='openrouter-mimo:mimo-v2.6-flash:*')

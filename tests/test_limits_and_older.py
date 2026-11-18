@@ -252,7 +252,7 @@ class LimitTests(unittest.TestCase):
         self.assertIn("5-hour 0%, not started", go)
         self.assertIn("monthly 51%", go)
         self.assertIn("plan renews", go)
-        self.assertIn("  paid: daily budget $0.00 of $1.00, resets at midnight", lines)
+        self.assertIn("  paid: daily estimate-only budget $0.00 of $1.00, resets at midnight", lines)
 
     def test_codexbar_labels_and_unstarted_windows_are_kept(self):
         payload = [{"provider": "opencodego", "rateWindowLabels": {"primary": "5-hour", "secondary": "Weekly"},

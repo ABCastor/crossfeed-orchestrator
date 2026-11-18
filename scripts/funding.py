@@ -1,9 +1,8 @@
 """Cash quotes, deliberately separate from subscription pressure and list prices."""
 from __future__ import annotations
 
-import datetime as dt
-import json
 import math
+import re
 
 CLASSES = frozenset({"included", "verified-free", "metered", "unknown"})
 CASH_FIELDS = ("estimate_usd", "worst_case_usd", "per_call_cap_usd", "cap_usd",
@@ -81,34 +80,27 @@ def quote(funding, budget=None, *, estimate=None, worst_case=None):
     return cash
 
 
-def legacy_budget(pool, config, state_dir, metered=None):
+def legacy_budget(pool, config, metered=None):
     cap = number(config.get("daily_usd_cap"))
-    if cap is None or cap < 0:
+    if pool == "openrouter-mimo" or cap is None or cap < 0:
         return {}
-    if pool != "openrouter-mimo":
-        return {"budget_basis": "estimate-only", "cap_usd": cap,
-                "estimated_spent_usd": (metered or {}).get("estimated_spent_usd_today")}
-    result = {"cap_usd": cap}
+    return {"budget_basis": "estimate-only", "cap_usd": cap,
+            "estimated_spent_usd": (metered or {}).get("estimated_spent_usd_today")}
+
+
+def account_budget(roster, account):
     try:
-        ledger = json.loads((state_dir / "openrouter-mimo-budget.json").read_text())
-        if ledger.get("schema") != "openrouter-mimo-budget/v1":
-            return result
-        today = dt.datetime.now().astimezone().date().isoformat()
-        settled, held = 0.0, 0.0
-        frozen = False
-        for call in ledger["calls"].values():
-            value = float(call["reserved_usd"] if call["cost_usd"] is None else call["cost_usd"])
-            if not math.isfinite(value) or value < 0:
-                return result
-            if call["cost_usd"] is None:
-                held += value
-            elif call["day"] == today:
-                settled += value
-            frozen |= bool(call.get("blocked"))
-        return dict(result, settled_usd=settled, held_usd=held,
-                    available_usd=0 if frozen else max(0, cap - settled - held))
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
-        return result
+        from openrouter_budget import Budget, BudgetError, envelope
+    except ModuleNotFoundError:
+        from scripts.openrouter_budget import Budget, BudgetError, envelope
+    try:
+        raw, (per_call, cap, _) = envelope(roster, account)
+    except BudgetError:
+        return {}
+    try:
+        return Budget(account, raw).snapshot()
+    except (BudgetError, OSError):
+        return {"account": account, "per_call_cap_usd": float(per_call), "cap_usd": float(cap)}
 
 
 def summary(cash, *, symbol="$"):
@@ -117,12 +109,18 @@ def summary(cash, *, symbol="$"):
     text = (f"{cash['funding']}, estimated {usd(cash.get('estimate_usd'))}, "
             f"worst case {usd(cash.get('worst_case_usd'))}")
     if cash["funding"] == "metered":
+        if cash.get("account"):
+            text += f", account {cash['account']}"
         if cash.get("budget_basis") == "estimate-only":
             text += f", estimate-only usage {usd(cash.get('estimated_spent_usd'))}"
         if cash.get("per_call_cap_usd") is not None:
             text += f", per-call cap {usd(cash['per_call_cap_usd'])}"
         text += ", " + ", ".join(f"{key} {usd(cash.get(key + '_usd'))}"
                                   for key in ("cap", "settled", "held", "available"))
+        if cash.get("reported_usd") is not None:
+            text += f", reported {usd(cash['reported_usd'])}"
+        if cash.get("frozen"):
+            text += ", frozen"
     return text
 
 
@@ -136,4 +134,12 @@ def receipt_fields(raw):
             result[key] = value if value is not None and value >= 0 else None
     if raw.get("budget_basis") == "estimate-only":
         result["budget_basis"] = "estimate-only"
+    for key in ("account", "reservation_id"):
+        if isinstance(raw.get(key), str) and re.fullmatch(r"[a-z0-9._-]{1,64}", raw[key]):
+            result[key] = raw[key]
+    if type(raw.get("frozen")) is bool:
+        result["frozen"] = raw["frozen"]
+    for key in ("tariff_source", "tariff_valid_until"):
+        if isinstance(raw.get(key), str) and len(raw[key]) <= 240:
+            result[key] = raw[key]
     return result

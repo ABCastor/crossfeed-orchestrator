@@ -3296,6 +3296,18 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         # Wrappers publish identity only after setting their supervised launch flag.
         # Each attempt has a new path and ID: inherited sidecars never participate.
         launched = identity.exists()
+        if launched and cash["funding"] == "metered":
+            try:
+                actual = json.loads(identity.read_text())
+                if actual.get("dispatch_id") == dispatch_id:
+                    observed = funding.receipt_fields(actual.get("cash"))
+                    if observed and observed.get("reservation_id"):
+                        record["cash"] = {**cash, **observed,
+                                          "estimate_usd": cash.get("estimate_usd")}
+                        print(f"fleetctl: cash result {funding.summary(record['cash'])}", file=sys.stderr,
+                              flush=True)
+            except (OSError, ValueError, AttributeError):
+                pass
         record.update(ended_at=iso(), returncode=returncode,
                       launch_evidence="model-receipt-present" if launched else "no-model-receipt")
         atomic_json(receipt, record)
@@ -4042,7 +4054,7 @@ def metered_pool_usage(state_dir: Path, roster: dict[str, Any] | None) -> dict[s
     day_start = local_day_start()
     for pool, config in sorted((roster.get("quota_pools") or {}).items()):
         cap = funding.number(config.get("daily_usd_cap"))
-        if cap is None or cap < 0:
+        if pool == "openrouter-mimo" or cap is None or cap < 0:
             continue
         spent = pool_spent_since(state_dir, roster, pool, day_start)
         metered[pool] = {
@@ -4071,7 +4083,15 @@ def cash_by_pool(roster, state_dir, metered=None):
     for pool in sorted(set(configs) | lane_pools(roster)):
         config = configs.get(pool, {})
         billing = funding.classify(roster, pool)
-        budget = funding.legacy_budget(pool, config, state_dir, metered.get(pool)) if billing == "metered" else {}
+        budget = {}
+        if billing == "metered":
+            accounts = {route.get("account") for lane in roster.get("lanes", [])
+                        if lane.get("quota_pool") == pool and isinstance(route := lane.get("paid_route"), dict)
+                        and isinstance(route.get("account"), str)}
+            if len(accounts) == 1:
+                budget = funding.account_budget(roster, next(iter(accounts)))
+            elif not accounts:
+                budget = funding.legacy_budget(pool, config, metered.get(pool))
         result[pool] = funding.quote(billing, budget)
     return result
 
@@ -4913,7 +4933,12 @@ def fleet_overview(
     for lane in roster.get("lanes", []):
         pool, lane_id = lane.get("quota_pool"), lane.get("lane_id")
         billing = funding.classify(roster, pool, lane)
-        if lane_id and cash.get(pool, {}).get("funding") != billing:
+        route = lane.get("paid_route")
+        if not lane_id:
+            continue
+        if billing == "metered" and isinstance(route, dict):
+            lane_cash[lane_id] = funding.quote(billing, funding.account_budget(roster, route.get("account")))
+        elif cash.get(pool, {}).get("funding") != billing:
             lane_cash[lane_id] = funding.quote(billing)
     measured_runtime = _without_levels(runtime)
     pools: list[dict[str, Any]] = []
@@ -5055,7 +5080,7 @@ def _brief_entry(pool: dict[str, Any]) -> str:
     elif pool.get("gauge_error"):
         parts.append(f"gauge error: {short_gauge_error(pool['gauge_error'])}")
     elif metered:
-        parts.append(f"${metered['estimated_spent_usd_today']:.2f}/${metered['daily_usd_cap']:.2f} today")
+        parts.append(f"${metered['estimated_spent_usd_today']:.2f}/${metered['daily_usd_cap']:.2f} today (estimate-only)")
     elif pool.get("stale_age_s") is not None:
         parts.append(f"quota stale ({format_duration(pool['stale_age_s'])} old)")
     elif pool.get("measured"):
@@ -5081,7 +5106,7 @@ def _limit_text(limit: dict[str, Any]) -> str:
     if limit["kind"] == "refusal":
         return f"{limit['title']}: EXHAUSTED until {limit['reset_at']} (in {format_duration(limit['resets_in_s'])})"
     if limit["kind"] == "budget":
-        name = "daily budget"
+        name = "daily estimate-only budget"
     else:   # "weekly", "5-hour", and a source's own word for a limit ("Premium") as it writes it
         name = limit["title"].lower() if limit["title"] in {"Weekly", "Monthly", "Daily", "Limit"} else limit["title"]
     if limit.get("scope"):
