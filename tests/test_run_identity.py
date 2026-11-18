@@ -1,15 +1,18 @@
 """Model receipts reach the worker, dispatcher, ledger and rendered console, using fake CLIs only."""
 import importlib.util
 import contextlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import io
 import tempfile
 import os
 import subprocess
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.fixtures.cash import copy_cash_scripts
 from tests.test_switch_respected import Sandbox, SCRIPTS, FAKE_CODEX
 from tests.test_console import console, fleetctl
 
@@ -116,29 +119,41 @@ echo '{"type":"result","exitCode":0}'
 
 
     def test_openrouter_wrapper_captures_the_provider_model_from_its_native_stream(self):
-        # Intercept urllib in this test's Python processes. No socket or real provider is reachable.
-        native = self.root / "native"
-        native.mkdir()
         request_file = self.root / "request.json"
-        (native / "sitecustomize.py").write_text('''
-import io, json, os, urllib.request
-from pathlib import Path
-def urlopen(request, timeout=None):
-    if request.full_url.endswith("/models"):
-        return io.BytesIO(json.dumps({"data":[{"id":"openrouter/free", "pricing":{"prompt":"0", "completion":"0"},
-            "architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}).encode())
-    data = json.loads(request.data)
-    Path(os.environ["NATIVE_REQUEST_FILE"]).write_text(json.dumps(data))
-    event = {"model":"vendor/free-answer", "choices":[{"delta":{"content":"answer"}}], "usage":{"cost":0}}
-    return io.BytesIO(("data: " + json.dumps(event) + "\\n\\ndata: [DONE]\\n\\n").encode())
-urllib.request.urlopen = urlopen
-''')
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                body = {"data": [{"id": "openrouter/free", "pricing": {"prompt": "0", "completion": "0"},
+                                  "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}]}
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(body).encode())
+
+            def do_POST(self):
+                request_file.write_bytes(self.rfile.read(int(self.headers["Content-Length"])))
+                event = {"model": "vendor/free-answer", "choices": [{"delta": {"content": "answer"}}],
+                         "usage": {"cost": 0}}
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(("data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n").encode())
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        scripts = copy_cash_scripts(SCRIPTS, self.home, f"http://127.0.0.1:{server.server_port}/v1")
         key = self.root / "synthetic-key"
         key.write_text("fake-test-only")
-        self.env.update(PYTHONPATH=str(native), NATIVE_REQUEST_FILE=str(request_file), OPENROUTER_KEY_FILE=str(key))
         last = self.root / "answer"
-        result = self.run_script("openrouter-agent.sh", "--model-key", "openrouter-free-router",
-                                 "--prompt", "private task", "--last", str(last), "--idle-timeout", "0")
+        result = subprocess.run([scripts / "openrouter-agent.sh", "--model-key", "openrouter-free-router",
+                                 "--prompt", "private task", "--last", str(last), "--idle-timeout", "0"],
+                                cwd=self.root, env={**self.env, "OPENROUTER_KEY_FILE": str(key)},
+                                text=True, capture_output=True, timeout=20)
         self.check_run(result, request_file, "openrouter-free-router", "openrouter-free-router", "vendor/free-answer", last)
         self.assertEqual(json.loads(request_file.read_text())["model"], "openrouter/free")
 
