@@ -62,6 +62,17 @@ class MeterTests(unittest.TestCase):
         self.assertTrue(meter["estimate"])
         self.assertFalse(meter["spent"])
 
+    def test_ledger_projection_reuses_revision_but_recomputes_rolling_time(self):
+        self.ledger([self.answer(1)])
+        with patch.object(pro, "_rows", wraps=pro._rows) as reads:
+            meter = lambda now: pro.usage(self.roster, self.root, "chatgpt-work", now=now)["used"]
+            self.assertEqual(meter(self.now), 1)
+            self.assertEqual(meter(self.now + dt.timedelta(days=7)), 0)
+            self.assertEqual(reads.call_count, 1)
+            self.ledger([self.answer(1), self.answer(2)])
+            self.assertEqual(meter(self.now), 2)
+            self.assertEqual(reads.call_count, 2)
+
     def test_api_wake_receipts_have_separate_rolling_deduplication(self):
         def receipt(age=0, **extra):
             return {"source": "extension", "level": 4,

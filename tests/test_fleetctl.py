@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from unittest.mock import patch
@@ -742,6 +743,67 @@ class SnapshotAutoRefreshTests(unittest.TestCase):
             fleetctl.refresh_stale_pools(state_dir, ["opencode-go"], roster=self._test_roster())
             fleetctl.refresh_stale_pools(state_dir, ["opencode-go"], roster=self._test_roster())
             self.assertEqual(self._calls(calls), 1)  # cooldown holds after the failure
+
+    def test_parallel_background_and_manual_refresh_share_one_reader_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            state = root / "state"
+            started, release, calls = (root / s for s in ("started", "release", "calls"))
+            helper = root / "usage-reader.py"
+            helper.write_text(f'''import datetime, json, pathlib, time
+with pathlib.Path({str(calls)!r}).open("a") as f:
+    f.write("launch\\n")
+pathlib.Path({str(started)!r}).touch()
+for _ in range(300):
+    if pathlib.Path({str(release)!r}).exists():
+        break
+    time.sleep(.01)
+now = datetime.datetime.now(datetime.timezone.utc)
+print(json.dumps({{"observed_at": now.isoformat(), "windows": {{"weekly": {{
+    "used_percent": 4, "reset_at": (now + datetime.timedelta(days=1)).isoformat()}}}}}}))
+''')
+            path = root / "overlay.json"
+            path.write_text(json.dumps({"schema_version": 3, "quota_pools": {"a": {"quota_refresh": {
+                "oracle": "command", "command": [sys.executable, str(helper)], "ttl_s": 300}}}}))
+            argv = [sys.executable, str(MODULE_PATH), "--overlay", str(path), "--state-dir", str(state)]
+            env = dict(os.environ, FLEET_NO_AUTO_REFRESH="0")
+            first = subprocess.Popen(argv + ["glance"], stdout=subprocess.DEVNULL, env=env)
+            try:
+                until = time.monotonic() + 3
+                while not started.exists() and first.poll() is None and time.monotonic() < until:
+                    time.sleep(.01)
+                self.assertTrue(started.exists())
+                second = subprocess.run(argv + ["codexbar-snapshot", "--json"], capture_output=True,
+                                        text=True, timeout=2, env=env)
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertIn("busy", json.loads(second.stdout)["a"]["reason"])
+                # A provider fetch cannot hold the runtime lock against dispatch writers.
+                with fleetctl.locked_runtime(state) as runtime:
+                    runtime.setdefault("pool_circuits", {})["a"] = {"test": True}
+            finally:
+                release.touch()
+                first.wait(timeout=6)
+            self.assertEqual(first.returncode, 0)
+            self.assertEqual(calls.read_text().splitlines(), ["launch"])
+            runtime = json.loads((state / "runtime.json").read_text())
+            self.assertEqual(runtime["quota_snapshots"]["a"]["windows"]["weekly"]["used_percent"], 4)
+            self.assertEqual(runtime["pool_circuits"]["a"], {"test": True})
+
+    def test_failure_backoff_doubles_and_success_resets_it(self):
+        pool, runtime = "a", {}
+        now = fleetctl.utc_now()
+        stamp = lambda elapsed: now + timedelta(seconds=elapsed)
+        fail = {"available": False, "reason": "offline"}
+        due = lambda elapsed: fleetctl.snapshot_needs_refresh(runtime, pool, ttl_s=300, now=stamp(elapsed))
+        self.assertTrue(fleetctl.record_gauge_result(runtime, pool, fail, fleetctl.iso(now)))
+        self.assertFalse(due(299))
+        self.assertTrue(due(300))
+        self.assertTrue(fleetctl.record_gauge_result(runtime, pool, fail, fleetctl.iso(stamp(300))))
+        self.assertFalse(due(899))
+        self.assertTrue(due(900))
+        self.assertTrue(fleetctl.record_gauge_result(runtime, pool, {"available": True}, fleetctl.iso(stamp(900))))
+        self.assertNotIn(pool, runtime["quota_refresh_errors"])
+        self.assertTrue(due(1020))
 
     def test_opt_out_env_skips_the_refresh_entirely(self):
         with tempfile.TemporaryDirectory() as tmp:

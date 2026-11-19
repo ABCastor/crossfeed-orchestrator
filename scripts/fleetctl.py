@@ -15,6 +15,7 @@ import copy
 import datetime as dt
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -941,6 +942,7 @@ REFRESH_NETWORK_TTL_S = int(os.environ.get("FLEET_SNAPSHOT_NETWORK_TTL_S", "1800
 # A cooldown so an unreachable oracle (quit, offline, logged out) costs one
 # failed attempt per cooldown window rather than one on every single call.
 REFRESH_COOLDOWN_S = int(os.environ.get("FLEET_SNAPSHOT_COOLDOWN_S", "120"))
+REFRESH_BACKOFF_CAP_S = 1800
 # Short by design: the routing pool answers in ~40ms and a dashboard pool in
 # ~1.3s, so a 5s wait means the oracle is wedged and the caller is better served by
 # proceeding on the stored snapshot than by blocking.
@@ -1446,12 +1448,49 @@ def snapshot_needs_refresh(
             pass  # unreadable stamp counts as stale
     last_attempt = (runtime.get("quota_refresh_attempts") or {}).get(pool)
     if last_attempt:
+        failure = (runtime.get("quota_refresh_errors") or {}).get(pool)
+        delay = cooldown_s
+        if isinstance(failure, dict) and cooldown_s > 0:
+            count = failure.get("consecutive_failures", 1)
+            count = min(8, max(1, count)) if type(count) is int else 1
+            base = max(ttl, cooldown_s)
+            delay = min(max(base, REFRESH_BACKOFF_CAP_S), base * 2 ** (count - 1))
         try:
-            if (now - parse_iso(last_attempt)).total_seconds() < cooldown_s:
+            if (now - parse_iso(last_attempt)).total_seconds() < delay:
                 return False
         except (TypeError, ValueError):
             pass
     return True
+
+
+@contextlib.contextmanager
+def _reader_claim(state_dir: Path, identity: Any) -> Iterator[bool]:
+    """One fetch per source and state store, including across CLI/console processes."""
+    folder = state_dir / "quota-reader-locks"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fingerprint = hashlib.sha256(repr(identity).encode("utf-8")).hexdigest()
+    fd = os.open(folder / (fingerprint + ".lock"), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+        else:
+            yield True
+    finally:
+        os.close(fd)
+
+
+def _filtered_observation(observed: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    if not observed.get("available") or not isinstance(config.get("windows"), list):
+        return observed
+    allowed = set(config["windows"])
+    result = dict(observed)
+    for key in ("windows", "idle_windows"):
+        result[key] = {k: v for k, v in observed.get(key, {}).items() if k in allowed}
+    if not result["windows"] and not result["idle_windows"]:
+        result.update(available=False, reason="no matching rate windows")
+    return result
 
 
 def refresh_stale_pools(
@@ -1462,102 +1501,90 @@ def refresh_stale_pools(
     timeout: int = REFRESH_TIMEOUT_S,
     roster: dict[str, Any] | None = None,
     force: bool = False,
+    *,
+    sources: dict[str, dict[str, Any]] | None = None,
+    recover_circuits: bool = False,
 ) -> dict[str, str]:
-    """Re-read any of `pools` whose snapshot has aged past its TTL from their oracle.
+    """Refresh due readers outside the runtime lock. A busy reader serves the cache.
 
-    An explicit console refresh uses force to bypass TTL, cooldown and auto-disable.
-    Failed observations still retain the last reading; pool circuits stay intact.
-
-    Refreshing at the point of read keeps every caller on the same quota evidence.
-    Failures reuse a last-good reading for at most six hours, marked stale; without
-    one the pool has GAUGE_ERROR, distinct from an unconfigured UNKNOWN gauge.
-
-    Never raises and never blocks a run: an oracle being unreachable preserves
-    the stored snapshot and records its failure separately. The fetch
-    happens OUTSIDE the runtime lock, so a slow oracle cannot stall a
-    concurrent lease acquisition, and a snapshot is only replaced by a strictly
-    newer observation, so a parallel writer or a manual override is never
-    clobbered. Pool circuits are deliberately left alone: an explicit quota error
-    stays authoritative until a human runs codexbar-snapshot, otherwise a 429
-    would be reopened by the next route and immediately hit again.
+    Group siblings before fetching and recheck freshness under a per-source claim.
+    Failed reads keep last-good evidence and never reset provider refusal circuits.
+    Manual recovery shares the same claim; only it can clear non-AGY circuits.
     """
     if auto_refresh_disabled() and not force:
         return {}
-    sources = quota_sources(roster)
-    wanted = [pool for pool in pools if pool in sources]
+    sources = quota_sources(roster) if sources is None else sources
+    wanted = list(dict.fromkeys(pool for pool in pools if pool in sources))
     if not wanted:
         return {}
+
+    def due(runtime, pool):
+        return snapshot_needs_refresh(runtime, pool, ttl_s=ttl_s, cooldown_s=cooldown_s, sources=sources)
+
+    outcomes: dict[str, str] = {}
     try:
         runtime = load_json(state_dir / "runtime.json", {}) or {}
-        stale = [
-            pool
-            for pool in wanted
-            if force or snapshot_needs_refresh(
-                runtime, pool, ttl_s=ttl_s, cooldown_s=cooldown_s, sources=sources
-            )
-        ]
+        stale = [pool for pool in wanted if force or due(runtime, pool)]
         if not stale:
             return {}
-        # Outside the lock on purpose: this is the part that can take seconds.
-        attempted_at = iso()
-        source_observations: dict[Any, dict[str, Any]] = {}
+        groups: dict[Any, list[str]] = {}
         for pool in stale:
-            cfg = sources[pool]
-            ident = _source_identity(cfg)
-            if ident not in source_observations:
+            groups.setdefault(_source_identity(sources[pool]), []).append(pool)
+        agy_pools = {lane.get("quota_pool") for lane in (roster or {}).get("lanes", [])
+                     if lane.get("harness") == "agy"}
+        for ident, requested in groups.items():
+            with _reader_claim(state_dir, ident) as claimed:
+                if not claimed:
+                    continue
+                if force:
+                    targets = requested
+                else:
+                    latest = load_json(state_dir / "runtime.json", {}) or {}
+                    if not any(due(latest, pool) for pool in requested):
+                        continue
+                    targets = [pool for pool, cfg in sources.items()
+                               if _source_identity(cfg) == ident and due(latest, pool)]
+                attempted_at = iso()
+                cfg = sources[requested[0]]
                 oracle_name = cfg.get("oracle", "codexbar")
                 adapter = ORACLE_REGISTRY.get(oracle_name)
-                if adapter:
-                    try:
-                        source_observations[ident] = adapter(cfg, timeout=timeout)
-                    except Exception as exc:
-                        source_observations[ident] = {"available": False,
-                                                      "reason": f"{oracle_name} oracle failed: {exc}"}
-                else:
-                    source_observations[ident] = {
-                        "available": False,
-                        "reason": f"unknown oracle: {oracle_name}",
-                    }
-
-        fetched: dict[str, dict[str, Any]] = {}
-        for pool in stale:
-            cfg = sources[pool]
-            ident = _source_identity(cfg)
-            obs = copy.deepcopy(source_observations[ident])
-            if obs.get("available") and "windows" in cfg:
-                allowed = set(cfg["windows"])
-                filtered = {k: v for k, v in obs.get("windows", {}).items() if k in allowed}
-                if "idle_windows" in obs:
-                    obs["idle_windows"] = {k: v for k, v in obs["idle_windows"].items() if k in allowed}
-                if filtered:
-                    obs["windows"] = filtered
-                else:
-                    obs["available"] = False
-                    obs["reason"] = "no matching rate windows"
-            fetched[pool] = obs
-        outcomes: dict[str, str] = {}
-        with locked_runtime(state_dir) as locked:
-            snapshots = locked.setdefault("quota_snapshots", {})
-            for pool, observed in fetched.items():
-                if not record_gauge_result(locked, pool, observed, attempted_at):
-                    outcomes[pool] = "kept newer refresh result"
-                    continue
-                if not observed.get("available"):
-                    outcomes[pool] = f"unavailable: {observed.get('reason')}"
-                    continue
-                existing = snapshots.get(pool)
-                if existing:
-                    try:
-                        if parse_iso(existing["observed_at"]) >= parse_iso(observed["observed_at"]):
-                            outcomes[pool] = "kept newer stored snapshot"
-                            continue
-                    except (KeyError, TypeError, ValueError):
-                        pass
-                snapshots[pool] = observed
-                outcomes[pool] = "refreshed"
-        return outcomes
+                try:
+                    observed = (adapter(cfg, timeout=timeout) if adapter else
+                                {"available": False, "reason": "unknown quota oracle"})
+                except Exception:  # the oracle's exception may contain credentials
+                    observed = {"available": False, "reason": f"{oracle_name} oracle failed"}
+                fetched = {pool: _filtered_observation(observed, sources[pool]) for pool in targets}
+                with locked_runtime(state_dir) as locked:
+                    for pool, result in fetched.items():
+                        outcome = _commit_gauge(locked, pool, result, attempted_at,
+                                                recover_circuit=(recover_circuits and pool not in agy_pools
+                                                                 and oracle_name != "antigravity"))
+                        if pool in wanted:
+                            outcomes[pool] = outcome
     except Exception:  # noqa: BLE001 - freshness is best-effort, never fatal
-        return {}
+        pass
+    return outcomes
+
+
+def _commit_gauge(runtime: dict[str, Any], pool: str, observed: dict[str, Any],
+                  attempted_at: str, *, recover_circuit: bool) -> str:
+    if not record_gauge_result(runtime, pool, observed, attempted_at):
+        return "kept newer refresh result"
+    if not observed.get("available"):
+        return f"unavailable: {observed.get('reason')}"
+    snapshots = runtime.setdefault("quota_snapshots", {})
+    existing = snapshots.get(pool)
+    if existing:
+        try:
+            if parse_iso(existing["observed_at"]) >= parse_iso(observed["observed_at"]):
+                return "kept newer stored snapshot"
+        except (KeyError, TypeError, ValueError):
+            pass
+    snapshots[pool] = observed
+    active = observed.get("windows") or {}
+    if recover_circuit and active and all(int(w["used_percent"]) < 100 for w in active.values()):
+        runtime.setdefault("pool_circuits", {}).pop(pool, None)
+    return "refreshed"
 
 
 def record_gauge_result(runtime: dict[str, Any], pool: str, observed: dict[str, Any],
@@ -1571,12 +1598,15 @@ def record_gauge_result(runtime: dict[str, Any], pool: str, observed: dict[str, 
                 return False
         except (TypeError, ValueError):
             pass
-    attempts[pool] = attempted_at  # failure is subject to the same cooldown
+    attempts[pool] = attempted_at
     errors = runtime.setdefault("quota_refresh_errors", {})
     if observed.get("available"):
         errors.pop(pool, None)
     else:
-        errors[pool] = {"attempted_at": attempted_at,
+        former = errors.get(pool)
+        count = former.get("consecutive_failures", 1) if isinstance(former, dict) else 0
+        count = min(8, max(1, count + 1)) if type(count) is int else 1
+        errors[pool] = {"attempted_at": attempted_at, "consecutive_failures": count,
                         "reason": str(observed.get("reason") or "oracle returned no usage")}
     return True
 
@@ -5594,64 +5624,43 @@ def codexbar_snapshot_command(
         items = list(sources.keys())
 
     results: dict[str, Any] = {}
-    with locked_runtime(state_dir) as runtime:
-        for item in items:
-            if item in sources:
-                pool_key = item
-                cfg = sources[item]
-            else:
-                matching = [p for p, c in sources.items() if (c.get("provider") or c.get("codexbar_provider")) == item]
-                if matching:
-                    pool_key = matching[0]
-                    cfg = sources[pool_key]
-                else:
-                    pool_key = CODEXBAR_POOL_ALIASES.get(item, item)
-                    cfg = {"oracle": "codexbar", "provider": item}
+    requested: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if item in sources:
+            pool_key, cfg = item, sources[item]
+        else:
+            match = next((p for p, c in sources.items()
+                          if (c.get("provider") or c.get("codexbar_provider")) == item), None)
+            pool_key = match or CODEXBAR_POOL_ALIASES.get(item, item)
+            cfg = sources.get(pool_key, {"oracle": "codexbar", "provider": item})
+        if pool_has_no_known_limit(roster, pool_key):
+            results[pool_key] = {"available": False, "reason": "no known limit; quota snapshots ignored"}
+        else:
+            requested[pool_key] = cfg
 
-            oracle_name = cfg.get("oracle", "codexbar")
-            if pool_has_no_known_limit(roster, pool_key):
-                results[pool_key] = {"available": False, "reason": "no known limit; quota snapshots ignored"}
-                continue
-            adapter = ORACLE_REGISTRY.get(oracle_name)
-            if not adapter:
-                results[item] = {"available": False, "reason": f"unknown oracle: {oracle_name}"}
-                continue
-
-            observed = adapter(cfg, timeout=getattr(args, "timeout", REFRESH_TIMEOUT_S))
-            attempted_at = iso()
-            if not observed.get("available"):
-                record_gauge_result(runtime, pool_key, observed, attempted_at)
-                results[item] = {"available": False, "reason": observed.get("reason")}
-                continue
-
-            if "windows" in cfg and isinstance(cfg["windows"], list):
-                allowed = set(cfg["windows"])
-                filtered = {k: v for k, v in observed.get("windows", {}).items() if k in allowed}
-                if filtered:
-                    observed["windows"] = filtered
-                else:
-                    observed["available"] = False
-                    observed["reason"] = "no matching rate windows"
-                    record_gauge_result(runtime, pool_key, observed, attempted_at)
-                    results[item] = {"available": False, "reason": observed.get("reason")}
-                    continue
-
-            record_gauge_result(runtime, pool_key, observed, attempted_at)
-            runtime.setdefault("quota_snapshots", {})[pool_key] = observed
-            agy_pool = any(l.get("harness") == "agy" and l.get("quota_pool") == pool_key
-                           for l in (roster or {}).get("lanes", []))
-            if not agy_pool and all(int(w["used_percent"]) < 100 for w in observed["windows"].values()):
-                runtime.setdefault("pool_circuits", {}).pop(pool_key, None)
-            state, evidence = current_pool_state(runtime, pool_key, utc_now(), roster=roster)
-            results[pool_key] = {
-                "available": True,
-                "state": state,
-                "band": task_band(state, evidence),
-                "bottleneck_used_percent": evidence.get("bottleneck_used_percent"),
-                "spend_down": evidence.get("spend_down") or [],
-                "observed_at": observed["observed_at"],
-                "windows": {n: w["used_percent"] for n, w in observed["windows"].items()},
-            }
+    outcomes = refresh_stale_pools(state_dir, requested, timeout=getattr(args, "timeout", REFRESH_TIMEOUT_S),
+                                   roster=roster, force=True, sources=requested, recover_circuits=True)
+    runtime = load_json(state_dir / "runtime.json", {}) or {}
+    for pool_key in requested:
+        outcome = outcomes.get(pool_key)
+        if outcome not in {"refreshed", "kept newer stored snapshot", "kept newer refresh result"}:
+            reason = outcome.removeprefix("unavailable: ") if outcome else "quota reader busy or unavailable"
+            results[pool_key] = {"available": False, "reason": reason}
+            continue
+        observed = runtime.get("quota_snapshots", {}).get(pool_key)
+        if not observed:
+            results[pool_key] = {"available": False, "reason": "no stored quota snapshot"}
+            continue
+        state, evidence = current_pool_state(runtime, pool_key, utc_now(), roster=roster)
+        results[pool_key] = {
+            "available": True,
+            "state": state,
+            "band": task_band(state, evidence),
+            "bottleneck_used_percent": evidence.get("bottleneck_used_percent"),
+            "spend_down": evidence.get("spend_down") or [],
+            "observed_at": observed["observed_at"],
+            "windows": {n: w["used_percent"] for n, w in observed.get("windows", {}).items()},
+        }
 
     if getattr(args, "json", False):
         print(json.dumps(results, indent=2, sort_keys=True))
@@ -6220,14 +6229,21 @@ def main() -> int:
                   render_brief(overview, verbose=args.verbose, roster=roster, runtime=runtime, lead=lead))
             return 0
         if args.command == "glance":
-            _menubar_spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
-            menubar = importlib.util.module_from_spec(_menubar_spec)
-            _menubar_spec.loader.exec_module(menubar)
             roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
             if args.force and not args.no_refresh:
                 refresh_stale_pools(state_dir, quota_sources(roster), roster=roster, force=True)
             else:
                 refresh(quota_sources(roster), roster)
+            # The scheduled poll discards its output. Do not scan ledgers or
+            # build an overview only to render it to /dev/null.
+            try:
+                if os.path.samestat(os.fstat(sys.stdout.fileno()), os.stat(os.devnull)):
+                    return 0
+            except (OSError, ValueError, AttributeError):
+                pass
+            _menubar_spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
+            menubar = importlib.util.module_from_spec(_menubar_spec)
+            _menubar_spec.loader.exec_module(menubar)
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             overview = fleet_overview(roster, runtime, state_dir)
             lead = resolve_lead_pool(roster, args.lead)

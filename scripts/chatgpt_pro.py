@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
 import math
 from pathlib import Path
 import re
+import threading
 
 WEEK = 7 * 86400
+_LEDGER_LOCK = threading.Lock()
 
 
 def is_pro(lane):
@@ -49,6 +52,36 @@ def wake_stamp(receipt):
     return _stamp(receipt.get("observed_at"))
 
 
+@functools.lru_cache(maxsize=4)
+def _pro_ledger(path, revision):
+    """Project only fields needed by the meter; never retain prompts or full rows."""
+    result = []
+    for row in _rows(path):
+        if row.get("harness") != "chatgpt-chat":
+            continue
+        selector = row.get("selector")
+        if not isinstance(selector, str):
+            continue
+        stamp = _stamp(row.get("ended_at") or row.get("started_at"))
+        wake = wake_stamp(row.get("picker_receipt"))
+        run_id = row.get("idempotency_key") or row.get("run_id") or stamp
+        result.append((selector, row.get("quota_pool"), stamp, wake, row.get("returncode"), run_id))
+    return tuple(result)
+
+
+def _ledger_projection(state_dir):
+    path = (Path(state_dir) / "runs.jsonl").resolve()
+    with _LEDGER_LOCK:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            return ()
+        # The next call sees any concurrent append, replacement or edit. Clock
+        # rolloff is computed below on every use, not cached with the projection.
+        revision = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        return _pro_ledger(path, revision)
+
+
 def usage(roster, state_dir, pool, *, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     clock = now.timestamp()
@@ -58,21 +91,18 @@ def usage(roster, state_dir, pool, *, now=None):
     lanes = [lane for lane in roster.get("lanes", []) if is_pro(lane) and lane.get("quota_pool") == pool]
     selectors = {lane["selector"] for lane in lanes}
     requests, wakes, timestamps, seen, seen_wakes = 0, 0, [], set(), set()
-    for row in _rows(Path(state_dir) / "runs.jsonl"):
-        stamp = _stamp(row.get("ended_at") or row.get("started_at"))
-        if (row.get("harness") != "chatgpt-chat" or row.get("selector") not in selectors
-                or row.get("quota_pool") not in (None, pool)):
+    for selector, quota_pool, stamp, woke_at, returncode, run_id in _ledger_projection(state_dir):
+        if selector not in selectors or quota_pool not in (None, pool):
             continue
-        woke_at = wake_stamp(row.get("picker_receipt"))
-        wake_id = (row.get("selector"), woke_at)
+        wake_id = (selector, woke_at)
         if (woke_at is not None and clock - WEEK < woke_at <= clock
                 and wake_id not in seen_wakes):
             seen_wakes.add(wake_id)
             wakes += 1
             timestamps.append(woke_at)
-        if row.get("returncode") != 0 or stamp is None:
+        if returncode != 0 or stamp is None:
             continue
-        identity = (row.get("selector"), row.get("idempotency_key") or row.get("run_id") or stamp)
+        identity = (selector, run_id)
         if identity in seen:
             continue
         seen.add(identity)
