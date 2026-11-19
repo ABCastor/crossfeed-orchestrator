@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-import test_evidence as fixtures
+from tests import test_evidence as fixtures
 
 
 evidence = fixtures.evidence

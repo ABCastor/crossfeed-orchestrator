@@ -3774,6 +3774,8 @@ def parse_events(path: Path | None) -> dict[str, Any]:
     step_started = False
     final_text = ""
     usage_reported = False
+    request_events: dict[str, int] = {}
+    seen_request_events = set()
     errors: list[dict[str, Any]] = []
     if path and path.exists():
         for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -3782,7 +3784,18 @@ def parse_events(path: Path | None) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
             session_id = event.get("sessionID") or session_id
-            if event.get("type") == "step_start":
+            kind = event.get("type")
+            if kind in {"step_start", "step_finish", "session.step.started", "session.step.ended"}:
+                step = event.get("part") or event.get("data") or {}
+                event_id = step.get("id") or event.get("id")
+                key = (event.get("sessionID"), kind, event_id)
+                if not event_id or key not in seen_request_events:
+                    request_events[kind] = request_events.get(kind, 0) + 1
+                    if event_id:
+                        seen_request_events.add(key)
+                elif event_id:
+                    continue  # Do not count duplicate native usage records twice either.
+            if kind == "step_start":
                 step_started = True
                 final_text = ""
                 finish = None
@@ -3812,6 +3825,9 @@ def parse_events(path: Path | None) -> dict[str, Any]:
         "completed": not errors and ((finish == "stop") or
             (finish is None and step_started and bool(final_text.strip()))),
         "usage_reported": usage_reported,
+        # Starts and ends describe the same requests. Starts also capture the
+        # V2 projection that can omit a final step_finish. SDK retries are not visible.
+        "observed_model_requests": max(request_events.values(), default=0) or None,
         "tokens": totals,
         "estimated_cost_usd": cost,
         "errors": errors,
@@ -3921,6 +3937,9 @@ def record_run(
         },
         "returncode": returncode,
     }
+    if lane.get("quota_pool") == "opencode-go" and parsed["observed_model_requests"] is not None:
+        record["own_cost"] = {"opencode-go": {"requests_per_task": parsed["observed_model_requests"]}}
+        record["request_count_basis"] = "observed_native_steps"
     shared = {}
     if identity:
         shared = load_json(identity, {}) or {}

@@ -278,15 +278,15 @@ def _observations(overlay, records):
                     "synthetic_coding_only", "model_harness_specific"})
         pool = first("pool") or first("quota_pool") or lane.get("quota_pool")
         harness = first("harness") or lane.get("harness")
-        cost = next((r.get("own_cost") for r in ordered if isinstance(r.get("own_cost"), dict)), {})
         if pool:
-            # Measured usage only; never feed a selector's estimated cost back
-            # as an observation of the provider's debit.
-            if isinstance(cost.get(pool), dict):
-                cost = cost[pool]
+            # Wrapper and dispatch can share one task. Pick at most one measured
+            # value per field, not a selector estimate or an empty proof row.
+            recorded = [r["own_cost"] for r in ordered if isinstance(r.get("own_cost"), dict)]
+            recorded = [cost[pool] if isinstance(cost.get(pool), dict) else cost for cost in recorded]
             costs = bucket["own_cost"].setdefault(pool, {"percent_per_task": [], "requests_per_task": []})
             for field in costs:
-                value = _number(cost.get(field))
+                value = next((v for cost in recorded if (v := _number(cost.get(field))) is not None
+                              and (v > 0 if field == "requests_per_task" else v >= 0)), None)
                 if value is not None:
                     costs[field].append(value)
         # One priced worker telemetry row per task, no identity/proof duplicates.

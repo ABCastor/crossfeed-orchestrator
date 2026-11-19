@@ -23,11 +23,12 @@ from typing import Any
 
 try:
     import funding
+    import go_quota_tariffs
     from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
-    from scripts import funding
+    from scripts import funding, go_quota_tariffs
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
@@ -678,11 +679,14 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
         own if own.get("pool", row.get("pool")) == pool else {})
     measured = _number(own.get("percent_per_task"))
     flags = []
+    request_model = {}
     basis = "api_equivalent_allowance" if percent is not None else "unknown"
     if measured is not None and measured >= 0:
         percent, basis = measured, "measured"
-    elif percent is None and pool == "opencode-go":
-        table = roster.get("quota_pools", {}).get(pool, {}).get("request_estimates", {}).get("per_5h_week_month", {})
+    elif pool == "opencode-go":
+        profile = roster.get("quota_pools", {}).get(pool, {})
+        legacy = profile.get("request_estimates", {})
+        table = legacy.get("per_5h_week_month", {})
         estimates = table.get(option["model_key"], table.get(option["run_as"], {}))
         if isinstance(estimates, dict) and option["level"] in estimates:
             estimates = estimates[option["level"]]
@@ -690,16 +694,24 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
         minutes = binding.get("window_minutes")
         column = 2 if "month" in name else 1 if "week" in name else 0 if "5h" in name or "five_hour" in name else (
             0 if minutes and minutes <= 300 else 1 if minutes and minutes <= 10080 else 2 if minutes else None)
-        count = None
-        if column is not None:
+        count = go_quota_tariffs.typical_requests(profile.get("plan"), option["model_key"], column)
+        tariff_source = go_quota_tariffs.SOURCE if count is not None else legacy.get("source")
+        if count is None and column is not None:
             if isinstance(estimates, (list, tuple)) and len(estimates) > column:
                 count = _number(estimates[column])
             elif isinstance(estimates, dict):
                 count = _number(estimates.get(("5h", "week", "month")[column]))
         if count is not None and count > 0:
             requests = _number(own.get("requests_per_task"))
-            percent = 100 / count * (requests if requests is not None and requests >= 0 else 1)
+            observed = requests is not None and requests > 0
+            requests = requests if observed else 1
+            percent = 100 / count * requests
             basis = "go_request_estimate"
+            request_model = {"requests_per_task": requests, "typical_requests_in_window": count,
+                             "request_count_basis": "observed_median" if observed else "unmeasured_one_request",
+                             "request_estimate_source": tariff_source}
+            if not observed:
+                flags.append("go_task_request_count_unmeasured")
     nominal = _number(roster.get("quota_pools", {}).get(pool, {}).get("nominal_percent_per_task", .5))
     nominal = nominal if nominal is not None and nominal >= 0 else .5
     if percent is None and usd is not None and median_usd is not None and median_usd > 0:
@@ -709,7 +721,7 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
         flags.append("cost_unknown_nominal")
     return {"estimated_usd": usd, "percent": percent, "allowance_usd": allowance,
             "estimated": basis != "measured", "unknown": percent is None, "basis": basis,
-            "penalty_percent": percent if percent is not None else nominal}, flags
+            "penalty_percent": percent if percent is not None else nominal, **request_model}, flags
 
 
 # BR-DATA-001
