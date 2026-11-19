@@ -470,18 +470,24 @@ def _anchor_priors(sources_by_cell, admitted, assumptions):
                 if spread <= 1e-12:
                     continue
                 slope = sum((x - xbar) * (y - ybar) for x, y in pairs) / spread
-                if broad_proxy and (slope <= 0 or not min(x for x, _ in pairs) <= predictor["prior_mean"] <= max(x for x, _ in pairs)):
-                    continue  # No negative fits or extrapolation from the broad composite.
+                x = predictor["prior_mean"]
+                bounded = False
+                if broad_proxy:
+                    lo, hi = min(x for x, _ in pairs), max(x for x, _ in pairs)
+                    edge = min(hi, max(lo, x))
+                    if slope <= 0 or abs(x - edge) > (hi - lo) / 4:
+                        continue  # No negative fit, distant guesses or extrapolation.
+                    bounded, x = x != edge, edge
                 intercept = ybar - slope * xbar
                 residual = max(.1, math.sqrt(sum((y - intercept - slope * x) ** 2 for x, y in pairs) / (len(pairs) - 2)))
-                estimate = max(0.0, min(1.0, intercept + slope * predictor["prior_mean"]))
-                fits.append((len(pairs), residual, predictor["mapping"], estimate, predictor, slope, intercept))
+                estimate = max(0.0, min(1.0, intercept + slope * x))
+                fits.append((len(pairs), residual, predictor["mapping"], estimate, predictor, slope, intercept, bounded))
             if fits:
-                n, residual, _, estimate, predictor, slope, intercept = min(
+                n, residual, _, estimate, predictor, slope, intercept, bounded = min(
                     fits, key=lambda fit: (fit[2] == "aa_v5_coding_proxy", -fit[0], fit[1], fit[2]))
                 fit = {"predictor_metric": predictor["metric"], "predictor_mapping": predictor["mapping"],
-                       "n": n, "residual_sd": residual,
-                       "slope": slope, "intercept": intercept}
+                       "n": n, "residual_sd": residual, "slope": slope, "intercept": intercept,
+                       "boundary_clamped": bounded}
                 imputed = {**predictor, "metric": rule["metrics"][0], "value": None,
                            "mapping": name, "prior_mean": estimate, "weight": min(predictor["weight"], rule["weight"]),
                            "families": rule["families"], "imputed": True, "assumption": rule["assumption"]}

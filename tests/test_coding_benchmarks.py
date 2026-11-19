@@ -51,7 +51,15 @@ class CodingBenchmarksTests(unittest.TestCase):
             result = evidence.build_evidence(overlay, {"artificial_analysis": variants}, [])
             return next(r for r in result["rows"] if r["model_key"] == "m5")["q"]["coding-agent"]
         self.assertEqual(grade()["imputation"]["predictor_mapping"], "aa_v5_coding_proxy")
-        variants["m5"]["levels"]["high"]["index_version"] = 4
+        self.assertFalse(grade()["imputation"]["boundary_clamped"])
+        values = variants["m5"]["levels"]["high"]["evaluations"]
+        values["intelligence_index"] = 15
+        self.assertTrue(grade()["imputation"]["boundary_clamped"])
+        values["intelligence_index"] = 5
+        self.assertTrue(grade()["unknown"])
+        variant = variants["m5"]["levels"]["high"]
+        values["intelligence_index"] = 35
+        variant["index_version"] = 4
         self.assertTrue(grade()["unknown"])
 
     def test_go_flash_1017_uses_dated_catalog_identity(self):
