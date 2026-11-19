@@ -26,7 +26,7 @@ TERMINAL_BENCH_4 = {
 # The 1017 result is not for the older generic Flash ID.
 SNAPSHOT_TERMINAL_BENCH_4 = {("deepseek-v4.1-flash", "1017", "max"): (38.5, 3.8, None)}
 
-# Artificial Analysis model pages, v5, 2026-11-19. Exact effort rows,
+# Artificial Analysis model pages, v5. Exact effort rows,
 # (Terminal-Bench 4 score %, weighted Intelligence Index output tokens/task).
 # AA's Terminal-Bench measurements use a different setup from the official leaderboard.
 AA_CLAUDE_55 = {
