@@ -40,6 +40,47 @@ class CodingBenchmarksTests(unittest.TestCase):
         rows = evidence.build_evidence(overlay, {}, [], "2026-11-20")["rows"]
         self.assertTrue(all(r["q_by_stakes"]["high"]["coding-agent"]["unknown"] for r in rows))
 
+    def test_claude_page_cells_are_exact_and_effort_tokens_feed_cost(self):
+        from scripts import selector
+        opus, sonnet = "claude-opus-5-5", "claude-sonnet-5-5"
+        overlay = {"effort": {m: {"levels": {"claude": ["medium", "high", "max"]}}
+                              for m in (opus, sonnet)}}
+        catalog = {"artificial_analysis": {m: {"variants": [
+            {"effort": l, "price_1m_input": price / 5, "price_1m_output": price}
+            for l in ("medium", "high", "max")]}
+            for m, price in ((opus, 20), (sonnet, 10))}}
+        def build(telemetry=None):
+            with patch.object(evidence, "_observations", return_value=({}, telemetry or {})):
+                return {(r["model_key"], r["level"]): r for r in
+                        evidence.build_evidence(overlay, catalog, [], "2026-11-19")["rows"]}
+        rows = build()
+        med, high, max_ = rows[opus, "medium"], rows[opus, "high"], rows[sonnet, "max"]
+        self.assertEqual((med["sources"][0]["value"], high["sources"][0]["value"]), (52.5253, 56.5657))
+        self.assertTrue(med["sources"][0]["url"].endswith(opus))
+        self.assertEqual(max_["sources"][0]["source"], "terminal_bench")
+        def cost(row):
+            return selector._task_cost({}, {"pool": "claude"}, row, {}, .05)[0]
+        self.assertLess(cost(med)["percent"], cost(high)["percent"])
+        self.assertLess(cost(high)["percent"], cost(max_)["percent"])
+        self.assertIn("not known Claude Max weights", cost(med)["effort_proxy"]["weight_basis"])
+        observed = build({(opus, "medium"): {"out": [3100, 5000, 4000]}})[opus, "medium"]
+        self.assertEqual(observed["tokens_per_task"]["out"], 4000)
+        self.assertNotIn("token_estimate", observed)
+        overlay["model_cards"] = {opus: {"served_snapshot": "20261120"}}
+        changed = build()[opus, "medium"]
+        self.assertNotIn("token_estimate", changed)
+        self.assertFalse(changed["sources"])
+
+    def test_general_reasoning_fit_does_not_train_hard_benchmark_grade(self):
+        counts = {("synthetic-model", "high", "reasoning"): {"passes": 32, "trials": 32}}
+        catalog = fixtures.catalog({"intelligence_index": 42})
+        baseline = fixtures.cell(evidence.build_evidence(fixtures.overlay(), catalog, []))
+        with patch.object(evidence, "_observations", return_value=(counts, {})):
+            row = fixtures.cell(evidence.build_evidence(fixtures.overlay(), catalog, []))
+        self.assertGreater(row["q"]["reasoning"]["mean"], baseline["q"]["reasoning"]["mean"])
+        self.assertEqual(row["q_by_stakes"]["high"]["reasoning"]["mean"],
+                         baseline["q_by_stakes"]["high"]["reasoning"]["mean"])
+
     def test_reasoning_index_needs_versioned_coding_calibration(self):
         models = [f"m{i}" for i in range(6)]
         overlay = {"effort": {m: {"levels": {"codex": ["high"]}} for m in models}, "lanes": []}

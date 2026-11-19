@@ -745,9 +745,14 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
         flags.append("cost_relative_proxy")
     if percent is None:
         flags.append("cost_unknown_nominal")
+    effort_proxy = {}
+    if pool == "claude" and row.get("token_estimate") and basis in {"relative_proxy", "api_equivalent_allowance"}:
+        effort_proxy = {"effort_proxy": {**row["token_estimate"],
+                                        "tokens_per_task": row["tokens_per_task"],
+                                        "weight_basis": "API prices, not known Claude Max weights"}}
     return {"estimated_usd": usd, "percent": percent, "allowance_usd": allowance,
             "estimated": basis != "measured", "unknown": percent is None, "basis": basis,
-            "penalty_percent": percent if percent is not None else nominal, **request_model}, flags
+            "penalty_percent": percent if percent is not None else nominal, **request_model, **effort_proxy}, flags
 
 
 # BR-DATA-001

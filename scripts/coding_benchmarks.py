@@ -26,6 +26,21 @@ TERMINAL_BENCH_4 = {
 # The 1017 result is not for the older generic Flash ID.
 SNAPSHOT_TERMINAL_BENCH_4 = {("deepseek-v4.1-flash", "1017", "max"): (38.5, 3.8, None)}
 
+# Artificial Analysis model pages, v5, 2026-11-19. Exact effort rows,
+# (Terminal-Bench 4 score %, weighted Intelligence Index output tokens/task).
+# AA's Terminal-Bench measurements use a different setup from the official leaderboard.
+AA_CLAUDE_55 = {
+    "claude-opus-5-5": {
+        "low": (31.3131, 19060), "medium": (52.5253, 43817),
+        "high": (56.5657, 60071), "xhigh": (59.5960, 103395), "max": (59.5960, 173313),
+    },
+    "claude-sonnet-5-5": {
+        "low": (20.7071, 20856), "medium": (29.7980, 30746),
+        "high": (43.9394, 58421), "xhigh": (57.0707, 122205), "max": (63.6364, 285387),
+    },
+}
+AA_MODEL_PAGES = "https://artificialanalysis.ai/models/"
+
 TERMINAL_FIELDS = ("terminalbench_v4_0", "terminal_bench_4_0", "terminal_bench_4", "terminal_bench_4_score")
 CODING_FIELDS = ("artificial_analysis_coding_index", "coding_index")
 CODING_FAMILIES = ("coding-agent", "review", "debug")

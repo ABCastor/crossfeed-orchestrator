@@ -19,11 +19,13 @@ FAMILIES = ("coding-agent", "review", "debug", "repo-qa", "reasoning", "extracti
 try:
     from run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
     from coding_benchmarks import (CODING_FAMILIES, CODING_FIELDS, TERMINAL_FIELDS, READ_ON as TB4_DATE,
-                                   URL as TB4_URL, TERMINAL_BENCH_4, SNAPSHOT_TERMINAL_BENCH_4)
+                                   URL as TB4_URL, TERMINAL_BENCH_4, SNAPSHOT_TERMINAL_BENCH_4,
+                                   AA_CLAUDE_55, AA_MODEL_PAGES)
 except ModuleNotFoundError:
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
     from scripts.coding_benchmarks import (CODING_FAMILIES, CODING_FIELDS, TERMINAL_FIELDS, READ_ON as TB4_DATE,
-                                           URL as TB4_URL, TERMINAL_BENCH_4, SNAPSHOT_TERMINAL_BENCH_4)
+                                           URL as TB4_URL, TERMINAL_BENCH_4, SNAPSHOT_TERMINAL_BENCH_4,
+                                           AA_CLAUDE_55, AA_MODEL_PAGES)
 
 # This is the single assumptions table. Weights are reliability * independence;
 # each publisher contributes at most one prior-strength budget, not one per metric.
@@ -368,12 +370,16 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
                             "families": rule["families"], "assumption": rule["assumption"],
                             "heuristic": True, "id": raw.get("id"), "release_date": raw.get("release_date"),
                             "index_version": raw.get("index_version")})
-    if published and not any(s["mapping"] == "aa_terminal" for s in sources):
-        value, error, harness = published
+    # The public AA model page covers efforts the free API and official table omit.
+    page_cell = None if snapshot or ambiguous else AA_CLAUDE_55.get(model, {}).get(level)
+    if (published or page_cell) and not any(s["mapping"] == "aa_terminal" for s in sources):
+        value, error, harness = published or (page_cell[0], None, "Artificial Analysis")
         rule = assumptions["sources"]["aa_terminal"]
         age = max(0, (_date(read_on) - _date(TB4_DATE)).total_seconds() / 86400) if _date(read_on) else 0
-        sources.append({"source": "terminal_bench", "mapping": "aa_terminal", "metric": "terminal_bench_4",
-                        "value": value, "score_error_percent": error, "harness": harness, "url": TB4_URL,
+        sources.append({"source": "terminal_bench" if published else "artificial_analysis",
+                        "mapping": "aa_terminal", "metric": "terminal_bench_4",
+                        "value": value, "score_error_percent": error, "harness": harness,
+                        "url": TB4_URL if published else AA_MODEL_PAGES + model,
                         "read_on": TB4_DATE, "prior_mean": value / 100, "served_snapshot": snapshot,
                         "assumption": rule["assumption"], "families": rule["families"], "heuristic": True,
                         "weight": rule["weight"] * 2 ** (-age / assumptions["aggregation"]["freshness_half_life_days"])})
@@ -577,11 +583,27 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
                         "unknown": not bool(anchor), "basis": "external_transfer" if anchor else "unknown"}
                 strata["high"][family] = hard
                 strata["normal"][family] = hard if anchor else easy if easy_n else hard
+            if family == "reasoning" and anchor:
+                # Completion checks without a difficulty label do not establish
+                # hard-task fit. Keep them in the general posterior only.
+                strata["high"][family] = {**q[family], "mean": anchor["prior_mean"],
+                                           "sd": assumptions["aggregation"]["external_sd_floor"],
+                                           "basis": "external_transfer"}
         measured = telemetry.get((model, level), {})
-        tokens = {}
+        page_cell = (AA_CLAUDE_55.get(model, {}).get(level)
+                     if not ambiguous and not served_snapshot(overlay, model) else None)
+        tokens, token_estimate = {}, None
         for direction in ("in", "out"):
             values = measured.get(direction) or []
-            tokens[direction] = statistics.median(values) if values else assumptions["estimates"]["tokens_" + direction]
+            default = assumptions["estimates"]["tokens_" + direction]
+            if direction == "out" and not values and page_cell:
+                reference = AA_CLAUDE_55["claude-sonnet-5-5"]["high"][1]
+                default *= page_cell[1] / reference
+                token_estimate = {"source": AA_MODEL_PAGES + model, "benchmark": "AA Intelligence Index v5",
+                                  "output_tokens_per_eval_task": page_cell[1], "read_on": TB4_DATE,
+                                  "reference": "claude-sonnet-5-5/high", "reference_output_tokens": reference}
+                flags.append("tokens_out_effort_proxy")
+            tokens[direction] = statistics.median(values) if values else default
             flags.append("tokens_" + direction + ("_measured" if values else "_estimated"))
         price = {"in": None, "out": None}
         for direction, field in (("in", "price_1m_input"), ("out", "price_1m_output")):
@@ -612,6 +634,7 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
                 source_telemetry[source] = {'latency_s': statistics.median(values), 'trials': len(values), 'metric': metric}
         rows.append({"model_key": model, "model": model, "model_identity": model, "level": level, "q": q, "q_by_stakes": strata,
                      "sources": sources, "own": own, "own_cost": own_cost, "tokens_per_task": tokens,
+                     **({"token_estimate": token_estimate} if token_estimate else {}),
                      "own_provenance": {family: list(items.values()) for family, items in measured.get('provenance', {}).items()},
                      "source_telemetry": source_telemetry,
                      "provider_reported_models": sorted(measured.get('provider_reported_models', [])),
