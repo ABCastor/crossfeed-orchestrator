@@ -6,12 +6,13 @@ quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes
 
 - codex: Codex's own app server (`codex app-server`, `account/rateLimits/read`). Codex keeps
   its sign-in and renews it; this reader never sees a token.
+- codex-oauth: CodexBar's usage endpoint with Codex's existing ChatGPT sign-in. No renewal.
 - claude: Anthropic's usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`) with the
   sign-in Claude Code already keeps (macOS Keychain item `Claude Code-credentials`, else
   `~/.claude/.credentials.json`). Read only: an expired sign-in is reported, never renewed here,
   because renewing would rotate Claude Code's own credential.
-- antigravity: an operator-exported Antigravity CLI usage report. The reader never starts
-  the CLI: a failed silent sign-in can open a browser even in print mode without a terminal.
+- antigravity: an operator-exported usage report, or optionally a live quota summary from
+  an already-running local language server. Never starts the CLI or a login.
 - copilot: GitHub's Copilot entitlement endpoint (`GET https://api.github.com/copilot_internal/user`)
   with the GitHub CLI's own sign-in (`gh auth token`) or a declared key reference.
 
@@ -22,12 +23,15 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import http.client
 import importlib.util
 import json
 import os
+import re
 import selectors
 import shutil
 import signal
+import ssl
 import stat
 import subprocess
 import time
@@ -39,7 +43,7 @@ from typing import Any, Callable
 MAX_BODY_BYTES = 2_000_000
 
 # The Codex app server and OAuth endpoints have their own time limits.
-DEFAULT_TIMEOUTS = {"codex": 20, "claude": 10, "copilot": 10}
+DEFAULT_TIMEOUTS = {"codex": 20, "codex-oauth": 10, "claude": 10, "copilot": 10}
 
 
 def reader_timeout(oracle: str, config: dict[str, Any], timeout: int) -> int:
@@ -303,6 +307,94 @@ def observe_codex(config: dict[str, Any], timeout: int = 5,
     return parse_codex(result) or unavailable(CODEX_SOURCE, "malformed", "Codex reported no rate-limit windows")
 
 
+# ---- Codex OAuth (CodexBar v0.67.0; see NOTICE) ----------------------------------------------------
+CODEX_OAUTH_SOURCE = "codex-oauth-usage"
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
+    """Map only quota windows; reset credits and spend-control data are not time windows."""
+    root = _mapping(payload)
+    windows: dict[str, Any] = {}
+    idle: dict[str, Any] = {}
+    limits = [(None, None, root.get("rate_limit"))]
+    additional = root.get("additional_rate_limits")
+    if isinstance(additional, list):
+        for raw in additional:
+            row = _mapping(raw)
+            scope = _label(row.get("limit_name"))
+            feature = _label(row.get("metered_feature"))
+            key = _slug(feature or scope or "")
+            if key:
+                limits.append((key, scope or feature, row.get("rate_limit")))
+    for key, scope, limit in limits:
+        for slot in ("primary_window", "secondary_window"):
+            win = _mapping(_mapping(limit).get(slot))
+            seconds, reset, used = (win.get(field) for field in ("limit_window_seconds", "reset_at", "used_percent"))
+            if (type(seconds) is not int or not 0 < seconds <= 366 * 86400
+                    or type(reset) is not int or reset <= 0 or type(used) is not int or not 0 <= used <= 100):
+                continue
+            minutes = seconds // 60 or None
+            name = _duration_name(minutes)
+            label = _duration_label(minutes)
+            if key:
+                name, label = f"{key}-{name}", f"{scope} only"
+            if name in windows or name in idle:
+                name = f"{name}-{slot}"
+            _add(windows, idle, name, used, _parse_time(reset), minutes, label)
+    if not windows:
+        return None
+    plan = root.get("plan_type")
+    return _snapshot(CODEX_OAUTH_SOURCE, windows, idle,
+                     plan.strip().capitalize() if isinstance(plan, str) else None, observed_at)
+
+
+def _owner_file(path: Path) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise OSError("not an owner-only file")
+        return handle.read(MAX_BODY_BYTES + 1)
+
+
+def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
+                        opener: Callable[..., Any] | None = None) -> dict[str, Any]:
+    """Read Codex's already-issued token. Never start Codex or renew/sign in."""
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    try:
+        credentials = _mapping(_json(_owner_file(home / "auth.json").decode("utf-8")))
+    except (OSError, ValueError, RecursionError):
+        credentials = {}
+    tokens = _mapping(credentials.get("tokens"))
+    token, account = tokens.get("access_token"), tokens.get("account_id")
+    if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,16000}", token):
+        return unavailable(CODEX_OAUTH_SOURCE, "no-auth", "No owner-only Codex ChatGPT sign-in available")
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "CodexBar", "Accept": "application/json"}
+    if isinstance(account, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account):
+        headers["ChatGPT-Account-Id"] = account
+    try:
+        open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
+        status, body = _http_get(CODEX_USAGE_URL, headers, reader_timeout("codex-oauth", config, timeout), open_url)
+        if status == 200:
+            return parse_codex_oauth(_json(body)) or unavailable(
+                CODEX_OAUTH_SOURCE, "malformed", "Codex reported no OAuth rate-limit windows")
+        if status in (401, 403):
+            return unavailable(CODEX_OAUTH_SOURCE, "unauthorized", "Codex ChatGPT sign-in was rejected; no renewal attempted")
+        return unavailable(CODEX_OAUTH_SOURCE, "failed", f"Codex usage endpoint returned HTTP {status}")
+    except (OSError, ValueError, http.client.HTTPException, RecursionError):
+        return unavailable(CODEX_OAUTH_SOURCE, "failed", "Codex usage request failed")
+
+
 # ---- Claude ---------------------------------------------------------------------------------------
 CLAUDE_SOURCE = "claude-oauth-usage"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -483,6 +575,141 @@ def parse_antigravity(stdout: str, observed_at: dt.datetime | None = None) -> di
     return _snapshot(AGY_SOURCE, windows, idle, None, observed_at)
 
 
+# CodexBar v0.67.0 local quota summary RPC and JSON decoder; see NOTICE.
+AGY_LOCAL_SOURCE = "antigravity-local"
+AGY_LOCAL_QUOTA = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+_AGY_BUCKET = re.compile(r"(gemini|3p|argon)-(5h|weekly|daily)\Z")
+
+
+def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
+    """A known shared-bucket ID is required; per-model quotas cannot substitute for it."""
+    root = _mapping(payload)
+    if root.get("code") not in (None, 0, "0", "OK"):
+        return None
+    groups = _mapping(root.get("response") or root.get("summary") or root).get("groups")
+    if not isinstance(groups, list):
+        return None
+    observed = observed_at or _now()
+    windows: dict[str, Any] = {}
+    idle: dict[str, Any] = {}
+    for raw in groups:
+        buckets = _mapping(raw).get("buckets")
+        if not isinstance(buckets, list):
+            continue
+        for item in buckets:
+            bucket = _mapping(item)
+            if bucket.get("disabled"):
+                continue
+            bucket_id = bucket.get("bucketId") or bucket.get("id")
+            match = _AGY_BUCKET.fullmatch(bucket_id.strip().lower()) if isinstance(bucket_id, str) else None
+            if not match:
+                continue
+            family, cadence = match.groups()
+            name = f"antigravity-quota-summary-{family}-{cadence}"
+            # Duplicate IDs make the selected quota ambiguous; never let one silently win.
+            if name in windows or name in idle:
+                return None
+            remaining = _mapping(bucket.get("remaining"))
+            fraction = bucket.get("remainingFraction")
+            if fraction is None:
+                fraction = remaining.get("remainingFraction")
+                if fraction is None and remaining.get("case") == "remainingFraction":
+                    fraction = remaining.get("value")
+            if type(fraction) not in (int, float) or not 0 <= fraction <= 1:
+                continue
+            minutes = AGY_WINDOW_MINUTES[cadence]
+            reset = _parse_time(bucket.get("resetTime"))
+            label = {"gemini": "Gemini", "3p": "Claude/GPT", "argon": "Argon"}[family]
+            _add(windows, idle, name, _percent(100 * (1 - fraction)), reset, minutes,
+                 f"{label} {AGY_WINDOW_WORDS[cadence]}")
+    return _snapshot(AGY_LOCAL_SOURCE, windows, idle, None, observed) if windows or idle else None
+
+
+def _agy_reuse_target(deadline: float) -> list[tuple[int, str]]:
+    """Return listening loopback ports on exactly one recognised, same-UID process.
+
+    No spawn or CLI discovery invocation: ps/lsof only inspect an existing process.
+    Ignore CLI overrides and never pass CSRF data on a subprocess command line.
+    """
+    def run(argv):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, errors="replace", timeout=remaining, check=True).stdout
+
+    rows = run(["/bin/ps", "-axww", "-o", "pid=,uid=,comm="])
+    cli = (Path.home() / ".local/bin/agy").resolve()
+    candidates = []
+    for line in rows.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) != 3 or fields[1] != str(os.getuid()) or not fields[0].isdigit():
+            continue
+        pid, _, executable = fields
+        path = Path(executable)
+        desktop = (executable.startswith(("/Applications/Antigravity.app/Contents/",
+                                         "/Applications/Antigravity IDE.app/Contents/",
+                                         "/Applications/Gemini.app/Contents/"))
+                   and re.fullmatch(r"language[-_]server(?:[-_][a-z0-9]+)*", path.name))
+        if path.is_absolute() and (path == cli or desktop):
+            candidates.append((pid, executable, bool(desktop)))
+    # Two servers might be signed into different Google accounts. Do not guess.
+    if len(candidates) != 1:
+        return []
+    pid, executable, desktop = candidates[0]
+    args = run(["/bin/ps", "-ww", "-p", pid, "-o", "command="]).strip()
+    if not (args == executable or args.startswith(executable + " ") or
+            args == cli.name or args.startswith(cli.name + " ")):
+        return []
+    match = re.search(r"(?:^|\s)--csrf_token(?:=|\s+)([A-Za-z0-9._-]{1,512})(?=\s|$)", args)
+    if desktop and not match:
+        return []
+    ports = run(["/usr/sbin/lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"])
+    result = []
+    for raw in ports.splitlines():
+        match_port = re.fullmatch(r"n127\.0\.0\.1:(\d{1,5})", raw)
+        if match_port and 0 < (port := int(match_port[1])) <= 65535:
+            result.append((port, match[1] if match else ""))
+    return list(dict.fromkeys(result))[:8]
+
+
+def _agy_local_request(port: int, csrf: str, timeout: float) -> Any:
+    # AGY uses a self-signed TLS certificate. Only connect to 127.0.0.1 and a
+    # listener on the selected process; http.client follows no redirects/proxy.
+    conn = http.client.HTTPSConnection("127.0.0.1", port, timeout=timeout,
+                                       context=ssl._create_unverified_context())
+    headers = {"Content-Type": "application/json", "Connect-Protocol-Version": "1"}
+    if csrf:
+        headers["X-Codeium-Csrf-Token"] = csrf
+    try:
+        conn.request("POST", AGY_LOCAL_QUOTA, b'{"forceRefresh":true}', headers)
+        with conn.getresponse() as reply:
+            if reply.status == 200:
+                return _json(reply.read(MAX_BODY_BYTES + 1).decode("utf-8"))
+        return None
+    finally:
+        conn.close()
+
+
+def _observe_running_antigravity(timeout: int) -> dict[str, Any] | None:
+    deadline = time.monotonic() + max(1, min(timeout, 8))
+    try:
+        targets = _agy_reuse_target(deadline)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    for port, csrf in targets:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            result = parse_antigravity_local(_agy_local_request(port, csrf, min(remaining, 2)))
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            continue
+        if result:
+            return result
+    return None
+
+
 def agy_report_path(config: dict[str, Any]) -> Path:
     configured = config.get("path")
     if configured is not None:
@@ -493,12 +720,15 @@ def agy_report_path(config: dict[str, Any]) -> Path:
 
 # BR-QUOTA-001
 def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, Any]:
-    """Read a finished operator export; no process, credential read or network call.
+    """Read an operator export, or explicitly opt into reusing a running server.
 
-    Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Even with
-    no terminal, AGY has started OAuth after a keyring timeout; checking lock/idle state
-    cannot close that race. Re-reading an export never advances its observation time.
+    Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Re-reading
+    an export never advances its observation time.
     """
+    if config.get("reuse_running") is True:
+        result = _observe_running_antigravity(timeout)
+        if result:
+            return result
     try:
         path = agy_report_path(config)
         # Nonblocking open and fstat on the same descriptor avoid hanging on a FIFO
@@ -516,7 +746,10 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
                 return unavailable(AGY_SOURCE, "stale", "Antigravity usage export is older than 15 minutes")
             body = report.read(MAX_BODY_BYTES + 1)
     except FileNotFoundError:
-        return unavailable(AGY_SOURCE, "no-report", "No Antigravity usage export; automatic CLI sign-in is disabled")
+        reason = ("No usable running Antigravity quota server or usage export; automatic CLI sign-in is disabled"
+                  if config.get("reuse_running") is True else
+                  "No Antigravity usage export; automatic CLI sign-in is disabled")
+        return unavailable(AGY_SOURCE, "no-report", reason)
     except (OSError, TypeError, ValueError, RuntimeError):
         return unavailable(AGY_SOURCE, "failed", "Antigravity usage export could not be read")
     try:
@@ -620,6 +853,7 @@ def observe_copilot(config: dict[str, Any], timeout: int = 5, opener: Callable[.
 
 OBSERVERS: dict[str, Callable[..., dict[str, Any]]] = {
     "codex": observe_codex,
+    "codex-oauth": observe_codex_oauth,
     "claude": observe_claude,
     "antigravity": observe_antigravity,
     "copilot": observe_copilot,

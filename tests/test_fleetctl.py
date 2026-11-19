@@ -855,6 +855,7 @@ class SnapshotAutoRefreshTests(unittest.TestCase):
             self.assertEqual(self._calls(calls), 1)
 
     def _multi_window_codexbar(self, tmp):
+        # Synthetic source: the real CodexBar Antigravity provider may spawn AGY.
         calls = Path(tmp) / "calls.log"
         script = Path(tmp) / "multi_codexbar"
         code = f"""#!/usr/bin/env python3
@@ -864,7 +865,7 @@ with open({json.dumps(str(calls))}, "a", encoding="utf-8") as fh:
 now = dt.datetime.now(dt.timezone.utc)
 def iso(d): return d.isoformat().replace("+00:00", "Z")
 print(json.dumps([{{
-    "provider": "antigravity",
+    "provider": "fixture",
     "usage": {{
         "primary": {{"usedPercent": 10, "resetsAt": iso(now + dt.timedelta(hours=5))}},
         "secondary": {{"usedPercent": 20, "resetsAt": iso(now + dt.timedelta(days=2))}},
@@ -891,7 +892,7 @@ print(json.dumps([{{
                     "antigravity-gemini": {
                         "quota_refresh": {
                             "oracle": "codexbar",
-                            "provider": "antigravity",
+                            "provider": "fixture",
                             "ttl_s": 1800,
                             "windows": ["antigravity-quota-summary-gemini-5h"],
                         }
@@ -914,7 +915,7 @@ print(json.dumps([{{
                     "antigravity-gemini": {
                         "quota_refresh": {
                             "oracle": "codexbar",
-                            "provider": "antigravity",
+                            "provider": "fixture",
                             "ttl_s": 1800,
                         }
                     }
@@ -940,7 +941,7 @@ print(json.dumps([{{
                     "antigravity-gemini": {
                         "quota_refresh": {
                             "oracle": "codexbar",
-                            "provider": "antigravity",
+                            "provider": "fixture",
                             "ttl_s": 1800,
                             "windows": ["nonexistent-window"],
                         }
@@ -962,7 +963,7 @@ print(json.dumps([{{
                     "antigravity-gemini": {
                         "quota_refresh": {
                             "oracle": "codexbar",
-                            "provider": "antigravity",
+                            "provider": "fixture",
                             "ttl_s": 1800,
                             "windows": ["antigravity-quota-summary-gemini-5h"],
                         }
@@ -970,7 +971,7 @@ print(json.dumps([{{
                     "antigravity-3p": {
                         "quota_refresh": {
                             "oracle": "codexbar",
-                            "provider": "antigravity",
+                            "provider": "fixture",
                             "ttl_s": 1800,
                             "windows": ["primary", "secondary"],
                         }

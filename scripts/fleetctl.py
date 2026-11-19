@@ -1040,6 +1040,8 @@ def oracle_codexbar(config: dict[str, Any], timeout: int = REFRESH_TIMEOUT_S) ->
     provider = config.get("provider")
     if not provider:
         return {"available": False, "source": "codexbar", "reason": "missing provider in config"}
+    if config.get("codexbar_source") == "web" and provider == "claude":
+        return codexbar_observed("claude", timeout=timeout, source="web")
     return codexbar_observed(str(provider), timeout=timeout)
 
 
@@ -1163,7 +1165,7 @@ def _source_identity(config: dict[str, Any]) -> Any:
     oracle = config.get("oracle", "codexbar")
     if oracle == "codexbar":
         provider = config.get("provider")
-        return ("codexbar", str(provider) if provider is not None else None)
+        return ("codexbar", str(provider) if provider is not None else None, config.get("codexbar_source"))
     if oracle == "command":
         cmd = config.get("command")
         return ("command", tuple(cmd) if isinstance(cmd, list) else cmd)
@@ -1177,7 +1179,7 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "antigravity":
         # Multiple quota pools can consume different windows from the same export.
         try:
-            return (oracle, str(native_usage.agy_report_path(config)))
+            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
     if oracle in native_usage.OBSERVERS:
@@ -1234,7 +1236,7 @@ def _parse_codexbar(stdout: str) -> dict[str, Any] | None:
 
 
 def codexbar_observed(
-    provider: str, binary: str | None = None, timeout: int = 25
+    provider: str, binary: str | None = None, timeout: int = 25, *, source: str | None = None
 ) -> dict[str, Any]:
     """Shell `codexbar usage --provider <p> --format json` and normalise its
     output into the same snapshot shape `current_pool_state` consumes:
@@ -1246,9 +1248,16 @@ def codexbar_observed(
     with CodexBar's own reason, so the caller records a gauge error and can fall
     back to a recent successful reading rather than guessing."""
     binary = binary or CODEXBAR_BIN
+    if (not re.fullmatch(r"[a-z][a-z0-9-]*", provider)
+            or provider in {"all", "antigravity", "agy", "antigravity-cli"}):
+        return {"available": False, "source": "codexbar",
+                "reason": "CodexBar provider is not permitted for unattended quota reads"}
+    command = [binary, "usage", "--provider", provider, "--format", "json"]
+    if source == "web" and provider == "claude":
+        command += ["--source", "web"]
     try:
         proc = subprocess.run(
-            [binary, "usage", "--provider", provider, "--format", "json"],
+            command,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1262,16 +1271,16 @@ def codexbar_observed(
 
     obj = _parse_codexbar(proc.stdout)
     if obj is None:
-        detail = (proc.stderr or proc.stdout or "no output").strip()[:200]
-        return {"available": False, "provider": provider,
-                "reason": f"codexbar returned no usage JSON: {detail}"}
+        return {"available": False, "provider": provider, "reason": "CodexBar returned no usage JSON"}
     if obj.get("error"):
         err = obj["error"]
-        reason = err.get("message") if isinstance(err, dict) else str(err)
-        return {"available": False, "provider": provider, "reason": str(reason)}
+        raw = err.get("message") if isinstance(err, dict) else err
+        reason = "Not logged in to the CodexBar usage source" if re.search(
+            r"not logged in|not signed in|sign in|session expired", str(raw), re.I) else "CodexBar usage source failed"
+        return {"available": False, "provider": provider, "reason": reason}
     if proc.returncode != 0:
-        detail = (proc.stderr or f"exit status {proc.returncode}").strip()[:200]
-        return {"available": False, "provider": provider, "reason": detail}
+        return {"available": False, "provider": provider,
+                "reason": f"CodexBar exited with status {proc.returncode}"}
 
     usage = obj.get("usage") or {}
     pace = obj.get("pace") or {}

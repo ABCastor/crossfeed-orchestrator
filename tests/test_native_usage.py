@@ -248,6 +248,78 @@ class CopilotTests(unittest.TestCase):
             self.assertEqual((got["available"], got["kind"]), (False, "no-key"))
 
 
+class CodexBarPortTests(unittest.TestCase):
+    def test_codex_oauth_matches_recorded_weekly_and_does_not_spawn(self):
+        auth = json.dumps({"tokens": {"access_token": TOKEN, "account_id": "test-account"}}).encode()
+        def usage(request, timeout):
+            self.assertEqual(request.full_url, "https://chatgpt.com/backend-api/wham/usage")
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(request.get_header("Authorization"), f"Bearer {TOKEN}")
+            self.assertEqual(request.get_header("Chatgpt-account-id"), "test-account")
+            return Response(fixture("codex-wham-usage.json"))
+        with patch.object(native, "_owner_file", return_value=auth), \
+                patch.object(native.subprocess, "Popen") as spawn:
+            snap = native.observe_codex_oauth({}, opener=usage)
+        spawn.assert_not_called()
+        self.assertEqual(snap["plan"], "Pro")
+        self.assertEqual(snap["windows"], {"weekly": {"used_percent": 66, "window_minutes": 10080,
+                                                      "reset_at": "2026-11-22T10:39:25Z", "label": "Weekly"}})
+        self.assertNotIn(TOKEN, json.dumps(snap))
+
+    def test_codex_oauth_preserves_scoped_signal_and_ignores_invalid_slots(self):
+        answer = json.loads(fixture("codex-wham-usage.json"))
+        answer["rate_limit"]["secondary_window"] = {"used_percent": 0, "reset_at": 0, "limit_window_seconds": 18000}
+        answer["additional_rate_limits"] = [42, {"limit_name": "Spark", "metered_feature": "codex-spark",
+            "rate_limit": {"primary_window": {"used_percent": 100, "reset_at": 1795343965,
+                                              "limit_window_seconds": 18000}}}]
+        windows = native.parse_codex_oauth(answer)["windows"]
+        self.assertEqual(set(windows), {"weekly", "codex-spark-session"})
+        self.assertEqual(windows["codex-spark-session"]["label"], "Spark only")
+        self.assertEqual(windows["codex-spark-session"]["used_percent"], 100)
+
+    def test_antigravity_local_response_keeps_three_families_and_ignores_disabled(self):
+        payload = json.loads(fixture("agy-local-quota.json"))
+        summary = native.parse_antigravity_local(payload, NOW)
+        key = "antigravity-quota-summary-"
+        self.assertEqual({k: v["used_percent"] for k, v in summary["windows"].items()},
+                         {key + "gemini-5h": 9, key + "gemini-weekly": 18,
+                          key + "3p-weekly": 36, key + "argon-weekly": 3})
+        self.assertEqual(summary["windows"][key + "gemini-weekly"]["window_minutes"], 10080)
+        self.assertEqual(summary["windows"][key + "argon-weekly"]["reset_at"], "2026-06-20T00:39:55Z")
+        self.assertEqual(summary["idle_windows"][key + "3p-5h"]["used_percent"], 0)
+        payload["code"] = "unauthenticated"
+        self.assertIsNone(native.parse_antigravity_local(payload))
+
+    def test_antigravity_only_calls_verified_same_uid_loopback_listener(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(Path, "home", return_value=Path(folder)):
+            agy = (Path(folder) / ".local/bin/agy").resolve()
+            uid = os.getuid()
+            calls = []
+            def run(argv, **kwargs):
+                calls.append(argv[0])
+                if argv[:2] == ["/bin/ps", "-axww"]:
+                    text = f"7 {uid + 1} {agy}\n8 {uid} {agy}\n9 {uid} /tmp/agy\n"
+                elif argv[0] == "/bin/ps":
+                    text = f"{agy} --csrf_token=fixture-csrf\n"
+                else:
+                    self.assertEqual(argv[2:5], ["-a", "-p", "8"])
+                    text = "p8\nn*:3450\nn127.0.0.1:3451\nn192.168.1.2:3452\n"
+                return type("Result", (), {"stdout": text})()
+            with patch.object(native.subprocess, "run", side_effect=run), patch.object(
+                    native, "_agy_local_request", return_value=json.loads(fixture("agy-local-quota.json"))) as rpc:
+                snap = native.observe_antigravity({"reuse_running": True, "binary": "/tmp/forbidden"})
+            self.assertEqual(calls, ["/bin/ps", "/bin/ps", "/usr/sbin/lsof"])
+            self.assertEqual(rpc.call_args.args[:2], (3451, "fixture-csrf"))
+            self.assertEqual(snap["source"], "antigravity-local")
+            self.assertNotIn("fixture-csrf", json.dumps(snap))
+
+    def test_codexbar_cannot_be_a_backdoor_to_launch_antigravity(self):
+        with patch.object(fleetctl.subprocess, "run") as spawn:
+            for provider in ("agy", "all", "antigravity", "claude,antigravity"):
+                self.assertFalse(fleetctl.codexbar_observed(provider)["available"])
+        spawn.assert_not_called()
+
+
 class FleetWiringTests(unittest.TestCase):
     """The readers plug into the existing refresh: registry, one fetch per provider, honest failure."""
 
