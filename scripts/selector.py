@@ -417,6 +417,38 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
                                  "snapshot_or_window_pace" if value is not None else "unknown")}
 
 
+def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
+                       reference: float, fleet: Any) -> dict | None:
+    """Explicit weekly-equivalent service capacity, not cash or a quota reading."""
+    profile = roster.get("quota_pools", {}).get(pool, {}).get("value_capacity")
+    if profile is None:
+        return None
+    capacity = _number(profile.get("weekly_usd_equivalent")) if isinstance(profile, dict) else None
+    if capacity is None or capacity <= 0 or not isinstance(profile.get("source"), str) or not profile["source"].strip():
+        raise fleet.FleetError(f"{pool}: value_capacity needs positive weekly_usd_equivalent and source")
+    _, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
+                                          roster=roster, model_key=model)
+    applicable = set(evidence.get("applicable_windows", evidence.get("windows", {})))
+    observations = []
+    for name, window in evidence.get("windows", {}).items():
+        if name not in applicable:
+            continue
+        used = _number(window.get("used_percent"))
+        duration = _number(window.get("window_minutes"))
+        normalized_name = name.lower()
+        if used is not None and ("week" in normalized_name or "month" in normalized_name
+                                 or (duration is not None and duration >= 10080)):
+            observations.append((max(0., min(100., used)), name))
+    used, window = max(observations, default=(None, None))
+    remaining = capacity * (1 - used / 100) if used is not None else None
+    # Unknown capacity utilization never earns an abundance discount. The
+    # separate quota forecast still prices pace and short-window constraints.
+    return {"weekly_usd_equivalent": capacity, "remaining_usd_equivalent": remaining,
+            "window": window, "used_percent": used, "source": profile["source"],
+            "reference_usd_equivalent": reference,
+            "scarcity_penalty": reference / (reference + (remaining or 0.))}
+
+
 def window_routing_pace(window: dict, fleet: Any) -> dict | None:
     """The CodexBar pace of one window plus the signed value routing uses for it.
 
@@ -974,6 +1006,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     have_hard_grade = stakes == "high" and any(
         evidence_for(option).get("q_by_stakes", {}).get("high", {}).get(family, {}).get("unknown") is False
         for option in options)
+    capacity_reference = _number(policy.get("capacity_reference_usd_equivalent", 2.30))
+    if capacity_reference is None or capacity_reference <= 0:
+        raise fleet.FleetError("capacity_reference_usd_equivalent must be positive")
+    capacities = {}
     for option in options:
         row = evidence_for(option)
         strata = row.get("q_by_stakes", {})
@@ -1025,6 +1061,13 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         if _number(source.get("latency_s")) is not None:
             latency = _number(source["latency_s"])
         penalty = price * cost["penalty_percent"]
+        capacity_key = option["pool"], option["model_key"]
+        if capacity_key not in capacities:
+            capacities[capacity_key] = (_capacity_headroom(roster, runtime, *capacity_key, capacity_reference, fleet)
+                                        if option["funding"] == "included" else None)
+        capacity = capacities[capacity_key]
+        if capacity is not None:
+            penalty += capacity["scarcity_penalty"]
         if stakes == "high":
             penalty = min(penalty, high_cost_cap)
         score = quality if absolute or stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
@@ -1042,6 +1085,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         scored.append(dict(option, cash=cash, quality=quality, quality_basis=q.get("basis"),
                            q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
+                           **({"capacity": capacity} if capacity is not None else {}),
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
     # Missing cells are not a cheaper substitute for measured equal-mean cells.

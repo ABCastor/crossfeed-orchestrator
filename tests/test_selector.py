@@ -73,6 +73,31 @@ class SelectorTests(unittest.TestCase):
                 entry["default"] = "high"
                 entry.pop("stand_in_ceiling", None)
 
+    def test_absolute_headroom_breaks_equal_percent_tie_only_in_best_value(self):
+        self.only(["claude", "codex"])
+        models = "claude-sonnet-5-5", "gpt-6.1-sol"
+        allowed = f"claude:{models[0]}:high,codex:{models[1]}:high"
+        self.evidence([quality_row(models[0], mean=.81), quality_row(models[1], mean=.80)])
+        runtime = {"quota_snapshots": {}}
+        for pool in ("claude", "codex"):
+            snapshot = self.snapshot(pool, 10, 10)["quota_snapshots"][pool]
+            window = snapshot["windows"].pop("rolling")
+            snapshot["windows"]["weekly"] = dict(window, window_minutes=10080)
+            runtime["quota_snapshots"][pool] = snapshot
+        self.assertEqual(self.select(runtime, allow=allowed)["top3"][0]["pool"], "claude")
+        for pool, capacity in (("claude", 2.30), ("codex", 46.00)):
+            self.roster["quota_pools"][pool]["value_capacity"] = {
+                "weekly_usd_equivalent": capacity, "source": "test scenario"}
+        best = self.select(runtime, allow=allowed)
+        self.assertEqual(best["choice"]["pool"], "codex")
+        self.assertAlmostEqual(best["choice"]["capacity"]["remaining_usd_equivalent"], 41.4)
+        self.assertAlmostEqual(best["top3"][1]["capacity"]["remaining_usd_equivalent"], 2.07)
+        absolute = self.select(runtime, allow=allowed, value_mode="absolute-best")
+        self.assertEqual(absolute["choice"]["pool"], "claude")
+        unknown = selector._capacity_headroom(self.roster, {}, "codex", models[1], 2.3, fleetctl)
+        self.assertIsNone(unknown["remaining_usd_equivalent"])
+        self.assertEqual(unknown["scarcity_penalty"], 1.0)
+
     def test_allow_filters_before_scoring_and_records_every_receipt(self):
         self.only(["codex"])
         self.evidence([quality_row("gpt-6-astra", mean=.99), quality_row("gpt-6.1-sol", mean=.6)])
