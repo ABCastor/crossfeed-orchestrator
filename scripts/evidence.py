@@ -135,13 +135,13 @@ def served_snapshot(overlay, model):
         for lane in overlay.get("lanes", []) if lane.get("model_key") == model and lane.get("served_snapshot")), None)
 
 
-def current_aa_variants(variants, overlay, model):
+def current_aa_variants(variants, overlay, model, *, snapshot=None):
     """Resolve served snapshot identity, then newest release within one level.
 
     Raw variants remain in the catalog. Equal-date conflicting rows stay
     ambiguous rather than letting input order select a benchmark silently.
     """
-    served = served_snapshot(overlay, model)
+    served = snapshot or served_snapshot(overlay, model)
     candidates = []
     for row in variants:
         slug = str(row.get("slug") or "")
@@ -150,7 +150,9 @@ def current_aa_variants(variants, overlay, model):
             declared = str(served)
             compact = declared.replace("-", "")
             declared_dates = re.findall(r"(?:^|-)(\d{8}|\d{4})(?=-|$)", declared)
-            if slug != declared and not any(s in declared_dates or s == compact or s == compact[-4:] for s in snapshots):
+            release = str(row.get("release_date") or "").replace("-", "")
+            if slug != declared and not any(s in declared_dates or s == compact or
+                                            (s == compact[-4:] and release == compact) for s in snapshots):
                 continue
             if not compact.isdigit():
                 # A named snapshot identifies its stem too, not every preview
@@ -317,14 +319,18 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
         if canonical_model(key, overlay) == model:
             entry = (aa.get("levels") or {}).get(level)
             raw.extend(aa.get("variants") or (_variants(entry) if entry else _variants(aa)))
-    variants = current_aa_variants([v for v in raw if v.get("effort", level) == level], overlay, model)
+    snapshot = served_snapshot(overlay, model)
+    go_model = (catalog.get("go_models") or {}).get(model, {})
+    if (not snapshot and model == "deepseek-v4.1-flash" and go_model.get("name") == "DeepSeek V4.1 Flash 1017"
+            and go_model.get("release_date") == "2026-10-17"):
+        snapshot = "1017"
+    variants = current_aa_variants([v for v in raw if v.get("effort", level) == level], overlay, model, snapshot=snapshot)
     ambiguous = len(variants) > 1
     rows = []
     if not ambiguous and variants:
         row = variants[0]
         rows.append(("artificial_analysis", {**row, **{k: v for k, v in (row.get("evaluations") or {}).items()
                                                      if v is not None}}, row))
-    snapshot = served_snapshot(overlay, model)
     published = (SNAPSHOT_TERMINAL_BENCH_4.get((model, str(snapshot), level)) if snapshot
                  else TERMINAL_BENCH_4.get((model, level)))
     arena = catalog.get("lmarena") or {}

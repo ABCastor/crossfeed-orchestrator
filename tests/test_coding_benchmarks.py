@@ -19,15 +19,16 @@ class CodingBenchmarksTests(unittest.TestCase):
             {"slug": "synthetic-model-high-preview", "name": "Synthetic Preview (High)"},
             {"slug": "synthetic-model-1017-low", "name": "Synthetic (Low)"},
             {"slug": "synthetic-model-max", "name": "Synthetic (High)"},
+            {"slug": "synthetic-model", "name": "Synthetic (Max, Default Fallback)"},
         ]
         payload = {"data": rows, "pagination": {"page": 1, "total_pages": 1, "has_more": False}}
         with patch.dict(os.environ, {"AA_API_KEY": "fixture"}), patch.object(
                 market.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
             cell = market.fetch_artificial_analysis({"synthetic-model": ["syntheticmodel"]})["synthetic-model"]
-        self.assertEqual(len(cell["variants"]), 3)
+        self.assertEqual(len(cell["variants"]), 4)
         self.assertEqual(cell["levels"]["high"]["terminal_bench_4"], .63)
         self.assertNotIn("low", cell["levels"])
-        self.assertNotIn("max", cell["levels"])
+        self.assertEqual(cell["levels"]["max"]["slug"], "synthetic-model")
 
     def test_published_max_does_not_certify_high_or_a_changed_snapshot(self):
         model = "gpt-6-luna"
@@ -38,6 +39,16 @@ class CodingBenchmarksTests(unittest.TestCase):
         overlay["model_cards"] = {model: {"served_snapshot": "20261120"}}
         rows = evidence.build_evidence(overlay, {}, [], "2026-11-20")["rows"]
         self.assertTrue(all(r["q_by_stakes"]["high"]["coding-agent"]["unknown"] for r in rows))
+
+    def test_go_flash_1017_uses_dated_catalog_identity(self):
+        model = "deepseek-v4.1-flash"
+        overlay = {"effort": {model: {"levels": {"opencode": ["max"]}}}, "lanes": []}
+        generic = evidence.build_evidence(overlay, {}, [], "2026-11-19")["rows"][0]
+        self.assertTrue(generic["q_by_stakes"]["high"]["coding-agent"]["unknown"])
+        catalog = {"go_models": {model: {"name": "DeepSeek V4.1 Flash 1017", "release_date": "2026-10-17"}}}
+        row = evidence.build_evidence(overlay, catalog, [], "2026-11-19")["rows"][0]
+        self.assertEqual(row["sources"][0]["served_snapshot"], "1017")
+        self.assertEqual(row["sources"][0]["value"], 38.5)
 
     def test_fit_success_does_not_train_hard_or_debug(self):
         overlay = fixtures.overlay()

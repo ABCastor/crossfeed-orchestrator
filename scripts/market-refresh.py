@@ -142,7 +142,9 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
                 or version,
         }
         label = str(model.get("name") or "").lower().replace("non reasoning", "non-reasoning").replace("non thinking", "non-thinking")
-        labelled = re.search(r"\((" + effort_pattern + r")\)\s*$", label)
+        # AA appends harness configuration such as “Max, Default Fallback”.
+        # The first field of the final parenthesis is the named setting.
+        labelled = re.search(r"\((" + effort_pattern + r")(?:, [^()]*)?\)\s*$", label)
         slug_level = suffix[1] if suffix else None
         label_level = labelled[1] if labelled else None
         slug_level = "none" if slug_level in {"non-thinking", "non-reasoning"} else slug_level
