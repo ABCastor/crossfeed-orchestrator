@@ -2832,7 +2832,7 @@ def resolve_effort(
     lane = next((row for row in roster.get("lanes", [])
                  if model in (row.get("lane_id"), row.get("selector"))
                  and (not harness or row.get("harness") == harness)), None)
-    if not lane and harness == "agy" and model.startswith(("gemini-", "claude-")) and model.rsplit("-", 1)[-1] in ("low", "medium", "high", "max"):
+    if not lane and harness == "agy" and model.startswith(("gemini-", "claude-")) and model.rsplit("-", 1)[-1] in ("low", "medium", "high", "xhigh", "max"):
         # Explicit levels need not have a separate auto-routing lane. They still
         # belong to the same measured family and use that family's quota pool.
         lane = next((row for row in roster.get("lanes", []) if row.get("harness") == "agy"
@@ -3088,8 +3088,8 @@ def choose_lane(
         if lane.get("harness") == "agy":
             resolved = resolve_effort(roster, lane["model_key"], role, "agy", band=band)
             selector = lane.get("selector", "")
-            if resolved["effort"] and re.search(r"-(low|medium|high|max)$", selector):
-                desired = re.sub(r"-(low|medium|high|max)$", "-" + resolved["effort"], selector)
+            if resolved["effort"] and re.search(r"-(low|medium|high|xhigh|max)$", selector):
+                desired = re.sub(r"-(low|medium|high|xhigh|max)$", "-" + resolved["effort"], selector)
                 if desired != selector:
                     replacement = next((row for row in lanes.values()
                                         if row.get("selector") == desired and row.get("harness") == "agy"

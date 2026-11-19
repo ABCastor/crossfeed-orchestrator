@@ -296,8 +296,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 rejected.append(f"{label}/{requested}: wrapper has no effort flag")
                 continue
             actual = dict(option, level=level, effort=level, effort_reason=resolved["reason"], stand_in=stand_in)
-            if harness == "agy" and re.search(r"-(low|medium|high|max)$", actual["run_as"]):
-                actual["run_as"] = re.sub(r"-(low|medium|high|max)$", "-" + level, actual["run_as"])
+            if harness == "agy" and re.search(r"-(low|medium|high|xhigh|max)$", actual["run_as"]):
+                actual["run_as"] = re.sub(r"-(low|medium|high|xhigh|max)$", "-" + level, actual["run_as"])
             identity = (pool, harness, key, level)
             if identity not in seen:
                 seen.add(identity)

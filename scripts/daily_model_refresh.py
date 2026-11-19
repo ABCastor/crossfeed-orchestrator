@@ -31,7 +31,7 @@ def number(value):
 
 
 def model_key(selector):
-    return re.sub(r'-(low|medium|high|max)$', '', selector.split('/', 1)[-1])
+    return re.sub(r'-(low|medium|high|xhigh|max)$', '', selector.split('/', 1)[-1])
 
 
 def score_key(key):
@@ -366,6 +366,13 @@ def reconcile(source, catalogs, market, *, today=None):
             if lane.get('retired_by_refresh'):
                 lane.update(admission_status='candidate', access_status='unverified', roles=[])
                 lane.pop('retired_by_refresh')
+            # Repair earlier split keys only on unfunded AGY candidates. Never
+            # change the identity or funding of an admitted lane from discovery.
+            if (catalog['pool'] == 'antigravity-catalog' and catalog['harness'] == 'agy'
+                    and lane.get('admission_status') == 'candidate' and lane.get('access_status') == 'unverified'
+                    and not lane.get('roles') and lane['model_key'] == row['selector']
+                    and row['selector'].endswith('-xhigh') and row['model_key'] == row['selector'].removesuffix('-xhigh')):
+                lane['model_key'] = row['model_key']
             if row.get('free_promo'):
                 lane['free_promo'] = True
                 lane.setdefault('data_policy', 'public-only')
