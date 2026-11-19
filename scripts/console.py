@@ -561,15 +561,15 @@ def _limit_row(limit: dict[str, Any], pool: str = "", *, spare_allowed: bool = T
     used = int(limit["used_percent"])
     hot = used >= 75
     if limit["reset_at"] is None:
-        when = "not started yet"
+        reset = "reset not reported" if limit.get("reset_unknown") else "not started yet"
     else:
-        when = f'resets {html.escape(limit["resets"])}'
+        reset = f'resets {limit["resets"]}'
+    when = html.escape(reset)
     use = limit.get("spend_down") and spare_allowed and used < 90
     if use:
         when += ' <span class="use">· spare, use it</span>'
     classes = "lim" + (" hot" if hot else "") + (" full" if used >= 100 else "")
-    text = f'{limit["title"]}{", " + limit["scope"] if limit.get("scope") else ""}: {used}% used, ' + (
-        "not started yet" if limit["reset_at"] is None else f'resets {limit["resets"]}') + (
+    text = f'{limit["title"]}{", " + limit["scope"] if limit.get("scope") else ""}: {used}% used, {reset}' + (
         ", with allowance to spare" if use else "")
     return (f'<li class="{classes}" aria-label="{html.escape(text)}"><span class="ln">{title}{scope}</span>'
             f'{_meter(used, hot)}<span class="pc"><b class="num">{used}%</b></span>'

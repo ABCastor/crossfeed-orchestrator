@@ -1,0 +1,15 @@
+{
+  "generatedAt": "2026-11-19T16:58:51Z",
+  "enabledProviders": ["claude", "codex", "antigravity", "opencodego", "copilot", "openrouter"],
+  "entries": [{
+    "provider": "antigravity",
+    "updatedAt": "2026-11-19T16:58:50Z",
+    "primary": {"windowMinutes": 10080, "resetsAt": "2026-11-26T10:42:14Z", "usedPercent": 0.06278753280639648},
+    "secondary": {"windowMinutes": 300, "resetsAt": "2026-11-19T21:58:49Z", "usedPercent": 0},
+    "usageRows": [
+      {"title": "Gemini 5-hour", "id": "antigravity-quota-summary-gemini-5h", "percentLeft": 100},
+      {"title": "Gemini weekly", "id": "antigravity-quota-summary-gemini-weekly", "percentLeft": 99.9372124671936},
+      {"title": "Gemini weekly", "id": "antigravity-quota-summary-gemini-argon-wtu-weekly", "percentLeft": 100}
+    ]
+  }]
+}

@@ -577,8 +577,98 @@ def parse_antigravity(stdout: str, observed_at: dt.datetime | None = None) -> di
 
 # CodexBar v0.67.0 local quota summary RPC and JSON decoder; see NOTICE.
 AGY_LOCAL_SOURCE = "antigravity-local"
+AGY_WIDGET_SOURCE = "antigravity-codexbar-widget"
 AGY_LOCAL_QUOTA = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
 _AGY_BUCKET = re.compile(r"(gemini|3p|argon)-(5h|weekly|daily)\Z")
+_AGY_PREFIX = "antigravity-quota-summary-"
+_AGY_WIDGET_GROUP = "Y5PE65HELJ.com.steipete.codexbar"
+
+
+def _agy_bucket_id(value: Any) -> tuple[str, str] | None:
+    if not isinstance(value, str):
+        return None
+    bucket = value.strip().lower()
+    if bucket == "gemini-argon-wtu-weekly":
+        return "argon", "weekly"
+    match = _AGY_BUCKET.fullmatch(bucket)
+    return match.groups() if match else None
+
+
+def _agy_store(windows, idle, family, cadence, used, reset):
+    name = f"{_AGY_PREFIX}{family}-{cadence}"
+    label = {"gemini": "Gemini", "3p": "Claude/GPT", "argon": "Argon"}[family]
+    _add(windows, idle, name, _percent(used), reset, AGY_WINDOW_MINUTES[cadence],
+         f"{label} {AGY_WINDOW_WORDS[cadence]}")
+    return name
+
+
+def parse_antigravity_widget(payload: Any, now: dt.datetime | None = None) -> dict[str, Any] | None:
+    """Read CodexBar's published rows, without guessing missing families or resets."""
+    root, now = _mapping(payload), now or _now()
+    enabled, entries = root.get("enabledProviders"), root.get("entries")
+    if not isinstance(enabled, list) or "antigravity" not in enabled or not isinstance(entries, list):
+        return None
+    rows = [_mapping(e) for e in entries if _mapping(e).get("provider") == "antigravity"]
+    if len(rows) != 1:
+        return None
+    entry = rows[0]
+    observed = _parse_time(entry.get("updatedAt"))
+    if observed is None or not 0 <= (now - observed).total_seconds() <= AGY_REPORT_MAX_AGE_S:
+        return None
+    raw = entry.get("usageRows")
+    if not isinstance(raw, list):
+        return None
+    candidates = []
+    for value in raw:
+        row = _mapping(value)
+        raw_id, remaining = row.get("id"), row.get("percentLeft")
+        if not isinstance(raw_id, str) or not raw_id.startswith(_AGY_PREFIX):
+            continue
+        bucket = raw_id.removeprefix(_AGY_PREFIX)
+        cadence = next((c for c in AGY_WINDOW_MINUTES if bucket.endswith("-" + c)), None)
+        if cadence is None or type(remaining) not in (float, int) or not 0 <= remaining <= 100:
+            continue
+        candidates.append((bucket, cadence, 100 - remaining, _mapping(row.get("window"))))
+    main_windows = [_mapping(entry.get(key)) for key in ("primary", "secondary", "tertiary")]
+    windows, idle = {}, {}
+    for bucket, cadence, used, own in candidates:
+        family_cadence = _agy_bucket_id(bucket)
+        if not family_cadence:
+            continue
+        name = f"{_AGY_PREFIX}{'-'.join(family_cadence)}"
+        if name in windows or name in idle:
+            return None
+        minutes = AGY_WINDOW_MINUTES[cadence]
+        def same_window(value):
+            percent = value.get("usedPercent")
+            return (not value.get("isSyntheticPlaceholder") and value.get("windowMinutes") == minutes
+                    and type(percent) in (int, float) and abs(percent - used) <= 1e-9)
+        reset = _parse_time(own.get("resetsAt")) if same_window(own) else None
+        # This widget version drops reset clocks from named rows. Attach a slot
+        # clock only when its unrounded percentage and duration identify one row.
+        if (reset is None and used > 0
+                and sum(c == cadence and abs(u - used) <= 1e-9 for _, c, u, _ in candidates) == 1):
+            resets = {_parse_time(w.get("resetsAt")) for w in main_windows if same_window(w)} - {None}
+            if len(resets) == 1:
+                reset = resets.pop()
+        _agy_store(windows, idle, *family_cadence, used, reset)
+        if name in idle:
+            idle[name]["reset_unknown"] = True
+    return _snapshot(AGY_WIDGET_SOURCE, windows, idle, None, observed) if windows or idle else None
+
+
+def _observe_antigravity_widget() -> dict[str, Any] | None:
+    path = Path.home() / "Library" / "Group Containers" / _AGY_WIDGET_GROUP / "widget-snapshot.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+                return None
+            raw = handle.read(MAX_BODY_BYTES + 1)
+        return parse_antigravity_widget(_json(raw.decode("utf-8"))) if len(raw) <= MAX_BODY_BYTES else None
+    except (OSError, ValueError, RecursionError):
+        return None
 
 
 def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
@@ -600,12 +690,11 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
             bucket = _mapping(item)
             if bucket.get("disabled"):
                 continue
-            bucket_id = bucket.get("bucketId") or bucket.get("id")
-            match = _AGY_BUCKET.fullmatch(bucket_id.strip().lower()) if isinstance(bucket_id, str) else None
-            if not match:
+            family_cadence = _agy_bucket_id(bucket.get("bucketId") or bucket.get("id"))
+            if not family_cadence:
                 continue
-            family, cadence = match.groups()
-            name = f"antigravity-quota-summary-{family}-{cadence}"
+            family, cadence = family_cadence
+            name = f"{_AGY_PREFIX}{family}-{cadence}"
             # Duplicate IDs make the selected quota ambiguous; never let one silently win.
             if name in windows or name in idle:
                 return None
@@ -617,11 +706,10 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
                     fraction = remaining.get("value")
             if type(fraction) not in (int, float) or not 0 <= fraction <= 1:
                 continue
-            minutes = AGY_WINDOW_MINUTES[cadence]
             reset = _parse_time(bucket.get("resetTime"))
-            label = {"gemini": "Gemini", "3p": "Claude/GPT", "argon": "Argon"}[family]
-            _add(windows, idle, name, _percent(100 * (1 - fraction)), reset, minutes,
-                 f"{label} {AGY_WINDOW_WORDS[cadence]}")
+            _agy_store(windows, idle, family, cadence, 100 * (1 - fraction), reset)
+            if name in idle and fraction != 1:
+                idle[name]["reset_unknown"] = True
     return _snapshot(AGY_LOCAL_SOURCE, windows, idle, None, observed) if windows or idle else None
 
 
@@ -725,6 +813,10 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
     Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Re-reading
     an export never advances its observation time.
     """
+    if config.get("codexbar_widget") is True:
+        cached = _observe_antigravity_widget()
+        if cached:
+            return cached
     if config.get("reuse_running") is True:
         result = _observe_running_antigravity(timeout)
         if result:

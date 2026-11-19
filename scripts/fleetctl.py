@@ -773,7 +773,8 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    stale_agy = snapshot.get("source") == native_usage.AGY_SOURCE and age_s > native_usage.AGY_REPORT_MAX_AGE_S
+    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, native_usage.AGY_WIDGET_SOURCE}
+                 and age_s > native_usage.AGY_REPORT_MAX_AGE_S)
     confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
     # A console-observed 100% window stays exhausted until its console-stated
@@ -1181,7 +1182,8 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "antigravity":
         # Multiple quota pools can consume different windows from the same export.
         try:
-            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
+            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True,
+                    config.get("codexbar_widget") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
     if oracle in native_usage.OBSERVERS:
@@ -1271,18 +1273,24 @@ def codexbar_observed(
         return {"available": False, "provider": provider,
                 "reason": f"codexbar timed out after {timeout}s"}
 
+    def failure(raw, fallback):
+        # Report recognized failure categories, never the provider body or stderr.
+        message = str(raw or "")
+        status = re.search(r"\b(?:HTTP|returned)\s+([45]\d{2})\b", message, re.I)
+        if status:
+            fallback = f"CodexBar usage source returned HTTP {status[1]}"
+        elif re.search(r"not logged in|not signed in|sign in|session expired", message, re.I):
+            fallback = "Not logged in to the CodexBar usage source"
+        return {"available": False, "provider": provider, "reason": fallback}
+
     obj = _parse_codexbar(proc.stdout)
     if obj is None:
-        return {"available": False, "provider": provider, "reason": "CodexBar returned no usage JSON"}
+        return failure(proc.stderr, "CodexBar returned no usage JSON")
     if obj.get("error"):
         err = obj["error"]
-        raw = err.get("message") if isinstance(err, dict) else err
-        reason = "Not logged in to the CodexBar usage source" if re.search(
-            r"not logged in|not signed in|sign in|session expired", str(raw), re.I) else "CodexBar usage source failed"
-        return {"available": False, "provider": provider, "reason": reason}
+        return failure(err.get("message") if isinstance(err, dict) else err, "CodexBar usage source failed")
     if proc.returncode != 0:
-        return {"available": False, "provider": provider,
-                "reason": f"CodexBar exited with status {proc.returncode}"}
+        return failure(proc.stderr, f"CodexBar exited with status {proc.returncode}")
 
     usage = obj.get("usage") or {}
     pace = obj.get("pace") or {}
@@ -1552,7 +1560,7 @@ def refresh_stale_pools(
                     observed = (adapter(cfg, timeout=timeout) if adapter else
                                 {"available": False, "reason": "unknown quota oracle"})
                 except Exception:  # the oracle's exception may contain credentials
-                    observed = {"available": False, "reason": f"{oracle_name} oracle failed"}
+                    observed = {"available": False, "reason": f"{oracle_name} oracle transport failed"}
                 fetched = {pool: _filtered_observation(observed, sources[pool]) for pool in targets}
                 with locked_runtime(state_dir) as locked:
                     for pool, result in fetched.items():
@@ -1580,8 +1588,18 @@ def _commit_gauge(runtime: dict[str, Any], pool: str, observed: dict[str, Any],
                 return "kept newer stored snapshot"
         except (KeyError, TypeError, ValueError):
             pass
-    snapshots[pool] = observed
     active = observed.get("windows") or {}
+    if existing and observed.get("source") == native_usage.AGY_WIDGET_SOURCE:
+        # A percentage-only widget row cannot supersede an unexpired full window.
+        # Preserve the original snapshot so we do not restamp its provenance.
+        for name, window in existing.get("windows", {}).items():
+            if name not in active and window.get("used_percent") == 100:
+                try:
+                    if parse_iso(window["reset_at"]) > utc_now():
+                        return "kept newer stored snapshot"
+                except (KeyError, TypeError, ValueError):
+                    pass
+    snapshots[pool] = observed
     if recover_circuit and active and all(int(w["used_percent"]) < 100 for w in active.values()):
         runtime.setdefault("pool_circuits", {}).pop(pool, None)
     return "refreshed"
@@ -4768,6 +4786,7 @@ def pool_limits(
             "used_percent": int(window.get("used_percent", 0)),
             "state": _state_for_used(int(window.get("used_percent", 0))).lower(),
             "reset_at": None, "resets_in_s": None, "resets": "", "spend_down": False,
+            **({"reset_unknown": True} if window.get("reset_unknown") else {}),
             "pace": None,
         })
     limits.sort(key=lambda item: (item["minutes"] is None, item["minutes"] or 0, bool(item["scope"]), item["name"]))
@@ -5134,8 +5153,11 @@ def fleet_overview(
             "pro_usage": roster.get("chatgpt_pro_usage", {}).get(pool),
             "lanes": lane_counts.get(pool, 0),
         }
+        reading = snapshot or {}
+        display_only_fresh = (reading.get("source") == native_usage.AGY_WIDGET_SOURCE
+                              and evidence.get("confidence") == "direct")
         entry["limits"], entry["renews_at"] = pool_limits(
-            entry, windows, (snapshot or {}).get("idle_windows") if windows else None,
+            entry, windows, reading.get("idle_windows") if windows or display_only_fresh else None,
             evidence.get("spend_down") or [], now)
         if entry["gauge_error"]:
             # A last-good reading kept through a failed read is older than the clock it would be
@@ -5257,7 +5279,7 @@ def _limit_text(limit: dict[str, Any]) -> str:
     if limit["state"] in {"conserve", "critical", "full"}:
         text += f" {limit['state'].upper()}"
     if limit["reset_at"] is None:
-        return text + ", not started"
+        return text + (", reset not reported" if limit.get("reset_unknown") else ", not started")
     text += f", resets {limit['resets']} (in {format_duration(limit['resets_in_s'])})"
     if limit.get("pace"):
         text += f", {limit['pace']['words']}"
@@ -5414,6 +5436,9 @@ def render_brief(
             resets = format_duration(raw["seconds_to_reset"]) if raw else "-"
         elif pool.get("stale_age_s") is not None:
             used = "stale"
+        display_only = next((w for w in pool.get("limits", []) if w.get("reset_unknown")), None)
+        if display_only and used in {"-", "stale"}:
+            window, used, resets = display_only["title"], f"{display_only['used_percent']}% (display only)", "not reported"
         if pool.get("gauge_error"):
             used = (f"{used} (stale, {format_duration(quota['age_s'])} old)" if quota
                     else f"gauge error: {short_gauge_error(pool['gauge_error'])}")
@@ -6269,7 +6294,9 @@ def main() -> int:
             print(json.dumps(read_cards(state_dir, roster, fleet=sys.modules[__name__]), separators=(",", ":"), allow_nan=False))
             return 0
         if args.command == "console":
-            return run_console(args.overlay.expanduser(), state_dir, args.port, not args.no_open)
+            # An unattended service restart must not open a browser.
+            return run_console(args.overlay.expanduser(), state_dir, args.port,
+                               not args.no_open and sys.stdin.isatty())
         if args.command == "dashboard":
             print("https://opencode.ai/auth")
             return 0
