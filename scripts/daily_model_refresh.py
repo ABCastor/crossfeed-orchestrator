@@ -363,6 +363,10 @@ def reconcile(source, catalogs, market, *, today=None):
                 all_lanes.append(lane)
                 changes['added'].append(lane_id)
             successful.add(lane['lane_id'])
+            if lane.get('archived_by_owner'):
+                # Retained tombstones match catalog identities without reintroducing
+                # operator-archived routes into the admission queue.
+                continue
             if lane.get('retired_by_refresh'):
                 lane.update(admission_status='candidate', access_status='unverified', roles=[])
                 lane.pop('retired_by_refresh')
@@ -377,13 +381,21 @@ def reconcile(source, catalogs, market, *, today=None):
                 lane['free_promo'] = True
                 lane.setdefault('data_policy', 'public-only')
             price = row.get('price_1m')
-            if isinstance(price, dict) and all(number(price.get(k)) is not None for k in ('input', 'output')):
+            exact_price = isinstance(price, dict) and all(number(price.get(k)) is not None for k in ('input', 'output'))
+            if (lane.get('funding') == 'verified-free' and lane.get('admission_status') == 'active'
+                    and exact_price and any(price[k] != 0 for k in ('input', 'output'))):
+                # A known tariff change invalidates the admission. Do not move
+                # the lane to a billed pool or re-activate it on a later refresh.
+                lane.update(admission_status='retired', access_status='unverified', roles=[],
+                            free_promo=False, free_price_withdrawn_on=today)
+                changes['retired'].append(lane['lane_id'])
+            if exact_price:
                 if lane.get('price_1m') != price:
                     lane['price_1m'] = copy.deepcopy(price)
                     changes['prices'].append(lane['lane_id'])
             lane['market_scores'] = outside_scores(lane['model_key'], market)
             lane['catalog_checked_on'] = today
-            if isinstance(price, dict) and all(number(price.get(k)) is not None for k in ('input', 'output')):
+            if exact_price:
                 fresh.add(lane['lane_id'])
         # A listed model with no funding pool is a standing admission question,
         # not a failed check; report it once, separately.
@@ -463,8 +475,13 @@ def rerank(roster, changes, today, fresh, successful):
         lane_delta = any((role in l.get('roles', [])) != (l['lane_id'] in selected) for l in managed)
         if candidate == bands and not lane_delta:
             continue
+        # Preserve the shortlist as well as lane metadata. If a prior run
+        # stripped the role label but the owner still ranks the lane in a band,
+        # the ranking is enough evidence that automatic removal is not allowed.
+        shortlisted = {lane_id for entries in bands.values() if isinstance(entries, list) for lane_id in entries}
         demoted = sorted(l['lane_id'] for l in managed if l['lane_id'] in keep
-                         and role in l.get('roles', []) and l['lane_id'] not in selected)
+                         and (role in l.get('roles', []) or l['lane_id'] in shortlisted)
+                         and l['lane_id'] not in selected)
         if demoted:
             changes['held'].append(f"{role} (would demote {', '.join(demoted)})")
             continue
