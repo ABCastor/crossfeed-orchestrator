@@ -83,7 +83,8 @@ def parse(text, choices):
     return None
 
 
-def decide(kind, fields, *, lane=DEFAULT_LANE, data_class='private', fleetctl=None, timeout=300):
+def decide(kind, fields, *, lane=DEFAULT_LANE, data_class='private', fleetctl=None, timeout=300,
+           entitled_only=False):
     """Return {'answer', 'confidence', 'reason', 'lane', 'latency_s'} or None (no opinion)."""
     choices, _ = KINDS[kind]
     fleetctl = fleetctl or str(Path(__file__).resolve().with_name('fleetctl.py'))
@@ -98,6 +99,7 @@ def decide(kind, fields, *, lane=DEFAULT_LANE, data_class='private', fleetctl=No
             run = subprocess.run(
                 [sys.executable, fleetctl, 'dispatch', '--role', 'default', '--stakes', 'low',
                  '--data-class', data_class, '--allow', lane, '--mode', 'read-only',
+                 *(['--value-mode', 'absolute-best'] if entitled_only else []),
                  '--prompt-file', str(prompt_file), '--dir', str(work), '--last', str(answer_file)],
                 capture_output=True, text=True, timeout=timeout,
                 cwd=str(Path(fleetctl).resolve().parent.parent))

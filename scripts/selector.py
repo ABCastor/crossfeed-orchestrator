@@ -853,11 +853,13 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   modality: str = "text", allow: str | Path | None = None,
                   lead: str | None = None, fleet: Any = None,
                   target: tuple[str, str] | None = None, data_class: str | None = None,
-                  prompt: str | None = None, value_mode: str = "best-value") -> dict:
-    """Return choice/top3/lambdas and write an immutable replay receipt."""
+                  prompt: str | None = None, value_mode: str = "best-value",
+                  persist_receipts: bool = True) -> dict:
+    """Rank eligible options; read-only previews do not refresh or emit receipts."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
-    fleet.chatgpt_pro.refresh(roster, state_dir)
+    if persist_receipts:
+        fleet.chatgpt_pro.refresh(roster, state_dir)
     policy = roster.get("policy", {}).get("selector", {})
     if value_mode not in {"best-value", "absolute-best"}:
         raise fleet.FleetError(f"unknown value mode: {value_mode}")
@@ -1111,7 +1113,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     for item in scored + unknown_options:
         item["selection_probability"] = (1 - explore) * varied.get(id(item), 0.0) + (
             explore / len(unknown_options) if item["q"]["unknown"] and unknown_options else 0)
-    receipt = state_dir / "selections" / (str(uuid.uuid4()) + ".json")
+    receipt = state_dir / "selections" / (str(uuid.uuid4()) + ".json") if persist_receipts else None
     top3 = scored[:3]
     result = {"schema": "fleet-selection/v1", "choice": choice, "top3": top3,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
@@ -1128,9 +1130,11 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                          for item in candidates]},
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
               "pool_prices": prices, "pool_cash": pool_cash, "role": role, "family": family, "stakes": stakes,
-              "rejected": rejected, "allow": allow_list, "selection_file": str(receipt),
+              "rejected": rejected, "allow": allow_list, "selection_file": str(receipt) if receipt else None,
               "target": list(target) if target is not None else None,
               "lead": lead, "lead_pressure": pressure}
+    if receipt is None:
+        return result
     snapshot = json.loads(json.dumps(result))
     receipt_options = [choice] + [item for item in top3 if item is not choice]
     for index, option in enumerate(receipt_options):

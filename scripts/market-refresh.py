@@ -25,14 +25,16 @@ import os
 import re
 import urllib.request
 from pathlib import Path
-try:
+if __name__ == "__main__":
     import daily_model_refresh as daily
     import decide
+    import market_freshness as freshness
     from evidence import current_aa_variants, load_lmarena, write_evidence
     from coding_benchmarks import CODING_FIELDS, TERMINAL_FIELDS
-except ModuleNotFoundError:
+else:
     from scripts import daily_model_refresh as daily
     from scripts import decide
+    from scripts import market_freshness as freshness
     from scripts.evidence import current_aa_variants, load_lmarena, write_evidence
     from scripts.coding_benchmarks import CODING_FIELDS, TERMINAL_FIELDS
 
@@ -317,19 +319,18 @@ def extract_swebench(raw: str | None, tokens: dict[str, list[str]]) -> dict:
     return scores
 
 
-def second_opinion(lane: str, changes: dict, overlay: dict) -> str:
-    """Shadow review of the applied refresh by a cheap decision lane: a report line, never a gate."""
-    by_id = {l["lane_id"]: l for l in overlay.get("lanes", [])}
-    holders = {}
-    for role in daily.CHEAP_ROLES:
-        ranking = overlay.get("routing", {}).get("roles", {}).get(role, {}).get("quality_first", [])
-        holders[role] = [
-            f"{x} (AA {by_id.get(x, {}).get('market_scores', {}).get('aa_intelligence')}, "
-            f"price {by_id.get(x, {}).get('price_1m')}, data {by_id.get(x, {}).get('data_policy', 'default')})"
-            for x in ranking]
-    text = (daily.summary(changes) + "\nChanges: " + json.dumps(changes)
-            + "\nCheap roles after the refresh: " + json.dumps(holders))
-    verdict = decide.decide("refresh-review", {"Refresh result": text}, lane=lane, data_class="public")
+SHADOW_LANE = "opencode-go:deepseek-v4.1-flash:low"
+
+
+def second_opinion(lane: str, changes: dict, record: dict) -> str:
+    """Send one small aggregate batch; never send private catalog, quota or roster rows."""
+    if lane != SHADOW_LANE:
+        return "Second opinion (shadow): refused; expected the exact bounded Go Flash lane."
+    counts = {key: len(changes[key]) for key in ('added', 'retired', 'prices', 'roles', 'unknown', 'held')}
+    text = ("Daily roster: " + json.dumps(counts) + "\nCoverage: " + json.dumps(record.get('coverage', {}))
+            + "\nAlerts: " + json.dumps(record.get('alerts', [])))
+    verdict = decide.decide("refresh-review", {"Refresh result": text}, lane=lane, data_class="public",
+                            entitled_only=True, timeout=60)
     if not verdict:
         return f"Second opinion ({lane}, shadow): unavailable."
     return (f"Second opinion ({lane}, shadow): {verdict['answer']} "
@@ -484,20 +485,34 @@ def main() -> int:
         # Do not print external exception text or credentials in the report.
         report_lines.append("Daily roster: update refused; overlay retained or restored. Check catalog/roster validation.")
 
-    review_lane = overlay.get("policy", {}).get("model_refresh", {}).get("review_lane")
-    if isinstance(review_lane, str) and review_lane and not refresh_failed:
-        try:
-            report_lines.append(second_opinion(review_lane, changes, overlay))
-        except Exception:  # noqa: BLE001 - a shadow comment must never fail the refresh
-            report_lines.append(f"Second opinion ({review_lane}, shadow): unavailable.")
+    freshness_failed = False
+    grades = None
+    try:
+        freshness.fleet.atomic_json(catalog_path, catalog, allow_nan=False)
+        grades = write_evidence(STATE_DIR.parent, overlay, catalog)
+    except (OSError, ValueError):
+        freshness_failed = True
+        report_lines.append("Freshness alert: benchmark/grade rebuild failed; check local evidence inputs.")
+    record = {}
+    try:
+        record = freshness.publish(STATE_DIR, overlay, catalog, grades)
+        report_lines.append(f"Freshness version published; {len(record['queue'])} pending review queue entries.")
+        report_lines.extend("Freshness alert: " + alert for alert in record['alerts'])
+    except (OSError, ValueError, KeyError, TypeError):
+        freshness_failed = True
+        report_lines.append("Freshness alert: version or review queue could not be published.")
 
-    catalog_path.write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    write_evidence(STATE_DIR.parent, overlay, catalog)
+    review_lane = overlay.get("policy", {}).get("model_refresh", {}).get("review_lane")
+    if isinstance(review_lane, str) and review_lane and not refresh_failed and not freshness_failed:
+        try:
+            report_lines.append(second_opinion(review_lane, changes, record))
+        except Exception:  # noqa: BLE001 - a shadow comment must never fail the refresh
+            report_lines.append("Second opinion (shadow): unavailable.")
     if loud:
         report_lines.insert(0, loud)
     (STATE_DIR / "market-report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
     print("\n".join(report_lines))
-    return 1 if refresh_failed or loud else 0
+    return 1 if refresh_failed or freshness_failed or loud else 0
 
 
 if __name__ == "__main__":
