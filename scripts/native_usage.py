@@ -10,9 +10,8 @@ quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes
   sign-in Claude Code already keeps (macOS Keychain item `Claude Code-credentials`, else
   `~/.claude/.credentials.json`). Read only: an expired sign-in is reported, never renewed here,
   because renewing would rotate Claude Code's own credential.
-- antigravity: the Antigravity CLI's own usage report (`agy -p /usage --output-format json`),
-  which names every quota group: Gemini, Claude/GPT and Argon, each with a 5-hour and a weekly
-  bucket where the provider has them.
+- antigravity: an operator-exported Antigravity CLI usage report. The reader never starts
+  the CLI: a failed silent sign-in can open a browser even in print mode without a terminal.
 - copilot: GitHub's Copilot entitlement endpoint (`GET https://api.github.com/copilot_internal/user`)
   with the GitHub CLI's own sign-in (`gh auth token`) or a declared key reference.
 
@@ -29,8 +28,8 @@ import os
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -39,9 +38,8 @@ from typing import Any, Callable
 
 MAX_BODY_BYTES = 2_000_000
 
-# Each reader's own time limit. The fleet's general refresh limit (5 s) suits an HTTP read; the
-# Codex app server and the Antigravity CLI each boot a process first (about 1 s and 5 s here).
-DEFAULT_TIMEOUTS = {"codex": 20, "claude": 10, "antigravity": 45, "copilot": 10}
+# The Codex app server and OAuth endpoints have their own time limits.
+DEFAULT_TIMEOUTS = {"codex": 20, "claude": 10, "copilot": 10}
 
 
 def reader_timeout(oracle: str, config: dict[str, Any], timeout: int) -> int:
@@ -425,7 +423,7 @@ def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..
 
 # ---- Antigravity ----------------------------------------------------------------------------------
 AGY_SOURCE = "antigravity-cli"
-AGY_MIN_VERSION = (1, 1, 11)   # older builds could treat an unknown slash command as a model prompt
+AGY_REPORT_MAX_AGE_S = 15 * 60
 AGY_WINDOW_MINUTES = {"5h": 300, "weekly": 10080, "daily": 1440}
 AGY_WINDOW_WORDS = {"5h": "5-hour", "weekly": "weekly", "daily": "daily"}
 
@@ -485,69 +483,47 @@ def parse_antigravity(stdout: str, observed_at: dt.datetime | None = None) -> di
     return _snapshot(AGY_SOURCE, windows, idle, None, observed_at)
 
 
-def _agy_version(text: str) -> tuple[int, ...] | None:
-    parts = text.strip().split(".")
-    if len(parts) != 3 or not all(p.isdigit() for p in parts):
-        return None
-    return tuple(int(p) for p in parts)
+def agy_report_path(config: dict[str, Any]) -> Path:
+    configured = config.get("path")
+    if configured is not None:
+        return Path(configured).expanduser()
+    home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return home / "orchestrator" / "antigravity-usage.json"
 
 
-def _agy_run(binary: str, timeout: int) -> tuple[str, str]:
-    """('ok', stdout) | (kind, reason). A private working folder; browser openers stubbed so a
-    signed-out CLI cannot open a login page; the child's whole process group is ended."""
-    with tempfile.TemporaryDirectory(prefix="crossfeed-agy-usage-") as folder:
-        env = {k: v for k, v in os.environ.items() if k in {
-            "HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG", "LC_ALL", "SHELL",
-            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-            "http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
-        for opener in ("open", "xdg-open"):
-            stub = Path(folder) / opener
-            stub.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-            stub.chmod(0o700)
-        env["PATH"] = folder + os.pathsep + env.get("PATH", "/usr/bin:/bin")
-        env["BROWSER"] = str(Path(folder) / "open")
-        env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"   # agy ignores "1"
-        try:
-            version = subprocess.run([binary, "--version"], capture_output=True, text=True,
-                                     timeout=10, cwd=folder, env=env, stdin=subprocess.DEVNULL)
-        except FileNotFoundError:
-            return "no-tool", "Antigravity CLI is not installed (no `agy` command)"
-        except (OSError, subprocess.SubprocessError) as exc:
-            return "failed", f"Antigravity CLI did not start ({type(exc).__name__})"
-        parsed = _agy_version(version.stdout)
-        if parsed is None or parsed < AGY_MIN_VERSION:
-            return "no-tool", "Antigravity CLI is too old for a usage report (needs 1.1.11 or later)"
-        try:
-            proc = subprocess.Popen(
-                [binary, "-p", "/usage", "--output-format", "json", "--print-timeout", f"{max(10, timeout)}s"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                cwd=folder, env=env, start_new_session=True,
-            )
-        except OSError as exc:
-            return "failed", f"Antigravity CLI did not start ({type(exc).__name__})"
-        try:
-            out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return "failed", f"Antigravity CLI gave no usage within {timeout}s"
-        finally:
-            _stop_group(proc)
-        text = (out or b"").decode("utf-8", "replace")
-        if proc.returncode != 0:
-            noise = ((err or b"") + (out or b"")).decode("utf-8", "replace").lower()
-            if "login" in noise or "not signed in" in noise or "not logged" in noise:
-                return "unauthorized", "Antigravity CLI is not signed in"
-            return "failed", f"Antigravity CLI usage report failed (exit {proc.returncode})"
-        return "ok", text
+# BR-QUOTA-001
+def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, Any]:
+    """Read a finished operator export; no process, credential read or network call.
 
-
-def observe_antigravity(config: dict[str, Any], timeout: int = 5,
-                        run: Callable[[str, int], tuple[str, str]] | None = None) -> dict[str, Any]:
-    binary = str(config.get("binary") or os.environ.get("AGY_BIN") or "agy")
-    kind, text = (run or _agy_run)(binary, reader_timeout("antigravity", config, timeout))
-    if kind != "ok":
-        return unavailable(AGY_SOURCE, kind, text)
-    return parse_antigravity(text) or unavailable(AGY_SOURCE, "malformed",
-                                                  "Antigravity CLI usage report was not readable")
+    Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Even with
+    no terminal, AGY has started OAuth after a keyring timeout; checking lock/idle state
+    cannot close that race. Re-reading an export never advances its observation time.
+    """
+    try:
+        path = agy_report_path(config)
+        # Nonblocking open and fstat on the same descriptor avoid hanging on a FIFO
+        # or validating one file and then reading its replacement.
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as report:
+            info = os.fstat(report.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return unavailable(AGY_SOURCE, "malformed", "Antigravity usage export is not a regular file")
+            observed_at = _parse_time(info.st_mtime)
+            age = (_now() - observed_at).total_seconds() if observed_at else -1
+            if age < 0:
+                return unavailable(AGY_SOURCE, "malformed", "Antigravity usage export has an invalid capture time")
+            if age > AGY_REPORT_MAX_AGE_S:
+                return unavailable(AGY_SOURCE, "stale", "Antigravity usage export is older than 15 minutes")
+            body = report.read(MAX_BODY_BYTES + 1)
+    except FileNotFoundError:
+        return unavailable(AGY_SOURCE, "no-report", "No Antigravity usage export; automatic CLI sign-in is disabled")
+    except (OSError, TypeError, ValueError, RuntimeError):
+        return unavailable(AGY_SOURCE, "failed", "Antigravity usage export could not be read")
+    try:
+        parsed = parse_antigravity(body.decode("utf-8"), observed_at) if len(body) <= MAX_BODY_BYTES else None
+    except (UnicodeError, OverflowError, TypeError, ValueError, RecursionError):
+        parsed = None
+    return parsed or unavailable(AGY_SOURCE, "malformed", "Antigravity CLI usage report was not readable")
 
 
 # ---- GitHub Copilot -------------------------------------------------------------------------------

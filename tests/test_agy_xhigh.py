@@ -59,6 +59,22 @@ class AgyXhighTests(unittest.TestCase):
         ids = {row['level']: row['run_as'] for row in options if row['model_key'] == self.key}
         self.assertEqual(ids, {'high': self.key + '-high', 'xhigh': self.key + '-xhigh'})
 
+    def test_scored_effort_role_allowlist_does_not_relax_read_only_or_affect_explicit_effort(self):
+        self.roster['effort'][self.key]['scored_levels_by_role'] = {
+            'implementation': ['high'], 'hard-reasoning': ['high', 'xhigh']}
+        cases = [('implementation', 'write', {'high'}),
+                 ('hard-reasoning', 'write', {'high', 'xhigh'}),
+                 ('hard-reasoning', 'read-only', set()), ('default', 'write', set())]
+        for role, mode, expected in cases:
+            with self.subTest(role=role, mode=mode):
+                options, _ = selector.enumerate_options(self.roster, {}, role, mode=mode, fleet=fleetctl)
+                self.assertEqual({row['level'] for row in options if row['model_key'] == self.key}, expected)
+        self.assertEqual(fleetctl.resolve_effort(self.roster, self.key, 'implementation', 'agy', 'xhigh')['effort'], 'xhigh')
+        self.roster['effort'][self.key]['scored_levels_by_role']['implementation'] = ['invalid']
+        options, rejected = selector.enumerate_options(self.roster, {}, 'implementation', mode='write', fleet=fleetctl)
+        self.assertFalse(any(row['model_key'] == self.key for row in options))
+        self.assertTrue(any('no permitted scored effort' in row for row in rejected))
+
     def test_legacy_route_remaps_xhigh_lane_to_default_high(self):
         self.roster['routing']['roles']['implementation'] = {
             band: [self.key + '-xhigh'] for band in ('quality_first', 'conserve', 'critical')}

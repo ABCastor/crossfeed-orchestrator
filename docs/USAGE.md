@@ -144,7 +144,7 @@ Each pool's numbers come from the source you name in the `oracle` field of its `
 | `opencode-go` | OpenCode Go's own usage endpoint, read with your Go API key ([details](QUOTA-REFRESH.md)) |
 | `codex` | Codex's own app server (`codex app-server`), with Codex's sign-in |
 | `claude` | Anthropic's usage endpoint, with the sign-in Claude Code keeps (read only, never renewed here) |
-| `antigravity` | the Antigravity CLI's usage report (`agy -p /usage`): Gemini, Claude/GPT and Argon groups |
+| `antigravity` | an [operator-exported CLI usage report](QUOTA-REFRESH.md#antigravity-usage-exports): Gemini, Claude/GPT and Argon groups; refresh never starts the CLI |
 | `copilot` | GitHub's Copilot entitlement, with the GitHub CLI's sign-in or a declared key |
 | `codexbar` | the optional third-party CodexBar reader (macOS app, Linux CLI) |
 

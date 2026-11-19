@@ -24,9 +24,28 @@ The other subscriptions have built-in readers too, in `scripts/native_usage.py`,
 
 - `codex` starts `codex app-server`, sends `initialize` and `account/rateLimits/read`, and ends the child's process group. Windows are named by length (`weekly`, `session`), not by slot: Codex currently reports its weekly limit in the `primary` slot and no five-hour limit, and none is invented. A model-specific bucket becomes `<limitId>-<window>` labelled "<model> only".
 - `claude` reads `GET https://api.anthropic.com/api/oauth/usage` with Claude Code's own sign-in (Keychain item `Claude Code-credentials`, else `~/.claude/.credentials.json`). It never renews the sign-in, because a renewal would rotate Claude Code's credential: an expired one is reported as such until Claude Code renews it. This source therefore needs a maintained Claude Code sign-in. Windows: `session` (5 hours), `weekly`, and `claude-weekly-scoped-<model>` labelled "<model> only".
-- `antigravity` runs `agy -p /usage --output-format json` (Antigravity CLI 1.1.11 or later; older versions are refused before any prompt) in a private folder, with browser openers stubbed so a signed-out CLI cannot open a login page. Windows are `antigravity-quota-summary-<family>-<window>` for the families `gemini`, `3p` (Claude and GPT) and `argon`; each pool keeps its own family through `windows`, and one report per refresh feeds all three.
+- `antigravity` reads an operator-exported Antigravity CLI usage report. Crossfeed never executes the CLI or reads its credentials for quota, even on forced refresh: Google’s silent login can fail when the keychain is unavailable and open OAuth in a browser even in print mode without a terminal. Windows are `antigravity-quota-summary-<family>-<window>` for `gemini`, `3p` (Claude and GPT) and `argon`; each pool keeps its own family through `windows`, and a shared export is read once per refresh.
 - `copilot` reads `GET https://api.github.com/copilot_internal/user` with the GitHub CLI's sign-in (`gh auth token`) or a declared `key` reference, and records the premium allowance (`premium_monthly`) with its monthly reset. Unlimited quotas are not windows.
 
 For a machine that already has working Claude readings in CodexBar, set the Claude pool's `quota_refresh` to `{"oracle": "codexbar", "provider": "claude", "ttl_s": 300}`. Crossfeed then uses the existing adapter and CodexBar's source selection, without depending on the native reader's CLI credential or implementing a second renewal mechanism. Verify with `fleetctl.py glance`: Claude must have a fresh reading, and its runtime snapshot must name `codexbar` with no Claude refresh error. CodexBar's `isSyntheticPlaceholder` slots are omitted; a placeholder is not measured zero usage. Real unused windows remain visible.
 
-Each reader has its own time limit (Codex 20 s, Claude and Copilot 10 s, Antigravity 45 s; `timeout_s` overrides), because the Codex app server and the Antigravity CLI each boot first. Tokens stay in one request header: never logged, never in a reason, never on disk. A missing tool, a signed-out or expired sign-in, a refusal, a rate limit and an unreadable answer each come back unavailable with their own reason, so the pool shows GAUGE_ERROR or its last real reading marked stale, never 0%.
+Network and process readers have their own time limits (Codex 20 s, Claude and Copilot 10 s; `timeout_s` overrides). Tokens stay in one request header: never logged, never in a reason, never on disk. A missing tool, a signed-out or expired sign-in, a refusal, a rate limit and an unreadable answer each come back unavailable with their own reason, so the pool shows GAUGE_ERROR or its last real reading marked stale, never 0%.
+
+## Antigravity usage exports
+
+On demand, from an unlocked terminal signed in to the same account as the configured pools, an operator using Antigravity CLI 1.1.11 or newer can capture its JSON `/usage` report. Do not schedule the command or automate sign-in. Publish only after success; the rename prevents readers from seeing half-written output. The export may contain account data: keep it owner-only and out of source control.
+
+```sh
+(
+  set -eu
+  umask 077
+  dir="${XDG_CONFIG_HOME:-$HOME/.config}/orchestrator"
+  mkdir -p "$dir"
+  report=$(mktemp "$dir/.antigravity-usage.XXXXXX")
+  trap 'rm -f "$report"' EXIT
+  agy -p /usage --output-format json > "$report"
+  mv -f "$report" "$dir/antigravity-usage.json"
+)
+```
+
+The default path is `~/.config/orchestrator/antigravity-usage.json` (respects `XDG_CONFIG_HOME`); set an absolute `quota_refresh.path` if needed. The report file's modification time is the capture time, so do not retimestamp old reports. Crossfeed rejects missing, unreadable or more than 15-minute-old reports; an older cached reading stays stale at its original capture time and ages out under the existing quota policy. Other pools keep their own refresh schedule.

@@ -772,7 +772,8 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    confidence = "stale" if refresh_error else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
+    stale_agy = snapshot.get("source") == native_usage.AGY_SOURCE and age_s > native_usage.AGY_REPORT_MAX_AGE_S
+    confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
     # A console-observed 100% window stays exhausted until its console-stated
     # reset passes, even when the snapshot itself has gone stale: staleness must
@@ -1173,8 +1174,13 @@ def _source_identity(config: dict[str, Any]) -> Any:
         return ("http", config.get("url"))
     if oracle == "opencode-go":
         return ("opencode-go", config.get("url"), config.get("key"))
+    if oracle == "antigravity":
+        # Multiple quota pools can consume different windows from the same export.
+        try:
+            return (oracle, str(native_usage.agy_report_path(config)))
+        except (TypeError, ValueError, RuntimeError):
+            return (oracle, None)  # the observer reports the malformed path, not other pools
     if oracle in native_usage.OBSERVERS:
-        # One fetch per provider per refresh: the Antigravity pools share a single CLI report.
         return (oracle, config.get("binary"), config.get("key"))
     return (oracle, id(config))
 
@@ -2977,6 +2983,11 @@ def effort_problems(roster: dict[str, Any], state_dir: Path, now: dt.datetime | 
             allowed = levels or ["provider-default", "service-chosen"]
             if any(value not in allowed for value in values):
                 problems.append(f"{key}: unsupported effort default/knee/role level")
+            scored = entry.get("scored_levels_by_role", {})
+            if (not isinstance(scored, dict) or any(
+                    not role or not isinstance(row, list) or not row
+                    or any(level not in allowed for level in row) for role, row in scored.items())):
+                problems.append(f"{key}: invalid scored effort levels by role")
         market = catalog.get("artificial_analysis", {}).get(key, {}) if fresh else {}
         version = market.get("index_version") or catalog.get("index_version")
         if version and evidence.get("index_version") and version != evidence["index_version"]:
@@ -4548,7 +4559,7 @@ def doctor_command(overlay_path: Path, state_dir: Path, *, opencode_db: Path | N
         oracle = cfg.get("oracle", "codexbar")
         # CodexBar is an optional third-party reader (macOS app, Linux CLI). Whether it is
         # installed is the question, not which platform this is.
-        native_tool = {"codex": cfg.get("binary") or "codex", "antigravity": cfg.get("binary") or "agy",
+        native_tool = {"codex": cfg.get("binary") or "codex",
                        "copilot": None if cfg.get("key") else (cfg.get("gh") or "gh")}.get(oracle)
         if oracle == "codexbar" and not shutil.which(CODEXBAR_BIN):
             problems += 1

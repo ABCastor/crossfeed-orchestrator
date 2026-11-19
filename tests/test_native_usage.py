@@ -196,46 +196,28 @@ class AntigravityTests(unittest.TestCase):
 
     def test_a_model_answer_is_never_read_as_usage(self):
         self.assertIsNone(native.parse_antigravity(fixture("agy-not-usage.json")))
-        got = native.observe_antigravity({}, run=lambda b, t: ("ok", fixture("agy-not-usage.json")))
-        self.assertEqual((got["available"], got["kind"]), (False, "malformed"))
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "export.json"
+            report.write_text(fixture("agy-not-usage.json"))
+            got = native.observe_antigravity({"path": str(report)})
+            self.assertEqual((got["available"], got["kind"]), (False, "malformed"))
 
-    def test_run_failures_stay_unknown(self):
-        for kind in ("no-tool", "unauthorized", "failed"):
-            got = native.observe_antigravity({}, run=lambda b, t: (kind, "why"))
-            self.assertEqual((got["available"], got["kind"]), (False, kind))
-
-    def test_old_cli_is_refused_before_any_prompt(self):
-        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
-            log = Path(folder) / "calls"
-            agy = Path(folder) / "agy"
-            agy.write_text(f'#!/bin/sh\necho "$*" >> {log}\n[ "$1" = --version ] && echo 1.1.9\nexit 0\n')
-            agy.chmod(0o700)
-            got = native.observe_antigravity({"binary": str(agy)})
-            self.assertEqual(got["kind"], "no-tool")
-            self.assertEqual(log.read_text().split("\n")[:-1], ["--version"])
-
-    def test_cli_runs_in_a_private_folder_with_browser_openers_stubbed(self):
-        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
-            log = Path(folder) / "env"
-            agy = Path(folder) / "agy"
-            body = fixture("agy-usage.json").replace("'", "")
-            agy.write_text(f"""#!/bin/sh
-if [ "$1" = --version ]; then echo 1.4.10; exit 0; fi
-{{ echo "args=$*"; echo "cwd=$PWD"; echo "browser=$BROWSER"; echo "update=$AGY_CLI_DISABLE_AUTO_UPDATE"; open https://example.invalid; echo "open=$?"; }} > {log}
-cat <<'JSON'
-{body}
-JSON
-""")
-            agy.chmod(0o700)
-            got = native.observe_antigravity({"binary": str(agy)})
-            self.assertTrue(got["available"], got)
-            seen = dict(line.split("=", 1) for line in log.read_text().splitlines())
-            self.assertEqual(seen["args"].split()[:4], ["-p", "/usage", "--output-format", "json"])
-            self.assertIn("crossfeed-agy-usage-", seen["cwd"])
-            self.assertTrue(seen["browser"].endswith("/open"))
-            self.assertEqual(seen["update"], "true")
-            self.assertEqual(seen["open"], "1")          # the stub, not the system browser
-            self.assertFalse(Path(seen["cwd"]).exists())  # the private folder is gone
+    def test_rejects_future_mtime_oversize_and_special_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "export.json"
+            report.write_text(fixture("agy-usage.json"))
+            future = native._now().timestamp() + 120
+            os.utime(report, (future, future))
+            cfg = {"path": str(report)}
+            self.assertIn("capture time", native.observe_antigravity(cfg)["reason"])
+            report.write_bytes(b" " * (native.MAX_BODY_BYTES + 1))
+            self.assertEqual(native.observe_antigravity(cfg)["kind"], "malformed")
+            fifo = Path(folder) / "not-a-report"
+            os.mkfifo(fifo)
+            self.assertIn("not a regular file", native.observe_antigravity({"path": str(fifo)})["reason"])
+            alias = Path(folder) / "alias.json"
+            alias.symlink_to(report)
+            self.assertFalse(native.observe_antigravity({"path": str(alias)})["available"])
 
 
 class CopilotTests(unittest.TestCase):
@@ -355,8 +337,43 @@ class FleetWiringTests(unittest.TestCase):
         self.assertEqual(state, "GAUGE_ERROR")
         self.assertIn("expired", evidence["gauge_error"])
 
+    # BR-QUOTA-001
+    def test_antigravity_refresh_never_starts_cli_and_keeps_expired_evidence_stale(self):
+        report = self.state / "manual-usage.json"
+        marker = self.state / "unexpected-launch"
+        tool = self.state / "fake-quota-cli"
+        tool.write_text(f'#!/bin/sh\ntouch "{marker}"\n[ "$1" = --version ] && echo 1.5.12\nexit 0\n')
+        tool.chmod(0o700)
+        pool = "antigravity-gemini"
+        self.roster["quota_pools"][pool]["quota_refresh"].update(path=str(report), binary=str(tool))
+        captured = dt.datetime(2026, 10, 29, 22, 0, tzinfo=dt.timezone.utc)
+        now = captured
+        with patch.dict(os.environ, {"AGY_BIN": str(tool)}), \
+                patch.object(native, "_now", lambda: now), patch.object(fleetctl, "utc_now", lambda: now):
+            def refresh(force=False):
+                return fleetctl.refresh_stale_pools(self.state, [pool], roster=self.roster, force=force)
+
+            def runtime():
+                return json.loads((self.state / "runtime.json").read_text())
+
+            self.assertIn("No Antigravity usage export", refresh()[pool])
+            self.assertEqual(fleetctl.current_pool_state(runtime(), pool, now, roster=self.roster)[0], "GAUGE_ERROR")
+            report.write_text(fixture("agy-usage.json"))
+            os.utime(report, (captured.timestamp(), captured.timestamp()))
+            self.assertEqual(refresh(force=True)[pool], "refreshed")  # successful observation control
+            stamp = runtime()["quota_snapshots"][pool]["observed_at"]
+            self.assertEqual(fleetctl.parse_iso(stamp), captured)
+            now += dt.timedelta(minutes=12)
+            self.assertEqual(refresh(force=True)[pool], "kept newer stored snapshot")
+            now += dt.timedelta(minutes=4)
+            self.assertEqual(fleetctl.current_pool_state(runtime(), pool, now, roster=self.roster)[1]["confidence"], "stale")
+            self.assertIn("older than 15 minutes", refresh(force=True)[pool])
+            _, evidence = fleetctl.current_pool_state(runtime(), pool, now, roster=self.roster)
+            self.assertEqual((evidence["confidence"], evidence["observed_at"]), ("stale", stamp))
+            self.assertFalse(marker.exists())
+
     def test_reader_time_limit_is_its_own_not_the_five_second_default(self):
-        self.assertEqual(native.reader_timeout("antigravity", {}, fleetctl.REFRESH_TIMEOUT_S), 45)
+        self.assertEqual(native.reader_timeout("codex", {}, fleetctl.REFRESH_TIMEOUT_S), 20)
         self.assertEqual(native.reader_timeout("codex", {"timeout_s": 7}, 5), 7)
 
 

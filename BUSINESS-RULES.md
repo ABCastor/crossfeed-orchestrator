@@ -1,6 +1,13 @@
 # Routing business rules
 
-Scope: the Benchmarks page and local admission-check policy, cash-aware routing and the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, pace-aware varied selection, local fit-evidence imports, the proposed OpenCode Go value-routing policy, the daily catalog/data-policy rules, and the OpenCode v2 worker boundary below. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
+Scope: the Benchmarks page and local admission-check policy, cash-aware routing and the opt-in paid MiMo lane, the optional Haiku judgment-refusal policy, pace-aware varied selection, local fit-evidence imports, the proposed OpenCode Go value-routing policy, the daily catalog/data-policy rules, the OpenCode v2 worker boundary, and unattended Antigravity quota observation. This ledger claims conformance only for rules listed here — it is NOT a claim of repo-wide coverage.
+
+## BR-QUOTA-001 — Unattended Antigravity quota refresh must not start sign-in [DECIDED] (MUST NOT)
+
+- RULE: Background and forced Antigravity quota refreshes must not start the CLI or an interactive sign-in. A missing or out-of-date export is not a fresh quota reading or evidence of zero usage.
+- Authority: Operator direction, 19 November 2026, to stop quota polling from opening Google login pages and keep stale gauges honest.
+- implemented-by: `scripts/native_usage.py:observe_antigravity`.
+- tested-by: `tests/test_native_usage.py:FleetWiringTests.test_antigravity_refresh_never_starts_cli_and_keeps_expired_evidence_stale` (control: a fresh fixture export reaches the persisted pool snapshot).
 
 ## BR-COPILOT-001: Named models are an account entitlement
 

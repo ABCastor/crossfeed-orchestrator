@@ -271,11 +271,19 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         if levels is None:
             rejected.append(f"{label}: missing effort controls")
             continue
+        scored_levels = entry.get("scored_levels_by_role")
+        if "scored_levels_by_role" in entry:
+            permitted = scored_levels.get(role) if isinstance(scored_levels, dict) else None
+            if not isinstance(permitted, list) or not permitted or any(level not in levels for level in permitted):
+                rejected.append(f"{label}: no permitted scored effort for role {role}")
+                continue
+        else:
+            permitted = None
         # If switches make this model a replacement, score only levels it will
         # actually run. Explicit enumeration must not bypass stand-in ceilings.
         replacements = fleet.stand_ins(roster, runtime, pool).values()
         stand_in = key in replacements or option["run_as"] in replacements
-        for requested in levels or [None]:
+        for requested in (permitted if permitted is not None else levels or [None]):
             try:
                 resolved = fleet.resolve_effort(roster, key, role, harness, requested,
                                                 band=band, stand_in=stand_in)
@@ -286,6 +294,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                 rejected.append(f"{label}/{requested}: {resolved['reason']}")
                 continue
             level = resolved["effort"] or entry.get("default")
+            if permitted is not None and level not in permitted:
+                continue  # a stand-in clamp must not reintroduce a forbidden level
             if harness == "copilot":
                 if (level != "service-chosen" or mode != "read-only" or modality != "text"
                         or (lane.get("selector") != "auto" and (pool == "github-copilot-student"
