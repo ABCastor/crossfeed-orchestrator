@@ -475,9 +475,8 @@ def rerank(roster, changes, today, fresh, successful):
         lane_delta = any((role in l.get('roles', [])) != (l['lane_id'] in selected) for l in managed)
         if candidate == bands and not lane_delta:
             continue
-        # Preserve the shortlist as well as lane metadata. If a prior run
-        # stripped the role label but the owner still ranks the lane in a band,
-        # the ranking is enough evidence that automatic removal is not allowed.
+        # A shortlist rank alone is sufficient to block an automatic demotion,
+        # even if the redundant lane role metadata is absent.
         shortlisted = {lane_id for entries in bands.values() if isinstance(entries, list) for lane_id in entries}
         demoted = sorted(l['lane_id'] for l in managed if l['lane_id'] in keep
                          and (role in l.get('roles', []) or l['lane_id'] in shortlisted)
