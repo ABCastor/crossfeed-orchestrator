@@ -29,7 +29,7 @@ MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
 
 FAMILY_BY_ROLE = {
     "implementation": "coding-agent", "builder": "coding-agent", "hard-builder": "coding-agent",
-    "failed-builder": "coding-agent", "debug": "coding-agent", "debugger": "coding-agent",
+    "failed-builder": "coding-agent", "debug": "debug", "debugger": "debug",
     "review": "review", "reviewer": "review", "audit": "review", "second-opinion": "review",
     "repo-map": "repo-qa", "lookup": "repo-qa", "probe": "repo-qa", "explorer": "repo-qa",
     "hard-reasoning": "reasoning", "judgment": "reasoning", "filter": "extraction",

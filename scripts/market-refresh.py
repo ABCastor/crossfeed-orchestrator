@@ -29,10 +29,12 @@ try:
     import daily_model_refresh as daily
     import decide
     from evidence import current_aa_variants, load_lmarena, write_evidence
+    from coding_benchmarks import CODING_FIELDS, TERMINAL_FIELDS
 except ModuleNotFoundError:
     from scripts import daily_model_refresh as daily
     from scripts import decide
     from scripts.evidence import current_aa_variants, load_lmarena, write_evidence
+    from scripts.coding_benchmarks import CODING_FIELDS, TERMINAL_FIELDS
 
 STATE_DIR = Path(
     os.environ.get("FLEET_STATE_DIR", "~/.local/state/orchestrator")
@@ -104,17 +106,22 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
         return {}
     matches: dict[str, dict] = {}
     for model in models:
-        slug = norm(str(model.get("slug") or ""))
-        hit = None
-        for model_key, keys in sorted(tokens.items(), key=lambda item: -max(map(len, item[1]))):
-            if any(slug == token or slug.startswith(token) for token in keys):
-                hit = model_key
-                break
-        if hit is None and not any(extra in slug for extra in AA_EXTRA_TOKENS):
+        slug = str(model.get("slug") or "").lower()
+        effort_pattern = r"(?:xhigh|max|ultra|medium|high|low|none|minimal|thinking|non-reasoning|non-thinking)"
+        suffix = re.search(r"-(" + effort_pattern + r")$", slug)
+        stem = slug[:suffix.start()] if suffix else slug
+        base = re.sub(r"-(?:\d{8}|\d{4})$", "", stem)
+        # Do not claim longer siblings or future releases by prefix.
+        hits = [key for key, keys in tokens.items() if norm(base) in keys]
+        hit = hits[0] if len(hits) == 1 else None
+        if hit is None and not any(extra in norm(slug) for extra in AA_EXTRA_TOKENS):
             continue
         evaluations = model.get("evaluations") or {}
         pricing = model.get("pricing") or {}
         performance = model.get("performance") or {}
+        def metric(fields):
+            return next((evaluations[field] for field in fields if evaluations.get(field) is not None), None)
+
         entry = {
             "id": model.get("id"),
             "name": model.get("name"),
@@ -123,22 +130,25 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
             "evaluations": dict(evaluations),
             "pricing": dict(pricing),
             "intelligence_index": evaluations.get("artificial_analysis_intelligence_index"),
-            "coding_index": evaluations.get("artificial_analysis_coding_index"),
+            "coding_index": metric(CODING_FIELDS),
             "price_1m_blended": pricing.get("price_1m_blended_3_to_1"),
             "median_tokens_per_second": performance.get("median_output_tokens_per_second"),
             "performance_v3": model.get("performance_v3"),
-            "terminal_bench_4": evaluations.get("terminalbench_v4_0", evaluations.get("terminal_bench_4", evaluations.get("terminal_bench_4_0"))),
+            "terminal_bench_4": metric(TERMINAL_FIELDS),
             "ttfa_s": performance.get("median_time_to_first_answer_token_seconds"),
             "price_1m_input": pricing.get("price_1m_input_tokens"),
             "price_1m_output": pricing.get("price_1m_output_tokens"),
             "index_version": evaluations.get("artificial_analysis_intelligence_index_version")
                 or version,
         }
-        label = str(model.get("slug") or "") + " " + str(model.get("name") or "")
-        found = re.search(r"(?<![a-z])(xhigh|max|ultra|medium|high|low|none|minimal|thinking)(?![a-z])", label.lower())
-        level = "none" if re.search(r"non[- ]?reasoning|non[- ]?thinking", label.lower()) else (
-            found.group(1) if found else f"unspecified:{model.get('slug')}"
-        )
+        label = str(model.get("name") or "").lower().replace("non reasoning", "non-reasoning").replace("non thinking", "non-thinking")
+        labelled = re.search(r"\((" + effort_pattern + r")\)\s*$", label)
+        slug_level = suffix[1] if suffix else None
+        label_level = labelled[1] if labelled else None
+        slug_level = "none" if slug_level in {"non-thinking", "non-reasoning"} else slug_level
+        label_level = "none" if label_level in {"non-thinking", "non-reasoning"} else label_level
+        level = (slug_level or label_level) if not (slug_level and label_level and slug_level != label_level) else None
+        level = level or f"unspecified:{model.get('slug')}"
         entry["effort"] = level
         key = hit or f"watchlist:{model.get('slug')}"
         family = matches.setdefault(key, {"levels": {}, "variants": []})

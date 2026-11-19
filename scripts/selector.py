@@ -51,7 +51,7 @@ VARIETY = {"quality_band": {"low": .05, "normal": .03, "high": .01, "irreversibl
 PACE_DEFICIT_DEAD_ZONE = .05
 # Recent use is read from the tail of runs.jsonl and from in-flight dispatch receipts.
 RECENT_RUNS_TAIL_BYTES = 1 << 20
-FAMILIES = {"coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
+FAMILIES = {"coding-agent", "review", "debug", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
 WRAPPERS = {name: name + "-agent.sh" for name in
             ("codex", "claude", "opencode", "agy", "copilot", "openrouter", "pi")}
 WRAPPERS["chatgpt-chat"] = "chatgpt-agent.sh"
@@ -115,7 +115,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
     fleet = _fleet(fleet)
     policy = roster.get("policy", {}).get("selector", {})
     mode = mode or policy.get("mode_by_role", {}).get(role) or (
-        "write" if FAMILY_BY_ROLE.get(role) == "coding-agent" else "read-only")
+        "write" if FAMILY_BY_ROLE.get(role) in {"coding-agent", "debug"} else "read-only")
     allowed = policy.get("allowed_pools_by_role", {})
     allowed = allowed.get(role, allowed.get("default"))
     if allowed is not None and not isinstance(allowed, list):
@@ -955,7 +955,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             if estimate is not None and estimate > cash["worst_case_usd"]:
                 estimate = None  # Recorded tokens outside this route's bound do not price this task.
             cash = dict(cash, estimate_usd=estimate)
-        scored.append(dict(option, cash=cash, quality=quality, q={"mean": mean, "sd": sd, "unknown": unknown},
+        scored.append(dict(option, cash=cash, quality=quality, quality_basis=q.get("basis"),
+                           q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
@@ -1024,6 +1025,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     result = {"schema": "fleet-selection/v1", "choice": choice, "top3": top3,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
               "explore": explore, "unknown_options": len(unknown_options),
+              "graded_options": sum(not item["q"]["unknown"] for item in scored),
               "cash_preference": cash_preference,
               "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
                           "pace_weight": variety["pace_weight"],

@@ -15,11 +15,15 @@ import statistics
 import urllib.request
 from pathlib import Path
 
-FAMILIES = ("coding-agent", "review", "repo-qa", "reasoning", "extraction", "research", "visual", "writing")
+FAMILIES = ("coding-agent", "review", "debug", "repo-qa", "reasoning", "extraction", "research", "visual", "writing")
 try:
     from run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
+    from coding_benchmarks import (CODING_FAMILIES, CODING_FIELDS, TERMINAL_FIELDS, READ_ON as TB4_DATE,
+                                   URL as TB4_URL, TERMINAL_BENCH_4, SNAPSHOT_TERMINAL_BENCH_4)
 except ModuleNotFoundError:
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, dynamic_selector, registered_model
+    from scripts.coding_benchmarks import (CODING_FAMILIES, CODING_FIELDS, TERMINAL_FIELDS, READ_ON as TB4_DATE,
+                                           URL as TB4_URL, TERMINAL_BENCH_4, SNAPSHOT_TERMINAL_BENCH_4)
 
 # This is the single assumptions table. Weights are reliability * independence;
 # each publisher contributes at most one prior-strength budget, not one per metric.
@@ -38,12 +42,15 @@ ASSUMPTIONS = {
                             "map": "linear", "scale": 100.0, "weight": .5,
                             "families": ["reasoning", "research"],
                             "assumption": "Composite intelligence transfers weakly to these task families."},
-        "aa_coding": {"source": "artificial_analysis", "metrics": ["artificial_analysis_coding_index", "coding_index"],
+        "aa_coding": {"source": "artificial_analysis", "metrics": CODING_FIELDS,
                       "map": "linear", "scale": 100.0, "weight": .5,
-                      "families": ["coding-agent", "review"],
-                      "assumption": "Coding index is an indirect prior for implementation and review."},
-        "aa_terminal": {"source": "artificial_analysis", "metrics": ["terminalbench_v4_0", "terminal_bench_4_0", "terminal_bench_4"], "anchor": True,
-                        "map": "fraction_or_percent", "weight": .8, "families": ["coding-agent", "repo-qa", "review"],
+                      "families": CODING_FAMILIES,
+                      "assumption": "Coding index is an indirect prior; do not mix index revisions in a fit."},
+        "aa_v5_coding_proxy": {"source": "artificial_analysis", "metrics": ["artificial_analysis_intelligence_index", "intelligence_index"],
+                      "map": "linear", "scale": 100.0, "weight": .3, "families": CODING_FAMILIES,
+                      "assumption": "AA v5 Intelligence is a weak coding predictor only after exact-cell TB4 calibration."},
+        "aa_terminal": {"source": "artificial_analysis", "metrics": TERMINAL_FIELDS, "anchor": True,
+                        "map": "fraction_or_percent", "weight": .8, "families": [*CODING_FAMILIES, "repo-qa"],
                         "assumption": "Terminal task success transfers heuristically; fractions or percentages accepted."},
         "aa_tau2": {"source": "artificial_analysis", "metrics": ["tau2", "tau2_bench", "tau2_bench_telecom"],
                     "map": "fraction_or_percent", "weight": .4, "families": ["coding-agent", "research"],
@@ -122,15 +129,19 @@ def _variants(entry):
     return [entry]
 
 
+def served_snapshot(overlay, model):
+    card = (overlay.get("model_cards") or {}).get(model, {})
+    return card.get("served_snapshot") or next((lane["served_snapshot"]
+        for lane in overlay.get("lanes", []) if lane.get("model_key") == model and lane.get("served_snapshot")), None)
+
+
 def current_aa_variants(variants, overlay, model):
     """Resolve served snapshot identity, then newest release within one level.
 
     Raw variants remain in the catalog. Equal-date conflicting rows stay
     ambiguous rather than letting input order select a benchmark silently.
     """
-    card = (overlay.get("model_cards") or {}).get(model, {})
-    served = card.get("served_snapshot") or next((lane.get("served_snapshot")
-        for lane in overlay.get("lanes", []) if lane.get("model_key") == model and lane.get("served_snapshot")), None)
+    served = served_snapshot(overlay, model)
     candidates = []
     for row in variants:
         slug = str(row.get("slug") or "")
@@ -311,7 +322,11 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
     rows = []
     if not ambiguous and variants:
         row = variants[0]
-        rows.append(("artificial_analysis", {**row, **(row.get("evaluations") or {})}, row))
+        rows.append(("artificial_analysis", {**row, **{k: v for k, v in (row.get("evaluations") or {}).items()
+                                                     if v is not None}}, row))
+    snapshot = served_snapshot(overlay, model)
+    published = (SNAPSHOT_TERMINAL_BENCH_4.get((model, str(snapshot), level)) if snapshot
+                 else TERMINAL_BENCH_4.get((model, level)))
     arena = catalog.get("lmarena") or {}
     arena_rows = arena if isinstance(arena, list) else arena.get("rows", [])
     for row in arena_rows:
@@ -321,6 +336,9 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
     for publisher, values, raw in rows:
         for name, rule in assumptions["sources"].items():
             if rule.get("source") != publisher:
+                continue
+            version = str(raw.get("index_version") or "").lower().removeprefix("v")
+            if name == "aa_v5_coding_proxy" and version.split(".")[0] != "5":
                 continue
             metric = next((key for key in rule["metrics"] if _number(values.get(key)) is not None), None)
             if not metric:
@@ -342,7 +360,17 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
                             "weight": rule["weight"] * freshness, "read_on": source_date,
                             "prior_mean": max(0.0, min(1.0, prior)), "mapping": name,
                             "families": rule["families"], "assumption": rule["assumption"],
-                            "heuristic": True, "id": raw.get("id"), "release_date": raw.get("release_date")})
+                            "heuristic": True, "id": raw.get("id"), "release_date": raw.get("release_date"),
+                            "index_version": raw.get("index_version")})
+    if published and not any(s["mapping"] == "aa_terminal" for s in sources):
+        value, error, harness = published
+        rule = assumptions["sources"]["aa_terminal"]
+        age = max(0, (_date(read_on) - _date(TB4_DATE)).total_seconds() / 86400) if _date(read_on) else 0
+        sources.append({"source": "terminal_bench", "mapping": "aa_terminal", "metric": "terminal_bench_4",
+                        "value": value, "score_error_percent": error, "harness": harness, "url": TB4_URL,
+                        "read_on": TB4_DATE, "prior_mean": value / 100, "served_snapshot": snapshot,
+                        "assumption": rule["assumption"], "families": rule["families"], "heuristic": True,
+                        "weight": rule["weight"] * 2 ** (-age / assumptions["aggregation"]["freshness_half_life_days"])})
     return sources, variants, ambiguous
 
 
@@ -423,30 +451,38 @@ def _anchor_priors(sources_by_cell, admitted, assumptions):
                 pairs = []
                 for known, y in ranked.items():
                     x = next((s["prior_mean"] for s in sources_by_cell[known]
-                              if s["mapping"] == predictor["mapping"] and s["weight"] > 0), None)
+                              if s["mapping"] == predictor["mapping"] and s["weight"] > 0
+                              and s.get("index_version") == predictor.get("index_version")), None)
                     if x is not None:
                         pairs.append((x, y))
-                if len(pairs) < 3:
+                broad_proxy = predictor["mapping"] == "aa_v5_coding_proxy"
+                if len(pairs) < (5 if broad_proxy else 3) or (broad_proxy and family not in CODING_FAMILIES):
                     continue
                 xbar, ybar = (statistics.mean(p[i] for p in pairs) for i in (0, 1))
                 spread = sum((x - xbar) ** 2 for x, _ in pairs)
                 if spread <= 1e-12:
                     continue
                 slope = sum((x - xbar) * (y - ybar) for x, y in pairs) / spread
+                if broad_proxy and (slope <= 0 or not min(x for x, _ in pairs) <= predictor["prior_mean"] <= max(x for x, _ in pairs)):
+                    continue  # No negative fits or extrapolation from the broad composite.
                 intercept = ybar - slope * xbar
                 residual = max(.1, math.sqrt(sum((y - intercept - slope * x) ** 2 for x, y in pairs) / (len(pairs) - 2)))
                 estimate = max(0.0, min(1.0, intercept + slope * predictor["prior_mean"]))
                 fits.append((len(pairs), residual, predictor["mapping"], estimate, predictor, slope, intercept))
             if fits:
-                n, residual, _, estimate, predictor, slope, intercept = min(fits, key=lambda fit: (-fit[0], fit[1], fit[2]))
-                fit = {"predictor_metric": predictor["metric"], "n": n, "residual_sd": residual,
+                n, residual, _, estimate, predictor, slope, intercept = min(
+                    fits, key=lambda fit: (fit[2] == "aa_v5_coding_proxy", -fit[0], fit[1], fit[2]))
+                fit = {"predictor_metric": predictor["metric"], "predictor_mapping": predictor["mapping"],
+                       "n": n, "residual_sd": residual,
                        "slope": slope, "intercept": intercept}
                 imputed = {**predictor, "metric": rule["metrics"][0], "value": None,
                            "mapping": name, "prior_mean": estimate, "weight": min(predictor["weight"], rule["weight"]),
                            "families": rule["families"], "imputed": True, "assumption": rule["assumption"]}
                 priors[cell, family] = (imputed, rule["metrics"][0], fit)
             else:
-                priors[cell, family] = (None, rule["metrics"][0], None)
+                coding = next((s for s in sources if s["mapping"] == "aa_coding" and s["weight"] > 0
+                               and family in s["families"]), None)
+                priors[cell, family] = (coding, rule["metrics"][0], None)
     return priors
 
 
@@ -475,6 +511,7 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
     for model, level in sorted(cells):
         sources, variants, ambiguous = source_data[model, level]
         flags, q, own = ["external_scores_are_heuristic_priors"], {}, {}
+        strata = {"low": {}, "normal": {}, "high": {}}
         if ambiguous:
             flags.append("ambiguous_variants")
         for family in FAMILIES:
@@ -507,6 +544,26 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
                          "sources": family_sources, "unknown": unknown,
                          "heuristic": bool(family_sources), "prior_strength": prior_strength,
                          "anchor_metric": anchor_metric, "imputed": fit is not None, "imputation": fit}
+            if family in CODING_FAMILIES:
+                easy_n = counts["trials"]
+                easy_wins = counts["passes"]
+                easy = {**q[family], "mean": (1 + easy_wins) / (2 + easy_n), "n_sources": 0,
+                        "sd": math.sqrt((1 + easy_wins) * (1 + easy_n - easy_wins) /
+                                        ((2 + easy_n) ** 2 * (3 + easy_n))),
+                        "sources": [], "unknown": False, "heuristic": False, "prior_strength": 0,
+                        "imputed": False, "imputation": None, "basis": "local_fit"}
+                if easy_n:
+                    strata["low"][family] = easy
+                # Historical fit proves easy-fit only, not hard-task success. Review
+                # and debug transfer less directly than terminal implementation.
+                transfer = {"coding-agent": 1., "review": .55, "debug": .65}[family]
+                if fit and fit.get("predictor_mapping") == "aa_v5_coding_proxy":
+                    transfer *= .65  # Cross-domain prediction is weaker than a direct result.
+                hard = {**q[family], "mean": .5 + transfer * ((anchor["prior_mean"] if anchor else .5) - .5),
+                        "sd": max(.2, fit["residual_sd"] if fit else 0) if anchor else math.sqrt(1 / 12),
+                        "unknown": not bool(anchor), "basis": "external_transfer" if anchor else "unknown"}
+                strata["high"][family] = hard
+                strata["normal"][family] = hard if anchor else easy if easy_n else hard
         measured = telemetry.get((model, level), {})
         tokens = {}
         for direction in ("in", "out"):
@@ -540,7 +597,7 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
             values = metrics[metric]
             if values:
                 source_telemetry[source] = {'latency_s': statistics.median(values), 'trials': len(values), 'metric': metric}
-        rows.append({"model_key": model, "model": model, "model_identity": model, "level": level, "q": q,
+        rows.append({"model_key": model, "model": model, "model_identity": model, "level": level, "q": q, "q_by_stakes": strata,
                      "sources": sources, "own": own, "own_cost": own_cost, "tokens_per_task": tokens,
                      "own_provenance": {family: list(items.values()) for family, items in measured.get('provenance', {}).items()},
                      "source_telemetry": source_telemetry,
