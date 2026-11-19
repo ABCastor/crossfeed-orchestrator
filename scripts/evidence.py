@@ -452,7 +452,8 @@ def _anchor_priors(sources_by_cell, admitted, assumptions):
                 continue
             fits = []
             for predictor in sources:
-                if predictor["weight"] <= 0 or predictor["source"] != rule["source"] or predictor["mapping"] == name:
+                if (predictor["weight"] <= 0 or predictor["source"] != rule["source"]
+                        or predictor["mapping"] == name or family not in predictor["families"]):
                     continue
                 pairs = []
                 for known, y in ranked.items():

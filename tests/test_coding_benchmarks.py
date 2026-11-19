@@ -40,6 +40,20 @@ class CodingBenchmarksTests(unittest.TestCase):
         rows = evidence.build_evidence(overlay, {}, [], "2026-11-20")["rows"]
         self.assertTrue(all(r["q_by_stakes"]["high"]["coding-agent"]["unknown"] for r in rows))
 
+    def test_reasoning_index_needs_versioned_coding_calibration(self):
+        models = [f"m{i}" for i in range(6)]
+        overlay = {"effort": {m: {"levels": {"codex": ["high"]}} for m in models}, "lanes": []}
+        variants = {m: {"levels": {"high": {"effort": "high", "index_version": 5,
+                    "evaluations": {"intelligence_index": 20 + i * 10 if i < 5 else 35,
+                                    "terminal_bench_4": .2 + i * .1 if i < 5 else None}}}}
+                    for i, m in enumerate(models)}
+        def grade():
+            result = evidence.build_evidence(overlay, {"artificial_analysis": variants}, [])
+            return next(r for r in result["rows"] if r["model_key"] == "m5")["q"]["coding-agent"]
+        self.assertEqual(grade()["imputation"]["predictor_mapping"], "aa_v5_coding_proxy")
+        variants["m5"]["levels"]["high"]["index_version"] = 4
+        self.assertTrue(grade()["unknown"])
+
     def test_go_flash_1017_uses_dated_catalog_identity(self):
         model = "deepseek-v4.1-flash"
         overlay = {"effort": {model: {"levels": {"opencode": ["max"]}}}, "lanes": []}
