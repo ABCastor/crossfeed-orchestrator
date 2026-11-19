@@ -108,7 +108,9 @@ def fetch_artificial_analysis(tokens: dict[str, list[str]], overlay: dict | None
     for model in models:
         slug = str(model.get("slug") or "").lower()
         effort_pattern = r"(?:xhigh|max|ultra|medium|high|low|none|minimal|thinking|non-reasoning|non-thinking)"
-        suffix = re.search(r"-(" + effort_pattern + r")$", slug)
+        # Some historical records append the explicit “older” variant tag.
+        # Keep those rows so unresolved duplicates fail closed as ambiguous.
+        suffix = re.search(r"-(" + effort_pattern + r")(?:-older)?$", slug)
         stem = slug[:suffix.start()] if suffix else slug
         base = re.sub(r"-(?:\d{8}|\d{4})$", "", stem)
         # Do not claim longer siblings or future releases by prefix.

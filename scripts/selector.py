@@ -918,12 +918,20 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         if usd is not None:
             pool_costs.setdefault(option["pool"], []).append(usd)
     medians = {pool: statistics.median(costs) for pool, costs in pool_costs.items()}
+    have_hard_grade = stakes == "high" and any(
+        evidence_for(option).get("q_by_stakes", {}).get("high", {}).get(family, {}).get("unknown") is False
+        for option in options)
     for option in options:
         row = evidence_for(option)
         strata = row.get("q_by_stakes", {})
         scoped = strata.get(stakes, {}).get(family)
         if scoped is None and stakes == "irreversible":
             scoped = strata.get("high", {}).get(family)
+        if (stakes == "high" and not have_hard_grade and scoped is not None and scoped.get("unknown")
+                and family in strata.get("low", {})):
+            # Preserve legacy high-value routing without mislabeling the fit
+            # as a hard grade. Irreversible selection still fails closed.
+            scoped = {**strata["low"][family], "basis": "local_fit_no_hard_benchmark"}
         q = scoped if scoped is not None else row.get("q", {}).get(family) or {}
         mean, sd = _number(q.get("mean")), _number(q.get("sd"))
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
