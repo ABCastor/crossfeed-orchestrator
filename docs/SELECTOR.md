@@ -45,6 +45,14 @@ Only the frozen fit split enters the ledger. Held-out payloads and excluded task
 
 **Keep exports private.** Artificial Analysis scores are fetched at runtime into host-local state; its raw numbers must never be committed to a public repository. Tests use invented scores. Other leaderboards used for human roster decisions do not silently become selector inputs.
 
+## Value modes and hard-role floors
+
+Use `--value-mode best-value|absolute-best` on `select` or `dispatch`. **Best value** (default) uses the existing quality, quota and latency score after admission. **Absolute best** chooses the highest eligible known grade, ignores quota price and latency in ranking, and does not explore or vary the result. Equal grades prefer less uncertain evidence; neither mode bypasses quota availability, model switches, data classification or an allow list. Absolute best never selects a paid route. Set `policy.selector.entitled_only: true` to also rule out all automatic paid routes in best value, even if an older cash envelope authorizes automatic use.
+
+`policy.selector.quality_floors_by_role` maps roles to minimum grades on the 0–1 scale. Example operator policy: `{"hard-reasoning":0.85,"review":0.60,"debug":0.60,"implementation":0.65}`. Calibrate against current, exact-effort frontier evidence, not prices. For a floored role the hard grade is used when the evidence has that stratum; unknown grades and below-floor grades are excluded before value ranking, even at low stakes. The role's family cannot be overridden. If nothing clears the floor, selection refuses instead of downgrading.
+
+For a floored role in best value, a native Claude subscription route is preferred only when every applicable weekly window has a fresh, numeric projection under 80% at reset, leaving 20% for the operator's main chats. The projection is never lower than observed use. Missing, stale or merely binary pace evidence grants no preference; non-preferred Claude routes can still compete on value. Absolute best does not apply this preference. JSON receipts expose the value mode, floor, and whether the preference fired.
+
 ## Running a worker
 
 `dispatch` requires `--role`, an existing `--dir`, and exactly one of `--prompt TEXT` or `--prompt-file FILE`. Optional flags are `--stakes low|normal|high|irreversible`, `--family`, `--exclude-lineage`, `--mode read-only|write`, `--last FILE`, `--dry-run` and `--no-refresh`. Stakes default to normal; mode follows the selector's role policy unless you supply it. Use `--exclude-lineage` for an independent review or council seat.

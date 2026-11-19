@@ -3257,6 +3257,7 @@ def select_option(
     allow: str | Path | None = None, lead: str | None = None,
     target: tuple[str, str] | None = None,
     data_class: str | None = None, prompt: str | None = None,
+    value_mode: str = "best-value",
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -3266,7 +3267,7 @@ def select_option(
         roster, runtime, state_dir, role, stakes=stakes, family=family,
         exclude_lineage=exclude_lineage, mode=mode, modality=modality, allow=allow, lead=lead,
         fleet=types.SimpleNamespace(**globals()),
-        target=target, data_class=data_class, prompt=prompt,
+        target=target, data_class=data_class, prompt=prompt, value_mode=value_mode,
     )
 
 
@@ -5812,6 +5813,7 @@ def build_parser() -> argparse.ArgumentParser:
     select.add_argument("--role", required=True)
     select.add_argument("--stakes", choices=["low", "normal", "high", "irreversible"], default="normal")
     select.add_argument("--family")
+    select.add_argument("--value-mode", choices=["best-value", "absolute-best"], default="best-value")
     select.add_argument("--exclude-lineage")
     select.add_argument("--lead", metavar="POOL", help="lead funding pool; explicit beats harness environment")
     select.add_argument("--allow", metavar="FILE_OR_LIST", help="restrict to pool:model_key:level entries; level * matches any")
@@ -5825,6 +5827,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--role", required=True)
     dispatch.add_argument("--stakes", choices=["low", "normal", "high", "irreversible"], default="normal")
     dispatch.add_argument("--family")
+    dispatch.add_argument("--value-mode", choices=["best-value", "absolute-best"], default="best-value")
     dispatch.add_argument("--exclude-lineage")
     dispatch.add_argument("--lead", metavar="POOL", help="lead funding pool; explicit beats harness environment")
     dispatch.add_argument("--allow", metavar="FILE_OR_LIST", help="restrict to pool:model_key:level entries; level * matches any")
@@ -6388,7 +6391,7 @@ def main() -> int:
                 family=args.family, exclude_lineage=args.exclude_lineage,
                 mode=args.mode, modality=getattr(args, "modality", "text"), allow=args.allow,
                 lead=resolve_lead_pool(roster, args.lead), data_class=args.data_class,
-                prompt=prompt if args.command == "dispatch" else None,
+                prompt=prompt if args.command == "dispatch" else None, value_mode=args.value_mode,
             )
             if args.command == "dispatch":
                 return dispatch_selection(selection, args, state_dir, prompt)

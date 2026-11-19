@@ -316,6 +316,41 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
     return options, rejected
 
 
+def _window_projection(window: dict, fleet: Any) -> tuple[float | None, dict]:
+    value = _number(window.get("projected_used_percent_at_reset"))
+    forecast = window.get("surplus")
+    if not isinstance(forecast, dict):
+        forecast = fleet.window_surplus(window)
+    if value is None:
+        value = _number(forecast.get("projected_used_percent_at_reset"))
+    if value is None:
+        eta, used, left = (_number(window.get(k)) for k in ("eta_seconds", "used_percent", "seconds_to_reset"))
+        if eta is not None and eta > 0 and used is not None and left is not None:
+            value = used + (100 - used) * left / eta
+    return value, forecast
+
+
+def _claude_weekly_projection(roster: dict, runtime: dict, option: dict, fleet: Any) -> float | None:
+    pool = option["pool"]
+    if option["harness"] != "claude" or option["funding"] != "included":
+        return None
+    state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool, roster=roster,
+                                               model_key=option["model_key"])
+    if state in {"UNKNOWN", "GAUGE_ERROR", "EXHAUSTED"} or evidence.get("confidence") == "stale":
+        return None
+    weekly = []
+    for name in evidence.get("applicable_windows", []):
+        window = evidence["windows"][name]
+        if window.get("window_minutes") != 7 * 24 * 60:
+            continue
+        value, _ = _window_projection(window, fleet)
+        used = _number(window.get("used_percent"))
+        if value is None or used is None:
+            return None  # A boolean "lasts to reset" cannot prove a 20% reserve.
+        weekly.append(max(used, value))
+    return max(weekly, default=None)
+
+
 def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any,
                 *, model_key: str | None = None) -> dict:
     """Price the greatest applicable pressure, with actual usage flooring forecasts.
@@ -350,16 +385,7 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
     for name, window in evidence.get("windows", {}).items():
         if name not in evidence.get("applicable_windows", evidence.get("windows", {})):
             continue
-        value = _number(window.get("projected_used_percent_at_reset"))
-        forecast = window.get("surplus")
-        if not isinstance(forecast, dict):
-            forecast = fleet.window_surplus(window)
-        if value is None:
-            value = _number(forecast.get("projected_used_percent_at_reset"))
-        if value is None:
-            eta, used, left = (_number(window.get(k)) for k in ("eta_seconds", "used_percent", "seconds_to_reset"))
-            if eta is not None and eta > 0 and used is not None and left is not None:
-                value = used + (100 - used) * left / eta
+        value, forecast = _window_projection(window, fleet)
         used = _number(window.get("used_percent")) or 0
         pressure = max(used, value) if value is not None else used
         price = pool_lambda(pressure, target, lambda0)
@@ -827,15 +853,30 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   modality: str = "text", allow: str | Path | None = None,
                   lead: str | None = None, fleet: Any = None,
                   target: tuple[str, str] | None = None, data_class: str | None = None,
-                  prompt: str | None = None) -> dict:
+                  prompt: str | None = None, value_mode: str = "best-value") -> dict:
     """Return choice/top3/lambdas and write an immutable replay receipt."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
     fleet.chatgpt_pro.refresh(roster, state_dir)
     policy = roster.get("policy", {}).get("selector", {})
+    if value_mode not in {"best-value", "absolute-best"}:
+        raise fleet.FleetError(f"unknown value mode: {value_mode}")
+    absolute = value_mode == "absolute-best"
+    floors = policy.get("quality_floors_by_role", {})
+    if not isinstance(floors, dict):
+        raise fleet.FleetError("quality_floors_by_role must be a role-to-grade map")
+    role_floor = _number(floors.get(role))
+    if role in floors and (role_floor is None or not 0 < role_floor <= 1):
+        raise fleet.FleetError(f"invalid quality floor for {role}; expected a grade in (0, 1]")
+    entitled_only = policy.get("entitled_only", False)
+    if not isinstance(entitled_only, bool):
+        raise fleet.FleetError("entitled_only must be a boolean")
     if stakes not in {"low", "normal", "high", "irreversible"}:
         raise fleet.FleetError(f"unknown stakes: {stakes}")
-    family = family or policy.get("families_by_role", {}).get(role) or FAMILY_BY_ROLE.get(role, "coding-agent")
+    role_family = policy.get("families_by_role", {}).get(role) or FAMILY_BY_ROLE.get(role, "coding-agent")
+    if role_floor is not None and family is not None and family != role_family:
+        raise fleet.FleetError(f"{role} quality floor requires task family {role_family}")
+    family = family or role_family
     if family not in FAMILIES:
         raise fleet.FleetError(f"unknown task family: {family}")
     allow_list = parse_allow(allow, fleet)
@@ -843,6 +884,11 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     options, rejected = enumerate_options(roster, runtime, role, mode=mode, modality=modality,
                                           exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools,
                                           data_class=data_class, prompt=prompt)
+    if absolute or entitled_only:
+        for option in options:
+            if option["funding"] not in {"included", "verified-free"}:
+                rejected.append(f"{option['model_key']}/{option['level']}: value policy permits entitlement only")
+        options = [option for option in options if option["funding"] in {"included", "verified-free"}]
     if target is not None:
         requested = next((lane for lane in roster.get("lanes", [])
                           if (lane.get("harness"), lane.get("model_key")) == target), {})
@@ -932,10 +978,21 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             # Preserve legacy high-value routing without mislabeling the fit
             # as a hard grade. Irreversible selection still fails closed.
             scoped = {**strata["low"][family], "basis": "local_fit_no_hard_benchmark"}
+        if role_floor is not None:
+            # A hard role cannot use the easy-fit stratum, even at low stakes.
+            scoped = strata.get("high", {}).get(family)
         q = scoped if scoped is not None else row.get("q", {}).get(family) or {}
         mean, sd = _number(q.get("mean")), _number(q.get("sd"))
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
+        if role_floor is not None and (unknown or mean < role_floor or mean > 1):
+            grade = "unknown" if unknown else f"{mean:.3f}"
+            rejected.append(f"{option['model_key']}/{option['level']}: {family} grade {grade} "
+                            f"does not clear {role} floor {role_floor:.3f}")
+            continue
+        if absolute and unknown:
+            rejected.append(f"{option['model_key']}/{option['level']}: quality unknown; absolute-best needs a grade")
+            continue
         # BR-CASH-004: an owner floor applies to the exact task family and effort.
         if funding.requires_reservation(option):
             floors = option.get("cash_quality_floors")
@@ -963,7 +1020,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         penalty = price * cost["penalty_percent"]
         if stakes == "high":
             penalty = min(penalty, high_cost_cap)
-        score = quality if stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
+        score = quality if absolute or stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
         cash = option.get("cash") or funding.quote(option["funding"])
         if funding.legacy_gemini(option["pool"], option["harness"]):
             cash = pool_cash[option["pool"]]
@@ -991,7 +1048,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     scored = [item for item in scored if not (item["q"]["unknown"] and item["q"]["mean"] in measured_means
                                              and not item.get("pro_fallback"))]
     scored.sort(key=lambda item: (-item["score"], -item["quality"], item["q"]["unknown"], item["q"]["sd"],
-                                  (item['cost']['estimated_usd'] if stakes != 'irreversible'
+                                  (item['cost']['estimated_usd'] if not absolute and stakes != 'irreversible'
                                    and 'source_price_1m' in item and item['cost']['estimated_usd'] is not None else math.inf),
                                   item["pool"], item["model_key"], item["level"]))
     if not scored:
@@ -999,15 +1056,28 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     explore = float(policy.get("explore", DEFAULTS["explore"])) if stakes == "low" and unknown_options else 0.0
     if not math.isfinite(explore) or not 0 <= explore <= 1:
         raise fleet.FleetError("explore must be in [0, 1]")
+    claude_preference = False
+    if not absolute and role_floor is not None and target is None:
+        preferred = []
+        for option in scored:
+            projection = _claude_weekly_projection(roster, runtime, option, fleet)
+            if projection is not None:
+                option["claude_weekly_projected_percent"] = projection
+                if projection < 80:
+                    preferred.append(option)
+        if preferred:
+            claude_preference = True
+            preferred_ids = {id(option) for option in preferred}
+            scored = preferred + [option for option in scored if id(option) not in preferred_ids]
     greedy = scored[0]
-    if target is not None and any(option.get("pro_fallback") for option in scored):
+    if not absolute and target is not None and any(option.get("pro_fallback") for option in scored):
         scored.sort(key=lambda option: (option.get("worker_level") != "xhigh", -option["score"]))
         greedy = scored[0]
         explore = 0.0
     variety = _variety_policy(policy, fleet)
     cash_preference = None
-    if target is not None:
-        candidates, probabilities = [greedy], [1.0]   # an explicitly requested model is not varied
+    if target is not None or absolute:
+        candidates, probabilities = [greedy], [1.0]
     else:
         paces: dict = {}
         recent: list = []
@@ -1022,7 +1092,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                 recent.append(recent_use(state_dir, fleet, variety["recency_half_life_s"]))
             return recent[0]
 
-        preferred, cash_preference = _cash_band(scored, greedy, stakes, weights, variety, pace_of)
+        if not claude_preference:
+            preferred, cash_preference = _cash_band(scored, greedy, stakes, weights, variety, pace_of)
         candidates, probabilities = _vary(preferred, preferred[0], stakes, weights, variety, pace_of, recency_of)
     exploring = bool(explore and random.random() < explore)
     if exploring:
@@ -1046,7 +1117,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
               "explore": explore, "unknown_options": len(unknown_options),
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
-              "cash_preference": cash_preference,
+              "cash_preference": cash_preference, "value_mode": value_mode,
+              "quality_floor": role_floor, "claude_preference": claude_preference,
               "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
                           "pace_weight": variety["pace_weight"],
                           "recency_half_life_s": variety["recency_half_life_s"],
