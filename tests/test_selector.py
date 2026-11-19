@@ -98,6 +98,37 @@ class SelectorTests(unittest.TestCase):
         self.assertIsNone(unknown["remaining_usd_equivalent"])
         self.assertEqual(unknown["scarcity_penalty"], 1.0)
 
+    def test_low_kimi_is_last_resort_after_subscription_and_floor_checks(self):
+        self.only(["codex", "opencode-go"])
+        self.roster["policy"]["selector"]["quality_floors_by_role"] = {"implementation": .65}
+        self.roster["quota_pools"]["opencode-go"]["plan"] = {"name": "OpenCode Go"}
+        kimi = "kimi-k3.1-pro"
+        lane = next(l for l in self.roster["lanes"] if l["model_key"] == "deepseek-v4-flash")
+        self.roster["lanes"].append(dict(lane, lane_id="go-kimi", model_key=kimi,
+                                        selector="opencode-go/" + kimi, roles=["implementation", "hard-reasoning"],
+                                        spend_level="low", value_routing_managed=True))
+        self.roster["effort"][kimi] = {"default": "max", "levels": {"opencode": ["max"]}}
+        codex = "gpt-6.1-sol"
+        self.evidence([quality_row(kimi, "max", mean=.99, family="coding-agent"),
+                       quality_row(codex, mean=.82, family="coding-agent")])
+        runtime = self.snapshot("opencode-go", 10, 10)
+        allowed = f"opencode-go:{kimi}:max,codex:{codex}:high"
+        for value_mode in ("best-value", "absolute-best"):
+            opts = {"role": "implementation", "allow": allowed, "value_mode": value_mode}
+            normal = self.select(runtime, **opts)
+            self.assertEqual(normal["choice"]["model_key"], codex)
+            self.assertFalse(any(o["model_key"] == kimi for o in normal["top3"]))
+            self.assertIn(f"{kimi}/max: low spend fallback withheld; another subscription clears the role floor",
+                          normal["rejected"])
+            exhausted = self.snapshot("codex", 100, 100)
+            exhausted["quota_snapshots"].update(runtime["quota_snapshots"])
+            fallback = self.select(exhausted, **opts)["choice"]
+            self.assertEqual(fallback["model_key"], kimi)
+            self.assertEqual(fallback["spend_level"], "low")
+            self.assertAlmostEqual(fallback["cost"]["percent"], 100 / 147)
+        with self.assertRaisesRegex(fleetctl.FleetError, "low spend level is reserved"):
+            self.select(runtime, role="default", allow=f"opencode-go:{kimi}:max")
+
     def test_allow_filters_before_scoring_and_records_every_receipt(self):
         self.only(["codex"])
         self.evidence([quality_row("gpt-6-astra", mean=.99), quality_row("gpt-6.1-sol", mean=.6)])

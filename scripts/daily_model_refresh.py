@@ -437,6 +437,7 @@ def rerank(roster, changes, today, fresh, successful):
     managed = [l for l in roster['lanes'] if l['lane_id'] in successful and l['lane_id'] in fresh
                and number(l.get('market_scores', {}).get('aa_intelligence')) is not None
                and l.get('harness') == 'opencode'
+               and l.get('spend_level', 'normal') not in {'off', 'low'}
                and l.get('quota_pool') in {'opencode-go', 'opencode-free'}]
     ranked = []
     for lane in managed:

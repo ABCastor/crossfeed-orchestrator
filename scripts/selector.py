@@ -138,6 +138,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
     for lane in candidates:
         key, harness, pool = lane.get("model_key"), lane.get("harness"), lane.get("quota_pool")
         label = lane.get("lane_id") or f"{pool}/{key}"
+        lane_level = lane.get("spend_level", "normal")
+        if lane_level not in fleet.LEVELS:
+            raise fleet.FleetError(f"{label}: invalid spend level {lane_level!r}")
         why = None
         cash_class = funding.classify(roster, pool, lane)
         legacy_gemini = funding.legacy_gemini(pool, harness)
@@ -163,6 +166,11 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "pool forbidden for role"
         elif lane.get("access_status") != "verified" or lane.get("admission_status") != "active":
             why = "access or admission not active/verified"
+        elif lane_level == "off":
+            why = "lane spend level off"
+        elif lane_level == "low" and (role not in {"implementation", "hard-reasoning"}
+                                      or role not in lane.get("roles", [])):
+            why = "low spend level is reserved for declared implementation or hard-reasoning fallback"
         elif lane.get("value_routing_managed") and role not in lane.get("roles", []):
             why = "role not declared for refreshed lane"
         elif not lane.get("direct") and not lane.get("roles"):
@@ -235,6 +243,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "mode": mode, "band": band, "pool_state": state,
                   "provider": lane.get("provider"), "funding": cash_class,
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
+        if lane_level != "normal":
+            option["spend_level"] = lane_level
         if "price_1m" in lane:
             option["source_price_1m"] = lane["price_1m"]
         if paid_cash is not None:
@@ -260,7 +270,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             busy = fleet.pool_level(runtime, pool) == "low" and fleet.live_pool_leases(runtime, pool)
         else:
             busy = fleet.lane_free_slots(runtime, lane, state, pool_evidence) <= 0
-        if busy:
+        if busy or (lane_level == "low" and fleet.live_pool_leases(runtime, pool)):
             rejected.append(f"{label}: at capacity")
             continue
         entry = roster.get("effort", {}).get(key, {})
@@ -1088,6 +1098,18 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                            **({"capacity": capacity} if capacity is not None else {}),
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
+    # Apply the lowest enabled spend dial after admission and quality, not as
+    # a score tiebreak. A low lane is not eligible for variety or dispatch retry
+    # while any normal subscription candidate still clears the floor.
+    ordinary_subscription = any(item["funding"] == "included" and item.get("spend_level") != "low"
+                                for item in scored)
+    for item in list(scored):
+        if item.get("spend_level") != "low":
+            continue
+        if role_floor is None or ordinary_subscription:
+            reason = "no configured role floor" if role_floor is None else "another subscription clears the role floor"
+            rejected.append(f"{item['model_key']}/{item['level']}: low spend fallback withheld; {reason}")
+            scored.remove(item)
     # Missing cells are not a cheaper substitute for measured equal-mean cells.
     # This dominance rule matters even when their price difference exceeds one
     # uncertainty penalty; the raw formula alone cannot enforce that promise.
