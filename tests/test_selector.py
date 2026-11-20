@@ -95,6 +95,48 @@ class SelectorTests(unittest.TestCase):
                 absolute = self.select(allow=allowed, value_mode="absolute-best", persist_receipts=False)
                 self.assertEqual(absolute["choice"]["level"], "max")
 
+    # BR-SELECT-004
+    def test_opus_hard_reasoning_priority_and_real_quota_fallback(self):
+        opus, sonnet, astra = "claude-opus-5-5", "claude-sonnet-5-5", "gpt-6-astra"
+        self.only(["claude", "codex"])
+        policy = self.roster["policy"]["selector"]
+        policy.update(prefer_opus_hard_reasoning=True, quality_floors_by_role={"hard-reasoning": .85})
+        self.roster["effort"][opus]["levels"]["claude"] = ["medium", "high"]
+        allowed = f"claude:{opus}:*,claude:{sonnet}:high,codex:{astra}:high,codex:gpt-6.1-sol:high"
+
+        def row(model, level, grade, output):
+            r = quality_row(model, level, grade, family="reasoning")
+            r["effort_estimate"] = {"tokens_per_task": {"in": 100, "out": output},
+                                    "price_1m": {"in": 0, "out": 10}, "units": output / 100, "latency_s": 1}
+            return r
+
+        def select(weekly, five_hour=3, opus_high=.76, **kwargs):
+            self.evidence([row(opus, "medium", .72, 100), row(opus, "high", opus_high, 160),
+                           row(sonnet, "high", .99, 10), row(astra, "high", .92, 300),
+                           row("gpt-6.1-sol", "high", .94, 100)])
+            runtime = claude_binding_fixture(fleetctl.utc_now())
+            windows = runtime["quota_snapshots"]["claude"]["windows"]
+            windows["secondary"].update(used_percent=weekly, projected_used_percent_at_reset=140)
+            windows["primary"]["used_percent"] = five_hour
+            return self.select(runtime, role="hard-reasoning", allow=allowed, persist_receipts=False, **kwargs)
+
+        with mock.patch.object(selector, "ASTRA_HARD_REASONING", astra):
+            result = select(89)
+            self.assertEqual((result["choice"]["model_key"], result["choice"]["level"]), (opus, "medium"))
+            self.assertTrue(result["hard_reasoning_preference"]["floor_exception"])
+            self.assertTrue(any("Sonnet excluded" in row for row in result["rejected"]))
+            self.assertNotIn(sonnet, [o["model_key"] for o in result["top3"]])
+            clear = select(89, opus_high=.87)
+            self.assertEqual(clear["choice"]["level"], "high")
+            self.assertFalse(clear["choice"]["floor_exception"])
+            for weekly, five_hour, cause in ((90, 3, "weekly"), (30, 100, "five-hour")):
+                with self.subTest(cause=cause):
+                    fallback = select(weekly, five_hour)
+                    self.assertEqual(fallback["choice"]["model_key"], astra)
+                    self.assertIn(cause, fallback["hard_reasoning_preference"]["reason"])
+            # Positive control: the same selection sees Sonnet when the best-value rule does not apply.
+            self.assertEqual(select(89, value_mode="absolute-best")["choice"]["model_key"], sonnet)
+
     def test_absolute_headroom_breaks_equal_percent_tie_only_in_best_value(self):
         self.only(["claude", "codex"])
         models = "claude-sonnet-5-5", "gpt-6.1-sol"

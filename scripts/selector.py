@@ -361,6 +361,29 @@ def _claude_weekly_projection(roster: dict, runtime: dict, option: dict, fleet: 
     return max(weekly, default=None)
 
 
+# BR-SELECT-004
+OPUS_HARD_REASONING = "claude-opus-5-5"
+ASTRA_HARD_REASONING = "gpt-6.2-astra"
+
+
+def _opus_quota_refusal(roster, runtime, fleet):
+    """Read active real usage, independently of projected pace and the spend dial."""
+    pool = "claude"
+    now = fleet.utc_now()
+    snapshot = runtime.get("quota_snapshots", {}).get(pool, {})
+    for name, window in snapshot.get("windows", {}).items():
+        if (fleet.parse_iso(window["reset_at"]) <= now or
+                not fleet.quota_window_applies(roster, pool, name, window, OPUS_HARD_REASONING)):
+            continue
+        used = _number(window.get("used_percent"))
+        minutes = window.get("window_minutes")
+        if used is not None and minutes == 300 and used >= 100:
+            return "Claude five-hour window exhausted"
+        if used is not None and minutes == 10080 and used >= 90:
+            return "Claude weekly window at least 90% used"
+    return None
+
+
 def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any,
                 *, model_key: str | None = None) -> dict:
     """Price the greatest applicable pressure, with actual usage flooring forecasts.
@@ -944,7 +967,7 @@ def _efficient_efforts(scored):
     return [o for o in scored if id(o) not in dropped], decisions
 
 
-# BR-SELECT-002, BR-SELECT-003
+# BR-SELECT-002, BR-SELECT-003, BR-SELECT-004
 def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   stakes: str = "normal", family: str | None = None,
                   exclude_lineage: str | None = None, mode: str | None = None,
@@ -979,6 +1002,12 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     family = family or role_family
     if family not in FAMILIES:
         raise fleet.FleetError(f"unknown task family: {family}")
+    prefer_opus = policy.get("prefer_opus_hard_reasoning", False)
+    if not isinstance(prefer_opus, bool):
+        raise fleet.FleetError("prefer_opus_hard_reasoning must be a boolean")
+    hard_preference = prefer_opus and not absolute and role == "hard-reasoning"
+    prefer_opus = hard_preference and family == "reasoning" and stakes != "irreversible"
+    opus_refusal = _opus_quota_refusal(roster, runtime, fleet) if prefer_opus else None
     allow_list = parse_allow(allow, fleet)
     explicit_pools = {entry.split(":", 1)[0] for entry in allow_list or []}
     options, rejected = enumerate_options(roster, runtime, role, mode=mode, modality=modality,
@@ -1010,8 +1039,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if pressure and stakes != "irreversible":
         retained = []
         for option in options:
-            if option["pool"] == lead:
-                rejected.append(f"{lead}/{option['model_key']}: pressured lead pool excluded")
+            if fleet.lead_blocks(runtime, roster, pressure, option):
+                reason = "pressured lead scoped window excluded" if pressure.get("scoped_window") else "pressured lead pool excluded"
+                rejected.append(f"{lead}/{option['model_key']}: {reason}")
             else:
                 retained.append(option)
         options = retained
@@ -1027,6 +1057,17 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         options = retained
         if not options:
             raise fleet.FleetError("no eligible selector option in allow list: " + "; ".join(rejected))
+    if hard_preference:
+        retained = []
+        for option in options:
+            model = option["model_identity"]
+            reason = ("Sonnet excluded from best-value hard reasoning" if model.startswith("claude-sonnet-") else
+                      opus_refusal if option["pool"] == "claude" and model == OPUS_HARD_REASONING else None)
+            if reason:
+                rejected.append(f"{option['model_key']}/{option['level']}: {reason}")
+            else:
+                retained.append(option)
+        options = retained
     capped = set()
     for option in options:
         pool = option["pool"]
@@ -1094,7 +1135,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         mean, sd = _number(q.get("mean")), _number(q.get("sd"))
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
-        if role_floor is not None and (unknown or mean < role_floor or mean > 1):
+        opus = (prefer_opus and option["pool"] == "claude" and option["funding"] == "included"
+                and option["model_identity"] == OPUS_HARD_REASONING)
+        below_floor = role_floor is not None and (unknown or not role_floor <= mean <= 1)
+        if below_floor and not opus:
             grade = "unknown" if unknown else f"{mean:.3f}"
             rejected.append(f"{option['model_key']}/{option['level']}: {family} grade {grade} "
                             f"does not clear {role} floor {role_floor:.3f}")
@@ -1150,11 +1194,14 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                 estimate = None  # Recorded tokens outside this route's bound do not price this task.
             cash = dict(cash, estimate_usd=estimate)
         scored.append(dict(option, cash=cash, quality=quality, quality_basis=q.get("basis"),
+                           **({"hard_reasoning_opus": True, "floor_exception": below_floor} if opus else {}),
                            q={"mean": mean, "sd": sd, "unknown": unknown},
                            score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
                            **({"capacity": capacity} if capacity is not None else {}),
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
+    if any(o.get("hard_reasoning_opus") and not o["floor_exception"] for o in scored):
+        scored = [o for o in scored if not o.get("floor_exception")]
     # Apply the lowest enabled spend dial after admission and quality, not as
     # a score tiebreak. A low lane is not eligible for variety or dispatch retry
     # while any normal subscription candidate still clears the floor.
@@ -1176,10 +1223,11 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     measured_means = {item["q"]["mean"] for item in scored if not item["q"]["unknown"]}
     unknown_options = [item for item in scored if item["q"]["unknown"]]
     for item in scored:
-        if item["q"]["unknown"] and item["q"]["mean"] in measured_means and not item.get("pro_fallback"):
+        if (item["q"]["unknown"] and item["q"]["mean"] in measured_means and
+                not (item.get("pro_fallback") or item.get("hard_reasoning_opus"))):
             rejected.append(f"{item['model_key']}/{item['level']}: unknown cell dominated by measured equal-mean option")
     scored = [item for item in scored if not (item["q"]["unknown"] and item["q"]["mean"] in measured_means
-                                             and not item.get("pro_fallback"))]
+                                             and not (item.get("pro_fallback") or item.get("hard_reasoning_opus")))]
     scored.sort(key=lambda item: (-item["score"], -item["quality"], item["q"]["unknown"], item["q"]["sd"],
                                   (item['cost']['estimated_usd'] if not absolute and stakes != 'irreversible'
                                    and 'source_price_1m' in item and item['cost']['estimated_usd'] is not None else math.inf),
@@ -1190,7 +1238,22 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if not math.isfinite(explore) or not 0 <= explore <= 1:
         raise fleet.FleetError("explore must be in [0, 1]")
     claude_preference = False
-    if not absolute and role_floor is not None and target is None:
+    hard_reasoning_preference = None
+    preferred = []
+    if prefer_opus:
+        preferred = [o for o in scored if o.get("hard_reasoning_opus")]
+        if preferred:
+            hard_reasoning_preference = {"route": "opus", "floor_exception": preferred[0]["floor_exception"]}
+        else:
+            gpt = [o for o in scored if o["pool"] == "codex"]
+            preferred = [o for o in gpt if o["model_identity"] == ASTRA_HARD_REASONING] or gpt
+            hard_reasoning_preference = {"route": "gpt-fallback" if preferred else "no-gpt-fallback",
+                                         "reason": opus_refusal or "Opus not admitted"}
+        if preferred:
+            ids = {id(o) for o in preferred}
+            scored = preferred + [o for o in scored if id(o) not in ids]
+            explore = 0.0
+    if not prefer_opus and not absolute and role_floor is not None and target is None:
         preferred = []
         for option in scored:
             projection = _claude_weekly_projection(roster, runtime, option, fleet)
@@ -1225,7 +1288,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                 recent.append(recent_use(state_dir, fleet, variety["recency_half_life_s"]))
             return recent[0]
 
-        if not claude_preference:
+        if not claude_preference and not preferred:
             preferred, cash_preference = _cash_band(scored, greedy, stakes, weights, variety, pace_of)
         candidates, probabilities = _vary(preferred, preferred[0], stakes, weights, variety, pace_of, recency_of)
     exploring = bool(explore and random.random() < explore)
@@ -1252,7 +1315,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
               "cash_preference": cash_preference, "value_mode": value_mode,
               "quality_floor": role_floor, "claude_preference": claude_preference,
-              "effort_decisions": effort_decisions,
+              "effort_decisions": effort_decisions, "hard_reasoning_preference": hard_reasoning_preference,
               "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
                           "pace_weight": variety["pace_weight"],
                           "recency_half_life_s": variety["recency_half_life_s"],

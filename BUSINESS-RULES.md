@@ -93,6 +93,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/selector.py:_efficient_efforts`, `scripts/selector.py:select_option`.
 - tested-by: `tests/test_selector.py:SelectorTests.test_best_value_requires_a_marginal_effort_gain_and_absolute_best_does_not`.
 
+## BR-SELECT-004 — Opus handles best-value hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
+
+- RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, best-value hard reasoning excludes Sonnet. Prefer Claude Opus 5.5 at its most efficient floor-clearing effort, or at its most efficient eligible effort with a recorded floor exception if none clears. No other role or model gets the exception. Absolute best and irreversible quality ranking do not use the efficiency preference or floor exception.
+- Authority: Operator: “Most of the time, I'm going to use Opus or Fable to orchestrate, and then around it anything you want. But I certainly don't want Sonnet on high to do hard reasoning. Probably Opus should do that.”
+- Fallback (agent's delegated tuning): Ignore the general 80% projected Claude-first guard for this preference. At 90% actual use of an active applicable Claude weekly window, an exhausted five-hour window, or when Opus is otherwise unavailable, prefer eligible GPT-6.2 Astra, then other eligible Codex models. Existing switches, lead reservation, quota circuits, and data policy still apply. A Claude lead reserves a pressured shared window for the lead; an identified Fable lead also reserves its pressured scoped window without excluding unrelated Claude lanes.
+- implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:detect_lead_pool`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
+- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback` (including positive Sonnet control in absolute-best), `tests/test_lead_profiles.py:LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
+
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 
 - RULE: Mechanically checked fit-only benchmark passes and failures enter the selector's local ledger once per trial, retaining source and measurement date. Each trial contributes one Beta observation alongside the existing weighted external prior. Imports preserve other ledger observations and reject conflicting reimports. Held-out and excluded cells never train selector quality or telemetry; mixed fit/held-out quota batches supply no inferred fit cost. Missing measurements remain unknown. Artificial Analysis values remain host-local runtime data and must never be copied into published source files.

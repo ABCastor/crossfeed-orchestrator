@@ -41,7 +41,7 @@ class LeadDetectionTests(unittest.TestCase):
                  ({"PI_CODING_AGENT_DIR": "/synthetic"}, None),
                  ({"PI_PROVIDER": "openai"}, None), ({"PI_PROVIDER": "google"}, None),
                  ({"PI_PROVIDER": "openai-codex"}, "codex"),
-                 ({"PI_PROVIDER": "anthropic"}, None),
+                 ({"PI_PROVIDER": "anthropic"}, None), ({"PI_PROVIDER": "claude-bridge"}, "claude"),
                  ({"PI_PROVIDER": "google-antigravity"}, "antigravity-gemini"),
                  ({"PI_QUOTA_POOL": "chatgpt-work"}, "chatgpt-work")]
         for env, expected in cases:
@@ -62,6 +62,33 @@ class LeadDetectionTests(unittest.TestCase):
             self.assertNotIn("lead:", fleetctl.render_brief(data, runtime=runtime))
             runtime["switches"] = {"claude": "on"}
             self.assertEqual(fleetctl.lead_directive(fleetctl.lead_pressure(runtime, "claude")), expected)
+
+    # BR-SELECT-004
+    def test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus(self):
+        fable, opus = "claude-fable-5-2", "claude-opus-5-5"
+        roster = json.loads((ROOT / "tests/fixtures/access-overlay.test.json").read_text())
+        roster["model_cards"][fable] = {"pool": "claude", "status": "current", "aliases": ["fable"]}
+        roster["effort"][fable] = {"levels": {"claude": ["high"]}, "default": "high"}
+        runtime = snapshot(used=12)
+        windows = runtime["quota_snapshots"]["claude"]["windows"]
+        windows["weekly-fable"] = dict(windows["weekly"], label="Fable only", used_percent=92)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(fleetctl, "utc_now", return_value=NOW), \
+                mock.patch.dict(os.environ, {"PI_PROVIDER": "claude-bridge", "PI_MODEL": fable}, clear=True):
+            state = Path(d)
+            (state / "evidence").mkdir()
+            (state / "evidence/levels.json").write_text(json.dumps({"rows": [
+                quality_row(fable, mean=.99), quality_row(opus, mean=.80)]}))
+            allowed = f"claude:{opus}:high,claude:{fable}:high"
+            lead = fleetctl.resolve_lead_pool(roster)
+            unaffiliated = selector.select_option(roster, runtime, state, "review", allow=allowed,
+                                                   value_mode="absolute-best", persist_receipts=False)
+            self.assertEqual(unaffiliated["choice"]["model_key"], fable)
+            protected = selector.select_option(roster, runtime, state, "review", allow=allowed,
+                                                lead=lead, value_mode="absolute-best", persist_receipts=False)
+            self.assertEqual(protected["choice"]["model_key"], opus)
+            self.assertEqual(protected["lead"], "claude")
+            self.assertEqual(protected["lead_pressure"]["scoped_window"], "weekly-fable")
+            self.assertTrue(any("scoped window excluded" in reason for reason in protected["rejected"]))
 
     def test_low_off_unknown_and_stale_truth_boundary(self):
         for level in ("low", "off"):

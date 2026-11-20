@@ -524,6 +524,7 @@ def detect_lead_pool(explicit: str | None = None, env: dict[str, str] | None = N
         return env.get("PI_QUOTA_POOL") or {
             "openai-codex": "codex",
             "google-antigravity": "antigravity-gemini",
+            "claude-bridge": "claude",
         }.get(env.get("PI_PROVIDER", "").lower())
     if any(key.startswith("CODEX_") for key in env):
         return "codex"
@@ -544,17 +545,43 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
     """Lead preservation uses observed pressure, independent of worker spend overrides."""
     if pool is None:
         return None
-    state, evidence = current_pool_state(_without_levels(runtime), pool, roster=roster)
+    observed = _without_levels(runtime)
+    state, evidence = current_pool_state(observed, pool, roster=roster)
     level = pool_level(runtime, pool)
-    if level not in {"low", "off"} and state not in {"CONSERVE", "CRITICAL", "EXHAUSTED"}:
-        return None
+    pressured = {"CONSERVE", "CRITICAL", "EXHAUSTED"}
+    scoped = False
+    if level not in {"low", "off"} and state not in pressured:
+        if pool != "claude":
+            return None
+        # An exact subscribed lead model can also draw a model-exclusive window.
+        model = (os.environ.get("PI_MODEL") if (os.environ.get("PI_PROVIDER") == "claude-bridge" or
+                                                 os.environ.get("PI_QUOTA_POOL") == "claude")
+                 else os.environ.get("ANTHROPIC_MODEL")) or ""
+        if not model.startswith("claude-"):
+            return None
+        state, evidence = current_pool_state(observed, pool, roster=roster, model_key=model)
+        if state not in pressured:
+            return None
+        scoped = True
     windows = {name: window for name, window in (evidence.get("windows") or {}).items()
-               if name in evidence.get("applicable_windows", evidence.get("windows") or {})}
+               if name in evidence.get("applicable_windows", evidence.get("windows") or {})
+               and (not scoped or not quota_window_applies(roster, pool, name, window, None))}
     name, window = max(windows.items(), key=lambda item: item[1]["used_percent"],
                        default=(None, {}))
     return {"pool": pool, "level": level, "state": state,
             "used_percent": window.get("used_percent"),
-            "window": (_compact_window_label(name, window) if name else None)}
+            "window": (_compact_window_label(name, window) if name else None),
+            **({"scoped_window": name} if scoped and name else {})}
+
+
+def lead_blocks(runtime, roster, pressure, option):
+    if not pressure or option["pool"] != pressure["pool"]:
+        return False
+    name = pressure.get("scoped_window")
+    if not name:
+        return True
+    window = runtime["quota_snapshots"][pressure["pool"]]["windows"][name]
+    return quota_window_applies(roster, pressure["pool"], name, window, option["model_key"])
 
 
 def lead_directive(pressure: dict[str, Any] | None) -> str | None:
