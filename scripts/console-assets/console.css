@@ -57,7 +57,8 @@ h1{font:600 32px/1.12 var(--read);letter-spacing:-.012em;margin:17px 0 .55rem}  
 
 /* one row per pool: who it is, what it has left, how much to spend */
 .pools{border-top:1px solid var(--ink)}
-.pool{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 20.5rem;grid-template-areas:"who gauge ctl" "pick pick pick" "pins pins pins";column-gap:2rem;align-items:center;padding:1.15rem 0 .35rem;border-bottom:1px solid var(--rule);scroll-margin-top:calc(var(--mast-stuck) + 1rem)}
+.pool{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 20.5rem;grid-template-areas:"who gauge ctl" "pick pick pick" "pins pins pins";column-gap:2rem;align-items:center;padding:1.15rem 0 .35rem;border-bottom:1px solid var(--rule)}
+:is(.pool,.wb){scroll-margin-top:calc(var(--mast-stuck) + 1rem)}
 .who{grid-area:who}.gauge{grid-area:gauge}.ctl{grid-area:ctl}.pick{grid-area:pick}
 .pool:target{animation:settle 1.4s var(--ease) both}
 @keyframes settle{0%{background:color-mix(in srgb,var(--between) 14%,transparent);box-shadow:0 0 0 .7rem color-mix(in srgb,var(--between) 14%,transparent)}100%{background:transparent;box-shadow:none}}
@@ -662,7 +663,7 @@ h1{margin-top:calc(17px + var(--line-w))}
 @media(max-width:400px){.bench-page h1{font-size:27px}.nerd-panel table{font-size:11px}}
 
 /* Workbench: one matrix, one decision, then the subscription inventory. */
-.wb{scroll-margin-top:calc(var(--mast-stuck) + 1rem);--wb-accent:light-dark(#B01526,#FD4E5A)}
+.wb{--wb-accent:light-dark(#B01526,#FD4E5A)}
 .wb h1{margin-bottom:1rem}
 .wb-query{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.5rem .75rem;margin-bottom:1rem}
 .wb-query label{display:grid;gap:.25rem;min-width:0;color:var(--quiet);font-size:13px}

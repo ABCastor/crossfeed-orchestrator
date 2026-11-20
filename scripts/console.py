@@ -1540,8 +1540,9 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         '<form class="wb-query" method="get" action="/#compare">'
         f'<label>Role<select name="role">{select(WORKBENCH_ROLES, data["role"])}</select></label>'
         f'<input type="hidden" name="value" value="{data["value"]}">'
-        f'<div class="wb-mode"><span>{VALUE_MODES[data["value"]]} preview</span>'
-        + _work_switch('preview-value', absolute, 'Preview absolute best', 'best-value' if absolute else 'absolute-best')
+        '<div class="wb-mode"><span>Ranking preview</span>'
+        + _work_switch('preview-value', absolute, 'Preview absolute best', 'best-value' if absolute else 'absolute-best',
+                       state_text=VALUE_MODES[data['value']])
         + '</div>'
         + ''.join(f'<label>Model / effort {i}<select name="compare">{select({"": "Auto" if i < 3 else "None", **menu}, key)}</select></label>'
                   for i, key in enumerate(slots, 1))
@@ -1556,13 +1557,15 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
     )
 
 
-def _work_switch(field: str, on: bool, label: str, value: str = '', *, disabled: str = '', hint_id: str = '') -> str:
+def _work_switch(field: str, on: bool, label: str, value: str = '', *, disabled: str = '', hint_id: str = '',
+                 state_text: str | None = None) -> str:
     esc = html.escape
     hint_id = 'why-' + esc(hint_id or field)
     hint = f' aria-describedby="{hint_id}" disabled' if disabled else ''
     return (f'<button type="submit" class="sw wb-switch" role="switch" aria-checked="{str(on).lower()}" '
             f'aria-label="{esc(label)}" name="{esc(field)}" value="{esc(value)}"{hint}>'
-            f'<span class="track" aria-hidden="true"><i></i></span><span class="st">{"On" if on else "Off"}</span></button>'
+            f'<span class="track" aria-hidden="true"><i></i></span>'
+            f'<span class="st">{esc(state_text or ("On" if on else "Off"))}</span></button>'
             + (f'<span class="wb-muted" id="{hint_id}">{esc(disabled)}</span>' if disabled else ''))
 
 
@@ -1757,6 +1760,13 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     else:
                         self._html(200, render_benchmarks(cards))
                     return
+                if url.path == '/':
+                    try:
+                        query = urllib.parse.parse_qs(url.query, max_num_fields=24)
+                        role, value, requested = _workbench_query(query)
+                    except ValueError as exc:
+                        self._refuse(400, 'Invalid comparison', str(exc))
+                        return
                 overview = console.overview()
                 if url.path == "/snapshot":
                     self._send(200, json.dumps(snapshot_payload(overview)).encode(), "application/json; charset=utf-8")
@@ -1767,12 +1777,6 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 if url.path == '/settings':
                     page = render_settings(overview, console.form_token)
                 else:
-                    try:
-                        query = urllib.parse.parse_qs(url.query, max_num_fields=24) if url.query else {}
-                        role, value, requested = _workbench_query(query)
-                    except ValueError as exc:
-                        self._refuse(400, 'Invalid comparison', str(exc))
-                        return
                     page = render_page(overview, console.form_token,
                                        workbench_data(overview, console.state_dir, role, value, requested))
             except (fleetctl.FleetError, OSError, ValueError) as exc:
