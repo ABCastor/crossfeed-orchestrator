@@ -661,6 +661,67 @@ h1{margin-top:calc(17px + var(--line-w))}
 }
 @media(max-width:400px){.bench-page h1{font-size:27px}.nerd-panel table{font-size:11px}}
 
+/* Workbench: one matrix, one decision, then the subscription inventory. */
+.wb{scroll-margin-top:calc(var(--mast-stuck) + 1rem);--wb-accent:light-dark(#B01526,#FD4E5A)}
+.wb h1{margin-bottom:1rem}
+.wb-query{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.5rem .75rem;margin-bottom:1rem}
+.wb-query label{display:grid;gap:.25rem;min-width:0;color:var(--quiet);font-size:13px}
+.wb-query label:nth-child(-n+2){grid-column:span 2}
+.wb-query :is(select,button){min-width:0;max-width:100%;min-height:44px;padding:.35rem .5rem;font:500 14px var(--face);color:var(--ink);background:var(--paper);border:1px solid var(--rule-strong);border-radius:3px}
+.wb-query button{justify-self:start;color:var(--wb-accent);border-color:currentColor;cursor:pointer}
+.wb-query button:hover{background:var(--surface)}
+.wb-matrix{width:100%;border-collapse:collapse;table-layout:fixed;font-size:14px}
+.wb-matrix :is(th,td){text-align:left;vertical-align:top;overflow-wrap:anywhere;padding:.45rem .5rem;border-bottom:1px solid var(--rule)}
+.wb-matrix :is(th,td):first-child{width:19%;padding-inline-start:0}
+.wb-matrix thead{border-block:1px solid var(--rule-strong)}
+.wb-matrix thead th{font-weight:650}
+.wb-matrix thead small{display:block;color:var(--quiet);font:400 13px var(--face)}
+.wb-matrix tbody th{font-weight:500;color:var(--quiet)}
+.wb-matrix tbody tr:nth-child(-n+4) td{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.wb-muted{color:var(--quiet);font-size:13px}
+.wb-pick{display:grid;grid-template-columns:1fr 1fr;gap:0 .75rem;border-block:1px solid var(--rule-strong);padding:.5rem 0;margin-top:1rem}
+.wb-pick p{margin:.25rem 0}
+.wb-pick p b{display:block;line-height:1.15}
+.wb-pick > :is(details,.wb-muted,.wb-value){grid-column:1/-1}
+.wb-pick details ul{padding-inline-start:1.25rem;overflow-wrap:anywhere}
+.wb-value,.wb-model-control,.wb-pool-switch,.wb-explicit{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.wb-subheading{font:600 23px/1.25 var(--read);margin:1.5rem 0 .25rem}
+main:has(.wb) .quota-reading{margin-bottom:.25rem}
+main:has(.wb) .quota-reading .stamp{margin:0;font-size:12px}
+main:has(.wb) .pool:not(.provider-group){grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(11rem,1fr);gap:.25rem 1rem;align-items:start;padding:.75rem 0}
+main:has(.wb) :is(.pool-title,.q,.allow){overflow-wrap:anywhere}
+main:has(.wb) .pool.lvl-off h2{text-decoration:none}
+main:has(.wb) .plan{font-size:14px}
+main:has(.wb) .pick{margin:0}
+main:has(.wb) .pick .sort-control{margin-bottom:.25rem}
+.wb-switch.sw{min-height:44px;margin:0;align-self:center}
+.wb-switch .st{min-width:2ch}
+.wb-switch:focus-visible,.wb-query :focus-visible,.wb-inventory:focus-visible{outline:2px solid var(--machine-text);outline-offset:3px}
+.wb-inventory,.wb-advanced>summary,.wb-more>summary,.wb-pick summary{cursor:pointer;padding:.5rem 0;font-weight:600}
+.wb-inventory{min-height:44px;color:var(--machine-text)}
+.wb-more{margin-top:1.5rem;border-top:1px solid var(--rule-strong)}
+.wb-more>summary{min-height:44px}
+.wb-pool-control p{margin:0}
+.wb-pool-control .stop{font-size:12px}
+.wb-pool-control .means{font-size:13px}
+.wb-advanced .lv{width:min(20rem,100%)}
+.wb-pool-control .lvh{display:none}
+.wb-models .opts{margin:0}
+.wb-models .wb-model{display:grid;grid-template-columns:minmax(0,1fr) minmax(7.25rem,auto);align-items:center;gap:.75rem;padding:0 0 .15rem;margin:0;min-width:0}
+.wb-model-name{display:flex;align-items:center;min-width:0;overflow-wrap:anywhere}
+.wb-model-control{justify-content:flex-end}
+@media(max-width:48rem){
+  .wb-query{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .wb-query label:nth-child(-n+2){grid-column:auto}
+  main:has(.wb) .pool:not(.provider-group){grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"who ctl" "gauge gauge" "pick pick" "pins pins"}
+}
+@media(max-width:30rem){
+  .wb-matrix :is(th,td){padding-inline:.15rem;font-size:12px}
+  .wb-matrix tbody tr:nth-child(-n+4) td{font-size:12px}
+  .wb-matrix :is(th,td):first-child{width:22%}
+  main:has(.wb) .pool:not(.provider-group){grid-template-columns:minmax(0,1fr);grid-template-areas:"who" "gauge" "ctl" "pick" "pins"}
+}
+
 .control-actor { font-size: .75rem; color: var(--quiet); }
 .model-actor { white-space: nowrap; }
 

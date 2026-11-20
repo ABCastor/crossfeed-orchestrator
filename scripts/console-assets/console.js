@@ -468,9 +468,15 @@ function boot(document, window) {
     if (settingsPanel && !settingsPanel.hidden && !event.target.closest('.settings-panel, .settings-toggle')) closeSettings(false);
     if (panel && !panel.hidden && !event.target.closest('.find-panel, .find-lens')) closeSearch(false);
   });
+  const workbench = document.querySelector('.wb');
   if (window.location.hash) {
     const target = document.getElementById(window.location.hash.slice(1));
+    if (workbench && target?.matches('details.pick')) {
+      target.open = true;
+      target.querySelector('summary')?.focus();
+    }
     if (target?.id === 'provider-setup') {
+      const tools = target.closest('details'); if (tools) tools.open = true;
       const details = target.querySelector('details'); if (details) details.open = true;
       target.scrollIntoView({block: 'start'});
     }
@@ -593,7 +599,7 @@ function boot(document, window) {
   }
   function showModels(pool, on, told) {
     const pick = picks.get(pool);
-    if (!pick) return;
+    if (!pick || workbench) return;
     const models = [];
     const every = [];
     for (const sw of switchesOf(pick)) {
@@ -638,7 +644,7 @@ function boot(document, window) {
       confirmed.set(`level:${pool.pool}`, pool.level);
       if (!skip(`level:${pool.pool}`)) showLevel(pool.pool, pool.level, pool.means);
       const row = document.getElementById(`pool-${pool.pool}`);
-      if (row && pool.gauge !== undefined) row.querySelector('.gauge').innerHTML = pool.gauge;
+      if (row && !workbench && pool.gauge !== undefined) row.querySelector('.gauge').innerHTML = pool.gauge;
       if (row && !skip(`level:${pool.pool}`) && pool.control_actor !== undefined) {
         const actor = row.querySelector('.level-actor');
         if (actor) actor.textContent = pool.control_actor;
@@ -879,7 +885,7 @@ function boot(document, window) {
 
   document.addEventListener('submit', async event => {
     const form = event.target;
-    if (!form.matches('.lv, .choose, .quota-refresh')) return;
+    if (workbench || !form.matches('.lv, .choose, .quota-refresh')) return;
     event.preventDefault();
     const body = new URLSearchParams(new FormData(form));
     if (event.submitter?.name) body.set(event.submitter.name, event.submitter.value);
@@ -1005,7 +1011,7 @@ function boot(document, window) {
       }
     } catch (_) { /* Stored readings remain visible with their age. */ }
   }
-  if (status) { window.setTimeout(refresh, 1000); window.setInterval(refresh, 30000); }
+  if (status && !workbench) { window.setTimeout(refresh, 1000); window.setInterval(refresh, 30000); }
   return {update, showModels, showLevel, saver, openSearch, closeSearch};
 }
 
