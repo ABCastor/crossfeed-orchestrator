@@ -85,6 +85,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - tested-by: `tests/test_business_pace_variety.py:VarietyTests.test_surplus_pool_about_to_reset_is_preferred_over_equal_quality_deficit_pool`, `test_fifty_equal_quality_dispatches_are_spread_across_lanes`, `test_in_flight_dispatches_count_as_recent_use`; prohibitions `test_a_lane_below_the_quality_band_is_never_chosen_however_much_surplus` (with its equal-quality control), `test_hard_gates_hold_for_a_surplus_lane`, `test_irreversible_and_explicit_targets_are_never_varied`; `PaceReadingTests` for the glance, brief and stale-reading control.
 - Review when: the operator sets the numbers, a provider changes window semantics (rolling versus fixed resets), or the variety share is seen exceeded in live runs.
 
+## BR-SELECT-003 — Best value requires a return on extra effort [DIRECTION DECIDED 2026-11-19 · TUNING DELEGATED]
+
+- RULE: Best value compares grade per planning cost among the eligible efforts of each subscription or free route. A higher effort needs enough marginal grade improvement; absolute best ranks on known grade instead. Neither rule grants admission.
+- Authority: Operator: “Max is almost always sub-efficient. Even extra high, it's almost always sub-efficient in terms of cost.” The implementation sets and states the marginal threshold; it does not ban any named effort.
+- Tuning: Using the cheapest graded step as baseline, a step-up must earn at least `(baseline grade + 0.05) / baseline cost` grade per extra unit of cost. Among qualifying steps and the baseline, choose the highest grade/cost. If no step has a known grade, keep the cheapest step for the existing unknown-quality policy.
+- implemented-by: `scripts/selector.py:_efficient_efforts`, `scripts/selector.py:select_option`.
+- tested-by: `tests/test_selector.py:SelectorTests.test_best_value_requires_a_marginal_effort_gain_and_absolute_best_does_not`.
+
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 
 - RULE: Mechanically checked fit-only benchmark passes and failures enter the selector's local ledger once per trial, retaining source and measurement date. Each trial contributes one Beta observation alongside the existing weighted external prior. Imports preserve other ledger observations and reject conflicting reimports. Held-out and excluded cells never train selector quality or telemetry; mixed fit/held-out quota batches supply no inferred fit cost. Missing measurements remain unknown. Artificial Analysis values remain host-local runtime data and must never be copied into published source files.

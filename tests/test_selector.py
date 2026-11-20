@@ -73,6 +73,28 @@ class SelectorTests(unittest.TestCase):
                 entry["default"] = "high"
                 entry.pop("stand_in_ceiling", None)
 
+    # BR-SELECT-003
+    def test_best_value_requires_a_marginal_effort_gain_and_absolute_best_does_not(self):
+        model = "gpt-6.1-sol"
+        self.only(["codex"])
+        self.roster["effort"][model]["levels"]["codex"] = ["medium", "high", "max"]
+        allowed = f"codex:{model}:*"
+
+        def row(level, grade, output):
+            return {**quality_row(model, level, grade), "effort_estimate": {
+                "tokens_per_task": {"in": 100, "out": output}, "price_1m": {"in": 0, "out": 10},
+                "latency_s": 1, "units": output / 100}}
+
+        for high, expected in ((.82, "medium"), (.83, "high")):
+            with self.subTest(high=high):
+                self.evidence([row("medium", .65, 100), row("high", high, 125), row("max", .95, 300)])
+                best = self.select(allow=allowed, persist_receipts=False)
+                self.assertEqual(best["choice"]["level"], expected)
+                self.assertEqual([option["level"] for option in best["top3"]], [expected])
+                self.assertEqual(best["effort_decisions"][0]["chosen"], expected)
+                absolute = self.select(allow=allowed, value_mode="absolute-best", persist_receipts=False)
+                self.assertEqual(absolute["choice"]["level"], "max")
+
     def test_absolute_headroom_breaks_equal_percent_tie_only_in_best_value(self):
         self.only(["claude", "codex"])
         models = "claude-sonnet-5-5", "gpt-6.1-sol"

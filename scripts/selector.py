@@ -905,7 +905,46 @@ def parse_allow(value: str | Path | None, fleet: Any) -> list[str] | None:
     return entries
 
 
-# BR-SELECT-002
+# BR-SELECT-003
+EFFORT_MARGIN = .05
+
+
+def _efficient_efforts(scored):
+    """Choose one effort per route before comparing quota/latency across routes."""
+    groups = {}
+    for item in scored:
+        if item["funding"] in {"included", "verified-free"} and item["cost"].get("effort_units"):
+            key = item["pool"], item["harness"], item["model_key"]
+            groups.setdefault(key, []).append(item)
+    dropped, decisions = set(), []
+    for (pool, harness, model), options in groups.items():
+        if len(options) < 2:
+            continue
+        measured = [o for o in options if not o["q"]["unknown"]]
+        eligible = measured or options
+        usd = all((o["cost"].get("estimated_usd") or 0) > 0 and
+                  ((o["cost"]["effort_estimate"].get("price_1m") or {}).get("out") or 0) > 0 for o in options)
+        key = "estimated_usd" if usd else "effort_units"
+
+        def cost(item):
+            return item["cost"][key]
+
+        cheapest = min(eligible, key=lambda o: (cost(o), -o["quality"], o["level"]))
+        base_grade, base_cost = cheapest["quality"], cost(cheapest)
+        hurdle = (base_grade + EFFORT_MARGIN) / base_cost
+        qualified = [o for o in eligible if o is cheapest or (
+            measured and cost(o) > base_cost and o["quality"] - base_grade >= hurdle * (cost(o) - base_cost))]
+        chosen = max(qualified, key=lambda o: (o["quality"] / cost(o), -cost(o)))
+        decisions.append({"pool": pool, "harness": harness, "model_key": model, "chosen": chosen["level"],
+                          "cost_basis": key, "baseline": cheapest["level"], "marginal_hurdle": hurdle,
+                          "levels": [{"level": o["level"], "grade": None if o["q"]["unknown"] else o["quality"],
+                                      "cost": cost(o), "qualifies": o in qualified}
+                                     for o in sorted(options, key=cost)]})
+        dropped.update(id(o) for o in options if o is not chosen)
+    return [o for o in scored if id(o) not in dropped], decisions
+
+
+# BR-SELECT-002, BR-SELECT-003
 def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   stakes: str = "normal", family: str | None = None,
                   exclude_lineage: str | None = None, mode: str | None = None,
@@ -1128,6 +1167,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             reason = "no configured role floor" if role_floor is None else "another subscription clears the role floor"
             rejected.append(f"{item['model_key']}/{item['level']}: low spend fallback withheld; {reason}")
             scored.remove(item)
+    effort_decisions = []
+    if not absolute and stakes != "irreversible":
+        scored, effort_decisions = _efficient_efforts(scored)
     # Missing cells are not a cheaper substitute for measured equal-mean cells.
     # This dominance rule matters even when their price difference exceeds one
     # uncertainty penalty; the raw formula alone cannot enforce that promise.
@@ -1210,6 +1252,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
               "cash_preference": cash_preference, "value_mode": value_mode,
               "quality_floor": role_floor, "claude_preference": claude_preference,
+              "effort_decisions": effort_decisions,
               "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
                           "pace_weight": variety["pace_weight"],
                           "recency_half_life_s": variety["recency_half_life_s"],
