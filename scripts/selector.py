@@ -731,17 +731,28 @@ def _display_usd(row, prices):
     return amount if math.isfinite(amount) else None
 
 
+def _planning_row(row):
+    estimate = row.get("effort_estimate")
+    if not estimate:
+        return row
+    return {**row, "tokens_per_task": estimate["tokens_per_task"], "price_1m": estimate["price_1m"]}
+
+
 def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
                median_usd: float | None) -> tuple[dict, list[str]]:
     pool = option["pool"]
+    plan = row.get("effort_estimate") or {}
+    priced = _planning_row(row)
+    units = plan.get("units", 1.0)
+    planning = {"effort_units": units, "effort_estimate": plan} if plan else {}
     if binding.get("projection_basis") == "none-known":
         chat = option.get("harness") == "chatgpt-chat" or pool == "chatgpt-work"
-        usd = None if chat else _display_usd(row, _legacy_pair(row.get("price_1m")))
+        usd = None if chat else _display_usd(priced, _legacy_pair(priced.get("price_1m")))
         return {"estimated_usd": usd, "percent": None, "allowance_usd": None,
                 "estimated": True, "unknown": True, "basis": "no_known_limit",
-                "penalty_percent": 0.0}, ["chat_usage_unpriced" if chat else "usage_unpriced"]
+                "penalty_percent": 0.0, **planning}, ["chat_usage_unpriced" if chat else "usage_unpriced"]
     allowance = _allowance_usd(roster, pool, binding)
-    usd, percent = _cost(row, allowance)
+    usd, percent = _cost(priced, allowance)
     own = row.get("own_cost") or {}
     own = own.get(pool, {}) if isinstance(own.get(pool), dict) else (
         own if own.get("pool", row.get("pool")) == pool else {})
@@ -773,7 +784,7 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
             requests = _number(own.get("requests_per_task"))
             observed = requests is not None and requests > 0
             requests = requests if observed else 1
-            percent = 100 / count * requests
+            percent = 100 / count * requests * units
             basis = "go_request_estimate"
             request_model = {"requests_per_task": requests, "typical_requests_in_window": count,
                              "request_count_basis": "observed_median" if observed else "unmeasured_one_request",
@@ -794,7 +805,8 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
                                         "weight_basis": "API prices, not known Claude Max weights"}}
     return {"estimated_usd": usd, "percent": percent, "allowance_usd": allowance,
             "estimated": basis != "measured", "unknown": percent is None, "basis": basis,
-            "penalty_percent": percent if percent is not None else nominal, **request_model, **effort_proxy}, flags
+            "penalty_percent": percent if percent is not None else nominal * units,
+            **request_model, **effort_proxy, **planning}, flags
 
 
 # BR-DATA-001
@@ -997,7 +1009,12 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         row = rows.get((option["model_identity"], option["level"]), {})
         if "source_price_1m" in option:
             price = option["source_price_1m"]
-            return dict(row, price_1m=price if isinstance(price, dict) else {})
+            row = dict(row, price_1m=price if isinstance(price, dict) else {})
+            estimate = row.get("effort_estimate")
+            if estimate:
+                rates = funding.rates(price)
+                row["effort_estimate"] = {**estimate, "price_1m": dict(zip(("in", "out"), rates)) if rates else None}
+            return row
         return row
     pool_cash = fleet.cash_by_pool(roster, state_dir)
     scored = []
@@ -1009,7 +1026,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         raise fleet.FleetError("high_cost_cap must be finite and nonnegative")
     pool_costs = {}
     for option in options:
-        usd, _ = _cost(evidence_for(option), None)
+        usd, _ = _cost(_planning_row(evidence_for(option)), None)
         if usd is not None:
             pool_costs.setdefault(option["pool"], []).append(usd)
     medians = {pool: statistics.median(costs) for pool, costs in pool_costs.items()}
@@ -1065,7 +1082,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                  model_key=option["model_key"])
         cost, cost_flags = _task_cost(roster, option, row, pool_price, medians.get(option["pool"]))
         price = pool_price["lambda"]
-        latency = _number(row.get("latency_by_stakes", {}).get(stakes, row.get("latency_s")))
+        latency = _number(row.get("latency_by_stakes", {}).get(
+            stakes, row.get("effort_estimate", {}).get("latency_s", row.get("latency_s"))))
         telemetry = row.get("source_telemetry", {})
         source = telemetry.get(option["pool"] + "/" + option["harness"], telemetry.get(option["pool"], {}))
         if _number(source.get("latency_s")) is not None:

@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import evidence
+import selector
 
 SPEC = importlib.util.spec_from_file_location("selector_test_market", ROOT / "scripts/market-refresh.py")
 market = importlib.util.module_from_spec(SPEC)
@@ -36,6 +37,40 @@ def cell(result, level="high"):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_standardized_effort_cost_increases_for_every_multi_effort_model(self):
+        # Include priced, request-tariff and unsupported-tariff routes.
+        harnesses = {"codex": "codex", "claude": "claude", "antigravity-gemini": "agy",
+                     "opencode-go": "opencode", "github-copilot-student": "copilot"}
+        levels = ["low", "medium", "high", "xhigh", "max"]
+        models = {pool: {"levels": {harness: levels}} for pool, harness in harnesses.items()}
+        priced = {pool: {"levels": {"high": {"effort": "high", "price_1m_input": 2,
+                                               "price_1m_output": 10}}}
+                  for pool in models if pool != "github-copilot-student"}
+        data = evidence.build_evidence({"effort": models}, {"artificial_analysis": priced}, [], READ_ON)
+        for pool in models:
+            with self.subTest(pool=pool):
+                rows = {r["level"]: r for r in data["rows"] if r["model_key"] == pool}
+                costs = [selector._task_cost({}, {"pool": pool, "model_key": pool, "run_as": pool,
+                                                  "level": level}, rows[level], {}, None)[0] for level in levels]
+                for key in ("effort_units", "penalty_percent") + (("estimated_usd",) if pool in priced else ()):
+                    values = [cost[key] for cost in costs]
+                    self.assertTrue(all(a < b for a, b in zip(values, values[1:])), (key, values))
+                times = [rows[level]["effort_estimate"]["latency_s"] for level in levels]
+                self.assertEqual(sorted(set(times)), times)
+
+    def test_published_effort_and_local_tokens_remain_distinguishable(self):
+        roster = overlay()
+        roster["policy"] = {"evidence": {"effort_output_tokens": {"synthetic-model": {
+            "source": "synthetic-benchmark", "read_on": READ_ON, "output_tokens_per_task": {"low": 20, "high": 100}}}}}
+        records = [{"run_id": "run", "model": "synthetic-model", "effort": "high",
+                    "tokens": {"input": 4000, "output": 1100}}]
+        data = evidence.build_evidence(roster, catalog(), records, READ_ON)
+        self.assertEqual(cell(data)["tokens_per_task"]["out"], 1100)
+        self.assertEqual(cell(data, "low")["effort_estimate"]["tokens_per_task"]["out"], 300)
+        self.assertEqual(cell(data)["effort_estimate"]["published_output_tokens"], 100)
+        fallback = evidence.build_evidence(overlay(), catalog(), records, READ_ON)
+        self.assertEqual(cell(fallback)["effort_estimate"]["basis"], "local_tokens")
+
     def test_aa_free_feed_collects_all_pages_and_keeps_measurement_units(self):
         def response(page, level, **extra):
             return io.BytesIO(json.dumps({"tier": "free", "intelligence_index_version": 5,

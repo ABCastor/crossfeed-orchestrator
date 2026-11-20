@@ -386,6 +386,79 @@ def _source_rows(model, level, catalog, assumptions, read_on, overlay):
     return sources, variants, ambiguous
 
 
+# A prior, not a provider tariff or a measured speed curve. See docs/SELECTOR.md.
+EFFORT_OUTPUT = {"none": .35, "minimal": .45, "low": .60, "medium": .80, "high": 1.,
+                 "thinking": 1.15, "xhigh": 1.50, "max": 2.30, "ultra": 3.50}
+
+
+def _effort_estimates(rows, overlay, catalog, defaults):
+    """Compare efforts on the same task without overwriting observations or cash inputs."""
+    models = {}
+    for row in rows:
+        if row["level"] in EFFORT_OUTPUT:
+            models.setdefault(row["model_key"], []).append(row)
+    published = (overlay.get("policy") or {}).get("evidence", {}).get("effort_output_tokens", {})
+    base_in, base_out = defaults["tokens_in"], defaults["tokens_out"]
+    for model, levels in models.items():
+        if len(levels) < 2:
+            continue
+        feed = published.get(model, {})
+        snapshot = served_snapshot(overlay, model)
+        go_model = (catalog.get("go_models") or {}).get(model, {})
+        if model == "deepseek-v4.1-flash" and go_model.get("name") == "DeepSeek V4.1 Flash 1017":
+            snapshot = snapshot or "1017"
+        counts = feed.get("output_tokens_per_task", {}) if feed.get("snapshot") == snapshot else {}
+        reported = {r["level"]: n for r in levels if "ambiguous_variants" not in r["flags"]
+                    and (n := _number(counts.get(r["level"]))) is not None and n > 0}
+        # One standard prompt size. Local outputs from a radically different
+        # prompt size (or missing/zero counters) do not calibrate this estimate.
+        local = {r["level"]: r["tokens_per_task"]["out"] for r in levels
+                 if {"tokens_in_measured", "tokens_out_measured"} <= set(r["flags"])
+                 and base_in / 2 <= r["tokens_per_task"]["in"] <= base_in * 2
+                 and r["tokens_per_task"]["out"] > 0}
+        published_scale = (base_out / reported["high"] if "high" in reported else
+                           statistics.median(base_out * EFFORT_OUTPUT[k] / n for k, n in reported.items())
+                           if reported else 1.)
+        anchors = {k: (n, "local_tokens") for k, n in local.items()}
+        anchors.update({r["level"]: (r["tokens_per_task"]["out"], "aa_claude_output_ratio")
+                        for r in levels if "tokens_out_effort_proxy" in r["flags"]})
+        anchors.update({k: (n * published_scale, "published_output_ratio") for k, n in reported.items()})
+        timed = {r["level"]: r["latency_s"] for r in levels if "latency_estimated" not in r["flags"]}
+        tariffs = [r["price_1m"] for r in levels if all(r["price_1m"].get(k) is not None for k in ("in", "out"))]
+        # A single reference pair prevents tariff/snapshot differences from
+        # masquerading as a decrease in compute. Raw exact prices stay intact.
+        tariff = {k: max(p[k] for p in tariffs) for k in ("in", "out")} if tariffs else None
+        previous = 0.
+        for row in sorted(levels, key=lambda r: EFFORT_OUTPUT[r["level"]]):
+            level = row["level"]
+            multiple = EFFORT_OUTPUT[level]
+            nearest = lambda cells: min(cells, key=lambda k: (abs(math.log(EFFORT_OUTPUT[k] / multiple)), k))
+            if level in anchors:
+                output, basis = anchors[level]
+            elif anchors:
+                ref = nearest(anchors)
+                output, basis = anchors[ref][0] * multiple / EFFORT_OUTPUT[ref], "ladder_from_" + anchors[ref][1]
+            else:
+                output, basis = base_out * multiple, "conservative_ladder"
+            # Heterogeneous workloads occasionally invert medians. Keep those
+            # observations, but budget at least 5% more output for the next tier.
+            normalized = output <= previous
+            output = max(output, previous * 1.05) if normalized else output
+            previous = output
+            latency = row["latency_s"]
+            if "latency_estimated" in row["flags"]:
+                ref = nearest(timed) if timed else None
+                latency = (timed[ref] * multiple / EFFORT_OUTPUT[ref] if ref else defaults["latency_s"] * multiple)
+            row["effort_estimate"] = {
+                "tokens_per_task": {"in": base_in, "out": output}, "price_1m": tariff,
+                "units": (base_in + 5 * output) / (base_in + 5 * base_out),
+                "latency_s": latency, "latency_basis": "ladder" if "latency_estimated" in row["flags"] else "exact_effort",
+                "estimated": True, "basis": basis, "monotonic_adjustment": normalized,
+                **({"source": feed.get("source"), "read_on": feed.get("read_on"),
+                    "published_output_tokens": reported.get(level)} if "published_output_ratio" in basis else {}),
+            }
+
+
 def _admitted_cells(overlay):
     """Standing roster admission defines the percentile population, not the feed."""
     cells = set()
@@ -641,6 +714,7 @@ def build_evidence(overlay, catalog, ledger_records, read_on=None):
                      "price_1m": price, "latency_s": statistics.median(latency or external_latency) if latency or external_latency else assumptions["estimates"]["latency_s"],
                      "read_on": read_on, "recheck": effort.get("recheck") or "New release, changed benchmark, or 30 days since read.",
                      "flags": sorted(set(flags))})
+    _effort_estimates(rows, overlay, catalog, assumptions["estimates"])
     return {"schema": "fleet-evidence-levels/v1", "rows": rows, "read_on": read_on,
             "assumptions": assumptions,
             "unavailable": {"artificial_analysis": not bool(catalog.get("artificial_analysis")),
