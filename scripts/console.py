@@ -1189,7 +1189,7 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
                       "control_actor": _control_text(p.get("control")),
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
-                      "gauge": _provider_gauge(p, overview), "on": (p.get("models") or {}).get("on", []),
+                      "gauge": _provider_gauge(p, overview) + _pro_usage(p), "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
             "agy_summary": _agy_summary(overview['pools']),
@@ -1339,16 +1339,21 @@ def _compare_key(option: dict[str, Any]) -> str:
     return ':'.join((option['pool'], option['model_key'], option['level']))
 
 
-def workbench_data(overview: dict[str, Any], state_dir: Path, query: dict[str, list[str]]) -> dict[str, Any]:
+def _workbench_query(query: dict[str, list[str]]) -> tuple[str, str, list[str]]:
+    role = query.get('role', ['implementation'])[0]
+    value = query.get('preview-value', query.get('value', ['best-value']))[0]
+    requested = query.get('compare', [])
+    if role not in WORKBENCH_ROLES or value not in VALUE_MODES or len(requested) > 4:
+        raise ValueError('Choose a listed role and mode and at most four routes.')
+    return role, value, requested
+
+
+def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'implementation',
+                   value: str = 'best-value', requested: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
     """Replay the selector on the same local inputs as the subscription rows; never emit a receipt."""
     roster = overview['_brief_context']['roster']
     runtime = overview['_brief_context']['runtime']
     fleet = types.SimpleNamespace(**vars(fleetctl))
-    role = query.get('role', ['implementation'])[0]
-    value = query.get('value', ['best-value'])[0]
-    requested = query.get('compare', [])
-    if role not in WORKBENCH_ROLES or value not in VALUE_MODES or len(requested) > 4:
-        raise ValueError('Choose a listed role and mode and at most four routes.')
 
     def replay(allow=None):
         return selector.select_option(roster, runtime, state_dir, role, fleet=fleet, allow=allow,
@@ -1358,7 +1363,16 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, query: dict[str, l
         return str(exc).startswith('no eligible selector option')
 
     options, refusals = selector.enumerate_options(roster, runtime, role, fleet=fleet)
-    menu = {_compare_key(option): option for option in options}
+    automatic = {_compare_key(option): option for option in options}
+    menu = dict(automatic)
+    explicit_pools = {pool for pool, config in roster.get('quota_pools', {}).items()
+                      if config.get('explicit_only')}
+    if explicit_pools:
+        extra, _ = selector.enumerate_options(roster, runtime, role, fleet=fleet, explicit_pools=explicit_pools)
+        for option in extra:
+            key = _compare_key(option)
+            if option['pool'] in explicit_pools and key not in automatic:
+                menu[key] = dict(option, explicit_preview=True)
     memo = {}
     result = {}
     try:
@@ -1376,8 +1390,13 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, query: dict[str, l
         refusals = result['rejected']
         runner = next((option for option in ranked if option['model_key'] != pick['model_key']), None)
         if runner is None:
-            # The public receipt has only three ranks, which may all be efforts of one model.
-            alternatives = ','.join(key for key, option in menu.items() if option['model_key'] != pick['model_key'])
+            # The receipt may rank three efforts of one model. Keep global refusals in force in
+            # the comparison replay, particularly the rule that withholds low-only fallbacks.
+            withheld = {line.split(': ', 1)[0] for line in refusals
+                        if 'low spend fallback withheld' in line or 'unknown cell dominated' in line}
+            alternatives = ','.join(key for key, option in automatic.items()
+                                    if option['model_key'] != pick['model_key']
+                                    and f'{option["model_key"]}/{option["level"]}' not in withheld)
             if alternatives:
                 try:
                     runner = replay(alternatives)['top3'][0]
@@ -1389,7 +1408,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, query: dict[str, l
 
     defaults = list(dict.fromkeys(_compare_key(option) for option in (pick, runner) if option))
     if len(defaults) < 2:
-        defaults = list(dict.fromkeys([*defaults, *menu]))[:2]
+        defaults = list(dict.fromkeys([*defaults, *automatic, *menu]))[:2]
     keys = list(dict.fromkeys(key for key in requested if key in menu))
     if len(keys) < 2:
         keys = list(dict.fromkeys([*keys, *defaults]))[:2]
@@ -1410,10 +1429,44 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, query: dict[str, l
     elif result.get('cash_preference'):
         why = 'The selector favors an included route within the quality band.'
     else:
-        why = 'The selector balances grade, quota pressure and latency.'
+        why = 'Ranks first after quota and latency costs.'
+    if pick and runner and not pick['q']['unknown'] and not runner['q']['unknown']:
+        why += f' Grade {pick["q"]["mean"]:.3f} vs {runner["q"]["mean"]:.3f}.'
     prioritized = sorted(set(refusals), key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))
     return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
             'runner': runner, 'why': why, 'refusals': [text for text in prioritized if text][:16]}
+
+
+def _work_gauge(pool, overview):
+    if pool['state'] == 'EXHAUSTED':
+        return _provider_gauge(pool, overview)
+    esc = html.escape
+    limits = pool.get('limits') or []
+    age = (pool.get('quota') or {}).get('age_s')
+    stale_age = pool.get('stale_age_s')
+    if pool.get('gauge_error'):
+        note = f'Last reading {_ago(age)} · refresh failed' if age is not None else 'Refresh failed'
+    elif stale_age is not None:
+        note = f'Stale reading · {_ago(stale_age)}'
+    else:
+        note = ''
+    rows = []
+    for limit in limits:
+        if limit['kind'] != 'window':
+            rows.append(_limit_row(limit, pool['pool']))
+            continue
+        scope = _scope_words(limit.get('scope'), pool['pool'])
+        title = limit['title'] + (f' · {scope}' if scope else '')
+        used = limit['used_percent']
+        reset = 'Resets ' + limit['resets'] if limit['reset_at'] else 'No active reset reported'
+        count = f'{100 - used}% left' if limit['reset_at'] or used else ''
+        visual = _meter(used, used >= 75) if count else ''
+        rows.append(f'<li class="wb-limit"><span>{esc(title)}</span><b>{count}</b>{visual}'
+                    f'<small>{esc(reset)}</small></li>')
+    if not rows and not note:
+        note = 'No published cap' if pool['plan'].get('limit') == 'none-known' else 'No reading'
+    return (f'<p class="wb-muted wb-reading-note">{esc(note)}</p>' if note else '') + (
+        f'<ul class="wb-limits" aria-label="Limits">{"".join(rows)}</ul>' if rows else '')
 
 
 def _compare_cells(option, scored, pool, roster):
@@ -1423,6 +1476,8 @@ def _compare_cells(option, scored, pool, roster):
     quota = _number(cost.get('percent'))
     cash = (scored or {}).get('cash') or {}
     usd = _number(cash.get('estimate_usd')) if option.get('funding') == 'metered' else None
+    if usd is None and option.get('funding') == 'metered' and option.get('source_price_1m'):
+        usd = _number(cost.get('estimated_usd'))  # the selector prices this cell on its declared lane tariff
     sources = [lane for lane in roster.get('lanes', []) if lane.get('lane_id') == option.get('lane_id')
                and lane.get('quota_pool') == option['pool'] and option.get('lane_id')]
     card = (roster.get('model_cards') or {}).get(option['model_key']) or {}
@@ -1433,7 +1488,7 @@ def _compare_cells(option, scored, pool, roster):
     price = (scored or {}).get('pool_price') or {}
     used = _number(price.get('window', {}).get('used_percent'))
     if pool.get('gauge_error') or pool.get('stale_age_s') is not None:
-        headroom = 'Stale · refresh failed' if pool.get('gauge_error') else 'Stale'
+        headroom = 'Refresh failed' if pool.get('gauge_error') else 'Stale'
     elif used is not None:
         title, scope = fleetctl.limit_name(price['binding_window'], price['window'], pool.get('label', ''))
         headroom = f'{100 - used:g}% left · {title}' + (f' · {scope}' if scope else '')
@@ -1462,7 +1517,7 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         return ''.join(f'<option value="{esc(key)}"{" selected" if key == current else ""}>{esc(text)}</option>'
                        for key, text in values.items())
     menu = {key: f'{label(option)} · {pools.get(option["pool"], {}).get("short_label") or option["pool"]}'
-            for key, option in data['menu'].items()}
+            + (' · explicit only' if option.get('explicit_preview') else '') for key, option in data['menu'].items()}
     menu = dict(sorted(menu.items(), key=lambda item: item[1].casefold()))
     slots = data['keys'] + [''] * (4 - len(data['keys']))
     columns = []
@@ -1479,11 +1534,15 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
               + ''.join(headers) + '</tr></thead><tbody>' + lines + '</tbody></table>') if columns else (
                   '<p class="wb-muted">No route to compare for this role.</p>')
     notices = ''.join(f'<li>{esc(reason)}</li>' for reason in data['refusals'])
+    absolute = data['value'] == 'absolute-best'
     return (
         '<section class="wb" id="compare" aria-labelledby="compare-heading"><h1 id="compare-heading">Compare models</h1>'
         '<form class="wb-query" method="get" action="/#compare">'
         f'<label>Role<select name="role">{select(WORKBENCH_ROLES, data["role"])}</select></label>'
-        f'<label>Preview ranking<select name="value">{select(VALUE_MODES, data["value"])}</select></label>'
+        f'<input type="hidden" name="value" value="{data["value"]}">'
+        f'<div class="wb-mode"><span>{VALUE_MODES[data["value"]]} preview</span>'
+        + _work_switch('preview-value', absolute, 'Preview absolute best', 'best-value' if absolute else 'absolute-best')
+        + '</div>'
         + ''.join(f'<label>Model / effort {i}<select name="compare">{select({"": "Auto" if i < 3 else "None", **menu}, key)}</select></label>'
                   for i, key in enumerate(slots, 1))
         + '<button type="submit">Compare</button></form>' + matrix
@@ -1492,7 +1551,7 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         f'<p><b>Pick</b> {route(data["pick"])}</p><p><b>Runner-up</b> {route(data["runner"])}</p>'
         f'<p class="wb-muted">{esc(data["why"]) if data["pick"] else "No route clears the selector gates."}</p>'
         + (f'<details><summary>Why other routes are out</summary><ul>{notices}</ul></details>' if notices else '')
-        + '<p class="wb-value">' + _work_switch('role-value', 'absolute-best' == data['value'], 'Save absolute best',
+        + '<p class="wb-value">Save absolute best ' + _work_switch('role-value', False, 'Save absolute best',
                                                   disabled='Per-run only; no saved role setting.') + '</p></section></section>'
     )
 
@@ -1508,7 +1567,9 @@ def _work_switch(field: str, on: bool, label: str, value: str = '', *, disabled:
 
 
 def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, Any] | None = None) -> str:
-    stamp = html.escape(_stamp(overview))
+    readings = overview['quota_readings']
+    stamp = (html.escape(_stamp(overview)) if workbench is None else
+             f'Latest reading {_ago(readings["newest_age_s"])}' if readings['measured_pools'] else 'No quota readings')
     by_key = {m["model"]: m for m in overview["models"]}
     rows = []
     order = overview.get('console_order') or display_order(overview)
@@ -1535,14 +1596,11 @@ def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, 
                 f'<input type="hidden" name="pool" value="{pool_id}">'
                 + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal')
                 + f'<span class="wb-muted">{LEVEL_WORDS[pool["level"]] if on else "Enables at Normal"}</span></form>'
-                '<details class="wb-advanced"><summary>Spend policy</summary>' + controls + '</details>'
-                + (f'<div class="wb-explicit">Explicit only {_work_switch("explicit-only", True, "Explicit only", disabled="Configured in roster.", hint_id=pool_id)}</div>'
-                   if explicit else '') + '</div>'
+                '<details class="wb-advanced"><summary>Spend policy</summary>' + controls
+                + f'<div class="wb-explicit">Explicit-only pool flag {_work_switch("explicit-only", explicit, "Explicit-only pool flag", disabled="Configured in roster.", hint_id=pool_id)}</div>'
+                + '</details></div>'
             )
-            if pool.get('gauge_error'):
-                gauge = '<p class="wb-muted">Reading stale · refresh failed</p>' + gauge
-            elif pool.get('stale_age_s') is not None:
-                gauge = '<p class="wb-muted">Reading stale</p>' + gauge
+            gauge = _work_gauge(pool, overview) + _pro_usage(pool)
         return (
             f'<article class="pool lvl-{pool["level"]}" id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{html.escape(pool["label"])}" tabindex="-1">'
             f'<div class="who"><{tag}>{handle}{_pool_heading(title)}</{tag}>{plan}</div>'
@@ -1586,7 +1644,8 @@ def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, 
         '</button></form></div>'
         + (provider_setup(overview.get('provider_sources', []), form_token) if workbench is None else '')
         + _sort_control('pools', order['sort']['pools'])
-        + '<p class="order-note">Your order changes this page only; Crossfeed still picks by evidence and quota.</p>'
+        + ('<p class="order-note">Your order changes this page only; Crossfeed still picks by evidence and quota.</p>'
+           if workbench is None else '')
         + f'<div class="order-state" hidden data-order="{html.escape(json.dumps(order))}" data-token="{html.escape(form_token)}"></div>'
         +
         f'<section class="pools" aria-label="Providers">{"".join(rows)}</section>'
@@ -1708,8 +1767,14 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 if url.path == '/settings':
                     page = render_settings(overview, console.form_token)
                 else:
-                    query = urllib.parse.parse_qs(url.query, max_num_fields=24) if url.query else {}
-                    page = render_page(overview, console.form_token, workbench_data(overview, console.state_dir, query))
+                    try:
+                        query = urllib.parse.parse_qs(url.query, max_num_fields=24) if url.query else {}
+                        role, value, requested = _workbench_query(query)
+                    except ValueError as exc:
+                        self._refuse(400, 'Invalid comparison', str(exc))
+                        return
+                    page = render_page(overview, console.form_token,
+                                       workbench_data(overview, console.state_dir, role, value, requested))
             except (fleetctl.FleetError, OSError, ValueError) as exc:
                 self._refuse(500, "The fleet could not be read", str(exc))
                 return

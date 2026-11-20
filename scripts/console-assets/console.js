@@ -348,7 +348,10 @@ function boot(document, window) {
   // A native disclosure works without JS; remember only this browser's presentation choice.
   for (const details of document.querySelectorAll('details.allowances')) {
     const key = `crossfeed-disclosure:${details.id}`;
-    try { details.open = window.localStorage.getItem(key) === 'open'; } catch (_) {}
+    try {
+      const saved = window.localStorage.getItem(key);
+      if (saved !== null) details.open = saved === 'open';
+    } catch (_) {}
     details.addEventListener('toggle', () => {
       try { window.localStorage.setItem(key, details.open ? 'open' : 'closed'); } catch (_) {}
     });
