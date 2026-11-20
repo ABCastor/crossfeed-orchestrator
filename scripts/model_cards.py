@@ -102,7 +102,7 @@ def build_cards(roster, runtime, evidence, *, fleet, now=None):
                      for side in ('in', 'out')}
             priced = dict(row, price_1m=price)
             option = dict(pool=pool, harness=harness, model_key=key, level=level, run_as=lane.get('run_as', key))
-            cost, flags = selector._task_cost(roster, option, priced, binding, None)
+            cost, flags = selector._task_cost(roster, option, priced, binding, None, standardize=False)
             telemetry = row.get('source_telemetry', {})
             latency = telemetry.get(pool + '/' + str(harness), telemetry.get(pool, {}))
             availability = _availability(roster, runtime, fleet, pool, key, now)

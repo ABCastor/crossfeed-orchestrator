@@ -762,10 +762,10 @@ def _planning_row(row):
 
 
 def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
-               median_usd: float | None) -> tuple[dict, list[str]]:
+               median_usd: float | None, *, standardize: bool = True) -> tuple[dict, list[str]]:
     pool = option["pool"]
-    plan = row.get("effort_estimate") or {}
-    priced = _planning_row(row)
+    plan = (row.get("effort_estimate") or {}) if standardize else {}
+    priced = _planning_row(row) if plan else row
     units = plan.get("units", 1.0)
     planning = {"effort_units": units, "effort_estimate": plan} if plan else {}
     if binding.get("projection_basis") == "none-known":
