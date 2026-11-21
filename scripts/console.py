@@ -31,6 +31,7 @@ import secrets
 import sys
 import threading
 import time
+import types
 import urllib.parse
 import webbrowser
 from pathlib import Path
@@ -45,6 +46,11 @@ assert _spec and _spec.loader
 fleetctl = importlib.util.module_from_spec(_spec)
 sys.modules.setdefault("fleetctl", fleetctl)
 _spec.loader.exec_module(fleetctl)
+
+_selector_spec = importlib.util.spec_from_file_location("console_selector", HERE / "selector.py")
+assert _selector_spec and _selector_spec.loader
+selector = importlib.util.module_from_spec(_selector_spec)
+_selector_spec.loader.exec_module(selector)
 
 # What a translator must never change (model names, ids, amounts, the signature): marked on every page as it is made. The
 # rules, written once for every Castor product, are in console-assets/keep.py, and in keep.js for what the page's script adds.
@@ -226,6 +232,9 @@ class Console:
 POOL_SORTS = {'your': 'Your order', 'quota': 'Quota left', 'reset': 'Resets soonest', 'name': 'Name'}
 MODEL_SORTS = {'your': 'Your order', 'quality': 'Quality', 'cheapest': 'Cheapest', 'name': 'Name'}
 AGY_ALLOWANCES = {'antigravity-gemini': 'Gemini', 'antigravity-3p': 'Claude/GPT', 'antigravity-argon': 'Argon'}
+WORKBENCH_ROLES = {'implementation': 'Implementation', 'review': 'Review', 'hard-reasoning': 'Hard reasoning',
+                   'debug': 'Debug', 'default': 'Default', 'research-scout': 'Research scout', 'repo-map': 'Repo map'}
+VALUE_MODES = {'best-value': 'Best value', 'absolute-best': 'Absolute best'}
 
 
 def _agy_summary(pools: list[dict[str, Any]]) -> str:
@@ -688,7 +697,7 @@ def _level_meaning(level: str) -> str:
     return LEVEL_PLAIN[level] + " Ignore estimates still obeys actual limits."
 
 
-def _slider(pool: dict[str, Any], form_token: str) -> str:
+def _slider(pool: dict[str, Any], form_token: str, return_fields: str = '') -> str:
     current = pool["level"]
     at = LEVELS.index(current)
     label = html.escape(pool["label"])
@@ -712,7 +721,7 @@ def _slider(pool: dict[str, Any], form_token: str) -> str:
         f'<form class="lv at-{at} is-{current}" method="post" action="/level" role="radiogroup" '
         f'aria-label="How much of {label} to use" aria-describedby="means-{pool_id}">'
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
-        f'<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
+        f'{return_fields}<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
         f'<p class="means" id="means-{pool_id}">{html.escape(_level_meaning(current))}</p>'
         f'<span class="control-actor level-actor">{html.escape(_control_text(pool.get("control")))}</span>'
     )
@@ -1043,10 +1052,18 @@ def _summary_html(pool: dict[str, Any], by_key: dict[str, dict[str, Any]]) -> st
 
 
 def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
-            by_key: dict[str, dict[str, Any]] | None = None) -> str:
+            by_key: dict[str, dict[str, Any]] | None = None, *, compact: bool = False) -> str:
     key, name = model["model"], _name(model)
     target = _model_id(pool["pool"], key)
     older = not option["current"]
+    if compact:
+        blocked = ('Withdrawn' if option.get('retired_on') else 'No runnable route' if not option['run_as'] else
+                   'No retention evidence' if older and not option.get('retention_reason') and not option['on'] else '')
+        control = _work_switch('switch', option['on'] is True, f'Use {name}',
+                               f'{key}={"off" if option["on"] else "on"}', disabled=blocked, hint_id=target)
+        return (f'<li class="opt wb-model" id="{target}" data-model="{html.escape(key)}" '
+                f'data-search-label="{html.escape(name)}" tabindex="-1"><div class="wb-model-name">'
+                f'{_handle(name)}{_page_link(model, name)}</div><div class="wb-model-control">{control}</div></li>')
     line = _older_reason(model, option, by_key) if older else _best_for(model, pool["pool"])
     if any(lane.get("catalog_state") == "sleeping" for lane in model.get("lanes", [])):
         line = "Sleeping; wakes automatically when selected" + (". " + line if line else "")
@@ -1093,13 +1110,24 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
 
 
 def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token: str,
-            order: dict[str, Any] | None = None) -> str:
+            order: dict[str, Any] | None = None, *, return_fields: str = '') -> str:
     pool_id = html.escape(pool["pool"])
     label = html.escape(pool["label"])
     options = pool.get("options") or []
     if order:
         ranking = order['ranks']['models'][pool['pool']][order['sort']['models'][pool['pool']]]
         options = sorted(options, key=lambda option: ranking.index(option['model']))
+    if return_fields:
+        # A single inventory: admission changes the switch, not the section the model belongs to.
+        listing = ''.join(_option(by_key[o['model']], pool, o, compact=True) for o in options)
+        count = len(options)
+        return (f'<details class="pick" id="pick-{pool_id}" data-pool="{pool_id}"><summary class="wb-inventory">'
+                f'{count} {"model" if count == 1 else "models"}</summary>'
+                + _sort_control('models', order['sort']['models'][pool['pool']] if order else 'your', pool['pool'])
+                + f'<form class="wb-models" method="post" action="/model">{return_fields}'
+                f'<input type="hidden" name="pool" value="{pool_id}">'
+                f'<input type="hidden" name="t" value="{html.escape(form_token)}">'
+                f'<ul class="opts">{listing}</ul></form></details>')
     runnable = [o for o in options if o["run_as"]]
     models = pool.get("models") or {}
     state, _, _ = models_summary(pool, by_key)
@@ -1161,7 +1189,7 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
                       "control_actor": _control_text(p.get("control")),
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
-                      "gauge": _provider_gauge(p, overview), "on": (p.get("models") or {}).get("on", []),
+                      "gauge": _provider_gauge(p, overview) + _pro_usage(p), "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
             "agy_summary": _agy_summary(overview['pools']),
@@ -1307,24 +1335,280 @@ def _pool_heading(label: str) -> str:
     return f'<span class="pool-title">{html.escape(title)}{" " if detail else ""}{suffix}</span>'
 
 
-def render_page(overview: dict[str, Any], form_token: str) -> str:
-    stamp = html.escape(_stamp(overview))
+def _compare_key(option: dict[str, Any]) -> str:
+    return ':'.join((option['pool'], option['model_key'], option['level']))
+
+
+def _workbench_query(query: dict[str, list[str]]) -> tuple[str, str, list[str]]:
+    role = query.get('role', ['implementation'])[0]
+    value = query.get('preview-value', query.get('value', ['best-value']))[0]
+    requested = query.get('compare', [])
+    if role not in WORKBENCH_ROLES or value not in VALUE_MODES or len(requested) > 4:
+        raise ValueError('Choose a listed role and mode and at most four routes.')
+    return role, value, requested
+
+
+def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'implementation',
+                   value: str = 'best-value', requested: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
+    """Replay the selector on the same local inputs as the subscription rows; never emit a receipt."""
+    roster = overview['_brief_context']['roster']
+    runtime = overview['_brief_context']['runtime']
+    fleet = types.SimpleNamespace(**vars(fleetctl))
+
+    def replay(allow=None):
+        return selector.select_option(roster, runtime, state_dir, role, fleet=fleet, allow=allow,
+                                      value_mode=value, persist_receipts=False)
+
+    def selection_failure(exc):
+        return str(exc).startswith('no eligible selector option')
+
+    options, refusals = selector.enumerate_options(roster, runtime, role, fleet=fleet)
+    automatic = {_compare_key(option): option for option in options}
+    menu = dict(automatic)
+    explicit_pools = {pool for pool, config in roster.get('quota_pools', {}).items()
+                      if config.get('explicit_only')}
+    if explicit_pools:
+        extra, _ = selector.enumerate_options(roster, runtime, role, fleet=fleet, explicit_pools=explicit_pools)
+        for option in extra:
+            key = _compare_key(option)
+            if option['pool'] in explicit_pools and key not in automatic:
+                menu[key] = dict(option, explicit_preview=True)
+    memo = {}
+    result = {}
+    try:
+        result = replay()
+    except fleetctl.FleetError as exc:
+        if not selection_failure(exc):
+            raise
+        refusals = str(exc).partition(': ')[2].split('; ')
+    pick = result.get('choice')
+    runner = None
+    if pick:
+        ranked = result['top3']
+        memo.update({_compare_key(option): option for option in reversed(ranked)})
+        memo[_compare_key(pick)] = pick
+        refusals = result['rejected']
+        runner = next((option for option in ranked if option['model_key'] != pick['model_key']), None)
+        if runner is None:
+            # The receipt may rank three efforts of one model. Keep global refusals in force in
+            # the comparison replay, particularly the rule that withholds low-only fallbacks.
+            withheld = {line.split(': ', 1)[0] for line in refusals
+                        if 'low spend fallback withheld' in line or 'unknown cell dominated' in line}
+            alternatives = ','.join(key for key, option in automatic.items()
+                                    if option['model_key'] != pick['model_key']
+                                    and f'{option["model_key"]}/{option["level"]}' not in withheld)
+            if alternatives:
+                try:
+                    runner = replay(alternatives)['top3'][0]
+                except fleetctl.FleetError as exc:
+                    if not selection_failure(exc):
+                        raise
+            if runner:
+                memo[_compare_key(runner)] = runner
+
+    defaults = list(dict.fromkeys(_compare_key(option) for option in (pick, runner) if option))
+    if len(defaults) < 2:
+        defaults = list(dict.fromkeys([*defaults, *automatic, *menu]))[:2]
+    keys = list(dict.fromkeys(key for key in requested if key in menu))
+    if len(keys) < 2:
+        keys = list(dict.fromkeys([*keys, *defaults]))[:2]
+    for key in keys:
+        if key not in memo:
+            try:
+                memo[key] = replay(key)['top3'][0]
+            except fleetctl.FleetError as exc:
+                if not selection_failure(exc):
+                    raise
+                memo[key] = None
+    if result.get('claude_preference') and pick and pick.get('claude_weekly_projected_percent') is not None:
+        why = 'Claude-first applies: projected weekly use is below 80%.'
+    elif value == 'absolute-best':
+        why = 'Highest eligible grade on an included or verified-free route.'
+    elif pick and pick.get('selection_probability', 1) < 1:
+        why = 'The selector may vary near-ties by quota pace and recent use.'
+    elif result.get('cash_preference'):
+        why = 'The selector favors an included route within the quality band.'
+    else:
+        why = 'Ranks first after quota and latency costs.'
+    if pick and runner and not pick['q']['unknown'] and not runner['q']['unknown']:
+        why += f' Grade {pick["q"]["mean"]:.3f} vs {runner["q"]["mean"]:.3f}.'
+    prioritized = sorted(set(refusals), key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))
+    return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
+            'runner': runner, 'why': why, 'refusals': [text for text in prioritized if text][:16]}
+
+
+def _work_gauge(pool, overview):
+    if pool['state'] == 'EXHAUSTED':
+        return _provider_gauge(pool, overview)
+    esc = html.escape
+    limits = pool.get('limits') or []
+    age = (pool.get('quota') or {}).get('age_s')
+    stale_age = pool.get('stale_age_s')
+    if pool.get('gauge_error'):
+        note = f'Last reading {_ago(age)} · refresh failed' if age is not None else 'Refresh failed'
+    elif stale_age is not None:
+        note = f'Stale reading · {_ago(stale_age)}'
+    else:
+        note = ''
+    rows = []
+    for limit in limits:
+        if limit['kind'] != 'window':
+            rows.append(_limit_row(limit, pool['pool']))
+            continue
+        scope = _scope_words(limit.get('scope'), pool['pool'])
+        title = limit['title'] + (f' · {scope}' if scope else '')
+        used = limit['used_percent']
+        reset = 'Resets ' + limit['resets'] if limit['reset_at'] else 'No active reset reported'
+        count = f'{100 - used}% left' if limit['reset_at'] or used else ''
+        visual = _meter(used, used >= 75) if count else ''
+        rows.append(f'<li class="wb-limit"><span>{esc(title)}</span><b>{count}</b>{visual}'
+                    f'<small>{esc(reset)}</small></li>')
+    if not rows and not note:
+        note = 'No published cap' if pool['plan'].get('limit') == 'none-known' else 'No reading'
+    return (f'<p class="wb-muted wb-reading-note">{esc(note)}</p>' if note else '') + (
+        f'<ul class="wb-limits" aria-label="Limits">{"".join(rows)}</ul>' if rows else '')
+
+
+def _compare_cells(option, scored, pool, roster):
+    q = (scored or {}).get('q') or {}
+    grade = _number(q.get('mean')) if not q.get('unknown') else None
+    cost = (scored or {}).get('cost', {})
+    quota = _number(cost.get('percent'))
+    cash = (scored or {}).get('cash') or {}
+    usd = _number(cash.get('estimate_usd')) if option.get('funding') == 'metered' else None
+    if usd is None and option.get('funding') == 'metered' and option.get('source_price_1m'):
+        usd = _number(cost.get('estimated_usd'))  # the selector prices this cell on its declared lane tariff
+    sources = [lane for lane in roster.get('lanes', []) if lane.get('lane_id') == option.get('lane_id')
+               and lane.get('quota_pool') == option['pool'] and option.get('lane_id')]
+    card = (roster.get('model_cards') or {}).get(option['model_key']) or {}
+    if card.get('pool') == option['pool']:
+        sources.append(card)
+    context = next((source[field] for source in sources for field in ('context_window', 'context_length')
+                    if _number(source.get(field)) and source[field] > 0), None)
+    price = (scored or {}).get('pool_price') or {}
+    used = _number(price.get('window', {}).get('used_percent'))
+    if pool.get('gauge_error') or pool.get('stale_age_s') is not None:
+        headroom = 'Refresh failed' if pool.get('gauge_error') else 'Stale'
+    elif used is not None:
+        title, scope = fleetctl.limit_name(price['binding_window'], price['window'], pool.get('label', ''))
+        headroom = f'{100 - used:g}% left · {title}' + (f' · {scope}' if scope else '')
+    else:
+        headroom = 'Not reported'
+    return [f'{grade:.3f}' if grade is not None else 'Unrated',
+            (f'{"≈" if cost.get("estimated") else ""}{quota:.3g}%') if quota is not None else '—',
+            f'≈${usd:.4f}' if usd is not None else '—', f'{context:,.0f} tokens' if context else '—',
+            pool.get('label') or option['pool'], headroom]
+
+
+def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
+    esc = html.escape
+    roster = overview['_brief_context']['roster']
+    pools = {pool['pool']: pool for pool in overview['pools']}
+    models = {model['model']: model for model in overview['models']}
+    def name(option):
+        return _name(models.get(option['model_key']), option['model_key'])
+    def label(option):
+        return f'{name(option)} · {_pretty(option["level"])}'
+    def route(option):
+        if not option:
+            return 'None eligible'
+        return f'<span class="nm">{esc(name(option))}</span> · {esc(_pretty(option["level"]))}'
+    def select(values, current):
+        return ''.join(f'<option value="{esc(key)}"{" selected" if key == current else ""}>{esc(text)}</option>'
+                       for key, text in values.items())
+    menu = {key: f'{label(option)} · {pools.get(option["pool"], {}).get("short_label") or option["pool"]}'
+            + (' · explicit only' if option.get('explicit_preview') else '') for key, option in data['menu'].items()}
+    menu = dict(sorted(menu.items(), key=lambda item: item[1].casefold()))
+    slots = data['keys'] + [''] * (4 - len(data['keys']))
+    columns = []
+    headers = []
+    for key in data['keys']:
+        item = data['menu'][key]
+        scored = data['scores'][key]
+        headers.append(f'<th scope="col">{route(item)}{"<small>Not eligible in this mode</small>" if not scored else ""}</th>')
+        columns.append(_compare_cells(scored or item, scored, pools.get(item['pool'], {}), roster))
+    fields = ['Role grade', 'Quota / job', 'Cash / job', 'Context limit', 'Subscription', 'Headroom']
+    lines = ''.join(f'<tr><th scope="row">{field}</th>{"".join(f"<td>{esc(cell)}</td>" for cell in cells)}</tr>'
+                    for field, cells in zip(fields, zip(*columns)))
+    matrix = ('<table class="wb-matrix" aria-label="Model comparison"><thead><tr><th scope="col">Typical job</th>'
+              + ''.join(headers) + '</tr></thead><tbody>' + lines + '</tbody></table>') if columns else (
+                  '<p class="wb-muted">No route to compare for this role.</p>')
+    notices = ''.join(f'<li>{esc(reason)}</li>' for reason in data['refusals'])
+    absolute = data['value'] == 'absolute-best'
+    return (
+        '<section class="wb" id="compare" aria-labelledby="compare-heading"><h1 id="compare-heading">Compare models</h1>'
+        '<form class="wb-query" method="get" action="/#compare">'
+        f'<label>Role<select name="role">{select(WORKBENCH_ROLES, data["role"])}</select></label>'
+        f'<input type="hidden" name="value" value="{data["value"]}">'
+        '<div class="wb-mode"><span>Ranking preview</span>'
+        + _work_switch('preview-value', absolute, 'Preview absolute best', 'best-value' if absolute else 'absolute-best',
+                       state_text=VALUE_MODES[data['value']])
+        + '</div>'
+        + ''.join(f'<label>Model / effort {i}<select name="compare">{select({"": "Auto" if i < 3 else "None", **menu}, key)}</select></label>'
+                  for i, key in enumerate(slots, 1))
+        + '<button type="submit">Compare</button></form>' + matrix
+        + '<p class="wb-muted">≈ estimate · — no comparable reading</p>'
+        '<section class="wb-pick" aria-label="Pick for this role">'
+        f'<p><b>Pick</b> {route(data["pick"])}</p><p><b>Runner-up</b> {route(data["runner"])}</p>'
+        f'<p class="wb-muted">{esc(data["why"]) if data["pick"] else "No route clears the selector gates."}</p>'
+        + (f'<details><summary>Why other routes are out</summary><ul>{notices}</ul></details>' if notices else '')
+        + '<p class="wb-value">Save absolute best ' + _work_switch('role-value', False, 'Save absolute best',
+                                                  disabled='Per-run only; no saved role setting.') + '</p></section></section>'
+    )
+
+
+def _work_switch(field: str, on: bool, label: str, value: str = '', *, disabled: str = '', hint_id: str = '',
+                 state_text: str | None = None) -> str:
+    esc = html.escape
+    hint_id = 'why-' + esc(hint_id or field)
+    hint = f' aria-describedby="{hint_id}" disabled' if disabled else ''
+    return (f'<button type="submit" class="sw wb-switch" role="switch" aria-checked="{str(on).lower()}" '
+            f'aria-label="{esc(label)}" name="{esc(field)}" value="{esc(value)}"{hint}>'
+            f'<span class="track" aria-hidden="true"><i></i></span>'
+            f'<span class="st">{esc(state_text or ("On" if on else "Off"))}</span></button>'
+            + (f'<span class="wb-muted" id="{hint_id}">{esc(disabled)}</span>' if disabled else ''))
+
+
+def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, Any] | None = None) -> str:
+    readings = overview['quota_readings']
+    stamp = (html.escape(_stamp(overview)) if workbench is None else
+             f'Latest reading {_ago(readings["newest_age_s"])}' if readings['measured_pools'] else 'No quota readings')
     by_key = {m["model"]: m for m in overview["models"]}
     rows = []
     order = overview.get('console_order') or display_order(overview)
     ranking = order['ranks']['pools'][order['sort']['pools']]
+    return_fields = ''
+    if workbench is not None:
+        return_fields = ''.join(f'<input type="hidden" name="return-{field}" value="{html.escape(value)}">'
+                                for field, value in [('role', workbench['role']), ('value', workbench['value']),
+                                                     *[('compare', key) for key in workbench['keys']]])
     def pool_row(pool, *, allowance=False):
         pool_id = html.escape(pool["pool"])
         title = AGY_ALLOWANCES[pool['pool']] if allowance else pool['label']
         tag = 'h3' if allowance else 'h2'
         handle = '' if allowance else _handle(title)
         plan = '' if allowance else _plan_lines(pool)
+        gauge = _provider_gauge(pool, overview) + _pro_usage(pool)
+        controls = _slider(pool, form_token, return_fields)
+        if workbench is not None:
+            on = pool['level'] != 'off'
+            explicit = bool(overview['_brief_context']['roster']['quota_pools'][pool['pool']].get('explicit_only'))
+            controls = (
+                '<div class="wb-pool-control"><form class="wb-pool-switch" method="post" action="/level">'
+                f'{return_fields}<input type="hidden" name="t" value="{html.escape(form_token)}">'
+                f'<input type="hidden" name="pool" value="{pool_id}">'
+                + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal')
+                + f'<span class="wb-muted">{LEVEL_WORDS[pool["level"]] if on else "Enables at Normal"}</span></form>'
+                '<details class="wb-advanced"><summary>Spend policy</summary>' + controls
+                + f'<div class="wb-explicit">Explicit-only pool flag {_work_switch("explicit-only", explicit, "Explicit-only pool flag", disabled="Configured in roster.", hint_id=pool_id)}</div>'
+                + '</details></div>'
+            )
+            gauge = _work_gauge(pool, overview) + _pro_usage(pool)
         return (
             f'<article class="pool lvl-{pool["level"]}" id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{html.escape(pool["label"])}" tabindex="-1">'
             f'<div class="who"><{tag}>{handle}{_pool_heading(title)}</{tag}>{plan}</div>'
-            f'<div class="gauge">{_provider_gauge(pool, overview)}{_pro_usage(pool)}</div>'
-            f'<div class="ctl">{_slider(pool, form_token)}</div>'
-            f'{_picker(pool, by_key, form_token, order)}{_pins_note(pool, by_key)}'
+            f'<div class="gauge">{gauge}</div><div class="ctl">{controls}</div>'
+            f'{_picker(pool, by_key, form_token, order, return_fields=return_fields)}{_pins_note(pool, by_key)}'
             "</article>"
         )
     agy = [p for key in AGY_ALLOWANCES for p in overview['pools'] if p['pool'] == key]
@@ -1340,30 +1624,37 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
                 f'<article class="pool provider-group" id="provider-antigravity" data-pool="{agy[0]["pool"]}" '
                 f'data-pool-members="{members}" data-search-label="{title}" tabindex="-1">'
                 f'<div class="who"><h2>{_handle(title)}{_pool_heading(title)}</h2>{_plan_lines(agy[0])}</div>'
-                f'<p class="allowance-summary">{html.escape(_agy_summary(agy))}</p>'
-                '<details class="allowances" id="antigravity-allowances">'
-                f'<summary>Separate allowances: {", ".join(AGY_ALLOWANCES[p["pool"]] for p in agy)}</summary>'
-                '<p class="allowance-note">One Google plan, separate limits and spend settings.</p>'
+                + (f'<p class="allowance-summary">{html.escape(_agy_summary(agy))}</p>' if workbench is None else '')
+                + f'<details class="allowances" id="antigravity-allowances"{" open" if workbench is not None else ""}>'
+                f'<summary>{"Separate allowances" if workbench is not None else "Separate allowances: " + ", ".join(AGY_ALLOWANCES[p["pool"]] for p in agy)}</summary>'
+                + ('<p class="allowance-note">One Google plan, separate limits and spend settings.</p>' if workbench is None else '')
                 + ''.join(pool_row(p, allowance=True) for p in agy)
                 + '</details></article>'
             )
-    body = (
+    introduction = (
         "<h1>Models and spend</h1>"
         '<p class="lede">Enable models for agents to choose from. Each provider shows its default or how Crossfeed picks. '
         "Slide left to conserve each plan’s quota, right to use more. Agents read these settings "
         "before they plan.</p>"
-        f'<div class="quota-reading"><p class="stamp">{stamp}</p>'
+    ) if workbench is None else (
+        _workbench(overview, workbench) + '<h2 class="wb-subheading">Subscriptions</h2>'
+    )
+    body = (
+        introduction + f'<div class="quota-reading"><p class="stamp">{stamp}</p>'
         '<form class="quota-refresh" method="post" action="/refresh">'
-        f'<input type="hidden" name="t" value="{html.escape(form_token)}">'
+        f'<input type="hidden" name="t" value="{html.escape(form_token)}">{return_fields}'
         f'<button type="submit" aria-label="Read the limits again now" title="Read the limits again now">{REFRESH}'
         '</button></form></div>'
-        + provider_setup(overview.get('provider_sources', []), form_token)
+        + (provider_setup(overview.get('provider_sources', []), form_token) if workbench is None else '')
         + _sort_control('pools', order['sort']['pools'])
-        + '<p class="order-note">Your order changes this page only; Crossfeed still picks by evidence and quota.</p>'
+        + ('<p class="order-note">Your order changes this page only; Crossfeed still picks by evidence and quota.</p>'
+           if workbench is None else '')
         + f'<div class="order-state" hidden data-order="{html.escape(json.dumps(order))}" data-token="{html.escape(form_token)}"></div>'
         +
         f'<section class="pools" aria-label="Providers">{"".join(rows)}</section>'
-        f'{_recent_runs(overview)}'
+        + ('<details class="wb-more" id="provider-setup-tools"><summary>Provider setup and history</summary>'
+           + provider_setup(overview.get('provider_sources', []), form_token) if workbench is not None else '')
+        + f'{_recent_runs(overview)}'
         '<p class="save-status" role="status" aria-live="polite"></p>'
         '<section class="agents" aria-labelledby="agents-h"><h2 class="sc" id="agents-h">What agents read</h2>'
         '<div class="brief"><button class="brief-toggle" type="button" aria-expanded="false" aria-controls="agent-brief">Show full</button>'
@@ -1371,6 +1662,7 @@ def render_page(overview: dict[str, Any], form_token: str) -> str:
         f'{COPY}<span class="cw">Copy</span></button>'
         f'<pre id="agent-brief">{html.escape(_brief(overview))}</pre>'
         f'<pre class="brief-full" hidden>{html.escape(_brief(overview, True))}</pre></div></section>'
+        + ('</details>' if workbench is not None else '')
     )
     return shell("Providers", body, front=True, settings_content=_settings_content(overview, form_token, panel=True))
 
@@ -1468,6 +1760,13 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     else:
                         self._html(200, render_benchmarks(cards))
                     return
+                if url.path == '/':
+                    try:
+                        query = urllib.parse.parse_qs(url.query, max_num_fields=24)
+                        role, value, requested = _workbench_query(query)
+                    except ValueError as exc:
+                        self._refuse(400, 'Invalid comparison', str(exc))
+                        return
                 overview = console.overview()
                 if url.path == "/snapshot":
                     self._send(200, json.dumps(snapshot_payload(overview)).encode(), "application/json; charset=utf-8")
@@ -1475,7 +1774,11 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 if url.path == "/settings" and urllib.parse.parse_qs(url.query).get('cap') == ['1']:
                     self._send(200, json.dumps({'cap': _settings_cap(overview)}).encode(), "application/json; charset=utf-8")
                     return
-                page = render_settings(overview, console.form_token) if url.path == "/settings" else render_page(overview, console.form_token)
+                if url.path == '/settings':
+                    page = render_settings(overview, console.form_token)
+                else:
+                    page = render_page(overview, console.form_token,
+                                       workbench_data(overview, console.state_dir, role, value, requested))
             except (fleetctl.FleetError, OSError, ValueError) as exc:
                 self._refuse(500, "The fleet could not be read", str(exc))
                 return
@@ -1570,6 +1873,14 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 if outcomes is not None:
                     payload["refresh"] = outcomes
                 self._send(200, json.dumps(payload).encode(), "application/json; charset=utf-8")
+                return
+            role = fields.get('return-role', [''])[0]
+            value = fields.get('return-value', [''])[0]
+            if path in {'/level', '/model', '/refresh'} and role in WORKBENCH_ROLES and value in VALUE_MODES:
+                query = urllib.parse.urlencode({'role': role, 'value': value,
+                                               'compare': fields.get('return-compare', [])[:4]}, doseq=True)
+                anchor = f'pick-{pool}' if path == '/model' else f'pool-{pool}' if path == '/level' else 'compare'
+                self._redirect(f'/?{query}#{urllib.parse.quote(anchor)}')
                 return
             self._redirect(f"/#pool-{urllib.parse.quote(pool)}" if path in {"/level", "/model"} else "/")
 
