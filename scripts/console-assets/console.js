@@ -217,6 +217,99 @@ const Crossfeed = (() => {
   return {searchShortcut, isTyping, isMac, keyHint, createSaver, switchView, splitChange, copyText, wireOrderHandle, createOrderMotion};
 })();
 
+function setupComparison(section) {
+  const document = section.ownerDocument;
+  const window = document.defaultView;
+  const form = section.querySelector('.wb-query');
+  let request = 0;
+  let desired = params();
+  function params(preview) {
+    const query = new URLSearchParams();
+    query.set('role', form.elements.role.value);
+    query.set('count', form.elements.count.value);
+    const mode = form.elements.value.value;
+    query.set(preview ? 'preview-value' : 'value', preview || mode);
+    for (const effort of form.querySelectorAll('.wb-effort-picker')) {
+      const model = form.querySelector(`.wb-model-picker[data-col="${effort.dataset.col}"]`);
+      const previous = [...model.options].find(option => option.defaultSelected)?.value;
+      query.append('compare', model.value !== previous ? model.value : effort.value);
+    }
+    return query;
+  }
+  function reset() {
+    for (const select of form.querySelectorAll('select')) {
+      const previous = [...select.options].find(option => option.defaultSelected);
+      if (previous) select.value = previous.value;
+    }
+    form.elements.value.value = form.elements.value.defaultValue;
+  }
+  function previewMode(mode) {
+    const button = form.elements['preview-value'];
+    const absolute = mode === 'absolute-best';
+    button.setAttribute('aria-checked', String(absolute));
+    button.querySelector('.st').textContent = absolute ? 'Absolute best' : 'Best value';
+    button.value = absolute ? 'best-value' : 'absolute-best';
+    form.elements.value.value = mode;
+  }
+  async function refresh(change) {
+    if (change) desired = change;
+    const query = new URLSearchParams(desired);
+    query.set('fragment', 'compare');
+    const mine = ++request;
+    const error = form.querySelector('.wb-error');
+    error.textContent = '';
+    section.setAttribute('aria-busy', 'true');
+    try {
+      const response = await window.fetch('/?' + query);
+      if (!response.ok) throw new Error('Comparison refused');
+      const doc = new window.DOMParser().parseFromString(await response.text(), 'text/html');
+      if (mine !== request) return;
+      const next = doc.querySelector('.wb-query');
+      if (!next) throw new Error('Comparison missing');
+      const focused = document.activeElement;
+      const inForm = form.contains(focused);
+      let focusSelector = '';
+      if (inForm && focused.dataset.col) {
+        const cls = focused.matches('.wb-model-picker') ? 'wb-model-picker' : 'wb-effort-picker';
+        focusSelector = `.${cls}[data-col="${focused.dataset.col}"]`;
+      } else if (inForm && focused.name) focusSelector = `[name="${focused.name}"]`;
+      form.replaceChildren(...next.childNodes);
+      if (focusSelector) (form.querySelector(focusSelector) || form.elements.count).focus({preventScroll: true});
+      const details = section.querySelector('.wb-numbers');
+      const explanation = details.querySelector('.wb-muted');
+      const newExplanation = doc.querySelector('.wb-numbers .wb-muted');
+      if (explanation.innerHTML !== newExplanation.innerHTML && !explanation.contains(focused)) {
+        const open = explanation.querySelector('details')?.open;
+        explanation.replaceChildren(...newExplanation.childNodes);
+        if (open && explanation.querySelector('details')) explanation.querySelector('details').open = true;
+      }
+      const updated = params(desired.get('preview-value'));
+      if (change || desired.get('preview-value')) {
+        window.history.replaceState(null, '', '/?' + updated + window.location.hash);
+      }
+      desired = updated;
+    } catch (_) {
+      if (mine !== request) return;
+      reset();
+      previewMode(form.elements.value.defaultValue);
+      desired = params();
+      error.textContent = change ? 'Comparison not updated. Try again.' : 'Comparison may be out of date.';
+    } finally {
+      if (mine === request) section.removeAttribute('aria-busy');
+    }
+  }
+  form.addEventListener('change', event => {
+    if (event.target.matches('select')) refresh(params());
+  });
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const preview = event.submitter?.name === 'preview-value' ? event.submitter.value : '';
+    if (preview) previewMode(preview);
+    refresh(params(preview));
+  });
+  return refresh;
+}
+
 function boot(document, window) {
   const root = document.documentElement;
   root.classList.add('js');
@@ -365,7 +458,6 @@ function boot(document, window) {
   const searchStatus = document.querySelector('.search-status');
   const hint = document.querySelector('.key-hint');
   if (hint) hint.textContent = Crossfeed.keyHint(window.navigator);
-  const searchable = [...document.querySelectorAll('[data-search-label]')];
   let returnFocus = null;
   function reveal(target) {
     for (let parent = target.parentElement; parent; parent = parent.parentElement) {
@@ -382,7 +474,8 @@ function boot(document, window) {
   function search() {
     results.replaceChildren();
     const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const matches = words.length ? searchable.filter(el => words.every(word => haystack(el).includes(word))) : [];
+    const matches = words.length ? [...document.querySelectorAll('[data-search-label]')]
+      .filter(el => words.every(word => haystack(el).includes(word))) : [];
     for (const target of matches) {
       const li = document.createElement('li');
       const link = document.createElement('a');
@@ -472,6 +565,7 @@ function boot(document, window) {
     if (panel && !panel.hidden && !event.target.closest('.find-panel, .find-lens')) closeSearch(false);
   });
   const workbench = document.querySelector('.wb');
+  const compare = workbench && setupComparison(workbench);
   if (window.location.hash) {
     const target = document.getElementById(window.location.hash.slice(1));
     if (workbench && target?.matches('details.pick')) {
@@ -493,8 +587,8 @@ function boot(document, window) {
     try { id = decodeURIComponent(hash.slice(1)); } catch (_) { return; }
     const target = document.getElementById(id);
     const drawer = target?.querySelector('details.model-disclosure');
-    if (!drawer) return;
-    drawer.open = true;
+    if (!drawer && !(workbench && target?.matches('.wb-model'))) return;
+    if (drawer) drawer.open = true;
     for (let parent = target.parentElement; parent; parent = parent.parentElement) {
       if (parent.matches('details')) parent.open = true;
     }
@@ -597,7 +691,8 @@ function boot(document, window) {
     if (toggle) {
       const on = level !== 'off';
       showSwitch(toggle, on, on ? 'off' : 'normal');
-      row.querySelector('.wb-level').textContent = on ? form.querySelector(`[value="${level}"]`).getAttribute('aria-label') : 'Enables at Normal';
+      const caption = row.querySelector('.wb-level');
+      if (caption) caption.textContent = form.querySelector(`[value="${level}"]`).getAttribute('aria-label');
     }
     const stops = [...form.querySelectorAll('.stop')];
     row.className = row.className.replace(/\blvl-\S+/g, `lvl-${level}`);
@@ -696,11 +791,9 @@ function boot(document, window) {
     if (data.brief !== undefined) briefCompact = data.brief;
     if (data.brief_full !== undefined) briefFull = data.brief_full;
     if (briefText && data.brief !== undefined) briefText.textContent = fullShown ? briefFull : briefCompact;
-    if (data.console_order !== undefined) {
+    if (!workbench && data.console_order !== undefined) {
       confirmedOrder = clone(data.console_order);
-      if (!orderDraft && !skip('order') && (!workbench || JSON.stringify(order) !== JSON.stringify(confirmedOrder))) {
-        order = clone(confirmedOrder); applyOrder();
-      }
+      if (!orderDraft && !skip('order')) { order = clone(confirmedOrder); applyOrder(); }
     }
     const stamp = document.querySelector('.stamp');
     if (stamp && data.stamp !== undefined) stamp.textContent = workbench ? (data.wallet_stamp ?? data.stamp) : data.stamp;
@@ -715,6 +808,7 @@ function boot(document, window) {
     send: ({url, body}) => post(url, body),
     onConfirmed: (data, key) => {
       update(data, other => saver.pending(other));
+      if (!saver.busy()) compare?.();
       if (!saver.busy() && (!workbench || key === 'order')) say(key === 'order' ? 'Saved this page’s order.' : key.startsWith('model:') ? 'Saved. The next task uses these models.' : 'Saved. Routing uses this setting now.');
     },
     onFailed: (key, newer) => {
@@ -906,9 +1000,29 @@ function boot(document, window) {
       if (action.endsWith('/probe')) {
         if (result.models?.length) showProviderModels(result.models);
         else output.textContent += ' Enter the model IDs you want to add.';
+      } else if (action.endsWith('/remove')) {
+        form.closest('li').remove();
+        if (workbench && result.snapshot) {
+          const pools = new Map(result.snapshot.pools.map(pool => [pool.pool, pool]));
+          for (const row of document.querySelectorAll('.wb-pool-control')) {
+            const pool = pools.get(row.dataset.pool);
+            if (!pool) row.remove();
+            else {
+              for (const item of row.querySelectorAll('.wb-model')) {
+                if (!Object.hasOwn(pool.model_actors, item.dataset.model)) item.remove();
+              }
+              const count = row.querySelectorAll('.wb-model').length;
+              const inventory = row.querySelector('.wb-inventory');
+              if (inventory) inventory.textContent = `${count} model ${count === 1 ? 'entry' : 'entries'}`;
+            }
+          }
+          update(result.snapshot, key => saver.pending(key));
+          compare?.();
+        }
+        say(result.message);
       } else {
         if (form.elements.key) form.elements.key.value = '';
-        window.location.reload();
+        window.location.reload(); // An added provider can introduce new cards, models and settings.
       }
     } catch (error) {
       output.dataset.error = 'true';
@@ -929,13 +1043,15 @@ function boot(document, window) {
       if (form.getAttribute('aria-busy') === 'true') return;
       const input = form.querySelector('input[name="allowance"]');
       const output = form.querySelector('.wb-error');
+      const revision = saver.revision;
       form.setAttribute('aria-busy', 'true');
       output.textContent = 'Saving…';
       try {
         const data = await post(form.action, body);
         input.defaultValue = String(data.allowance);
         if (input.value === body.get('allowance')) input.value = input.defaultValue;
-        if (workbench) update(data, key => saver.pending(key));
+        if (workbench && revision === saver.revision && !saver.busy()) update(data);
+        compare?.();
         output.textContent = 'Saved.';
       } catch (_) {
         if (input.value === body.get('allowance')) input.value = input.defaultValue;
@@ -985,6 +1101,7 @@ function boot(document, window) {
     try {
       const data = await post(form.action, body);
       update(data, key => saver.pending(key));
+      compare?.();
       const failed = Object.entries(data.refresh || {})
         .filter(([, value]) => value !== 'refreshed' && value !== 'kept newer stored snapshot')
         .map(([pool]) => document.getElementById(`pool-${pool}`)?.dataset.searchLabel || pool);
