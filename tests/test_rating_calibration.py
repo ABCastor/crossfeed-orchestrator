@@ -5,14 +5,13 @@ from scripts import rating
 
 
 class LiveCalibration(unittest.TestCase):
-    def test_anchor_is_ordinary_route_not_a_raw_grade(self):
-        self.assertAlmostEqual(rating.success_prior(.5), .825)
-        self.assertAlmostEqual(rating.success_prior(None), .825)
-        self.assertLess(rating.success_prior(.4), rating.success_prior(.5))
-        self.assertGreater(rating.success_prior(.6), rating.success_prior(.5))
-        self.assertLess(rating.success_prior(.6) - rating.success_prior(.4), .04)
-        self.assertLess(rating.success_prior(.5, "hard"), .825)
-        self.assertGreater(rating.success_prior(.5, "easy"), .825)
+    # BR-SELECT-003
+    def test_ordinary_prior_keeps_pass_rate_and_missing_is_neutral(self):
+        for rate in (.4, .5, .6):
+            self.assertEqual(rating.success_prior(rate), rate)
+            self.assertLess(rating.success_prior(rate, "hard"), rate)
+            self.assertGreater(rating.success_prior(rate, "easy"), rate)
+        self.assertEqual(rating.success_prior(None), .5)
 
     # BR-SELECT-005
     def test_subscription_price_uses_window_value_and_scarcity(self):

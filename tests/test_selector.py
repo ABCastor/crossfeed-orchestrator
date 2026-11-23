@@ -19,11 +19,16 @@ import fleetctl
 import selector
 
 
-def quality_row(model, level="high", mean=.8, sd=.01, price=1, latency=1, sources=1, family="review"):
-    return {"model_key": model, "model": model, "level": level,
-            "q": {family: {"mean": mean, "sd": sd, "n_sources": sources, "sources": []}},
-            "own": {}, "tokens_per_task": {"in": 1000, "out": 1000},
-            "price_1m": {"in": price, "out": price}, "latency_s": latency, "flags": []}
+def quality_row(model, level="high", mean=.8, sd=.01, price=1, latency=1, sources=1,
+                family="review", *, pass_rate=None):
+    row = {"model_key": model, "model": model, "level": level,
+           "q": {family: {"mean": mean, "sd": sd, "n_sources": sources, "sources": []}},
+           "own": {}, "tokens_per_task": {"in": 1000, "out": 1000},
+           "price_1m": {"in": price, "out": price}, "latency_s": latency, "flags": []}
+    if pass_rate is not None:
+        row["sources"] = [{"source": "terminal_bench", "mapping": "aa_terminal",
+                           "metric": "terminal_bench_4", "value": pass_rate, "weight": .8}]
+    return row
 
 
 def claude_binding_fixture(now):
@@ -81,11 +86,13 @@ class SelectorTests(unittest.TestCase):
         self.roster["quota_pools"]["codex"]["value_capacity"] = {
             "weekly_usd_equivalent": 46, "source": "synthetic equal-window debit"}
 
-        def row(level, grade, debit):
-            return dict(quality_row(model, level, grade),
+        def row(level, grade, rate, debit):
+            return dict(quality_row(model, level, grade, pass_rate=rate),
                         own_cost={"codex": {"percent_per_task": debit}})
 
-        self.evidence([row("medium", .65, .01), row("high", .9, .14), row("max", .98, .4)])
+        # Max saves .04 × the failure budget over High, less than its debit premium.
+        self.evidence([row("medium", .65, .65, .01), row("high", .9, .90, .14),
+                       row("max", .98, .94, .4)])
         args = dict(allow=f"codex:{model}:*", persist_receipts=False, no_explore=True)
         with mock.patch.object(selector.rating, "COMPETENT_RERUN_PRICE", .23):
             routine = self.select(rating_stakes="routine", **args)
@@ -147,32 +154,59 @@ class SelectorTests(unittest.TestCase):
             self.assertEqual(select(89, value_mode="absolute-best")["choice"]["model_key"], opus)
             self.assertEqual(select(90, rating_stakes="critical")["choice"]["model_key"], astra)
 
-    # BR-SELECT-003
-    def test_absolute_headroom_prices_equal_debits_at_both_stakes(self):
+    # BR-SELECT-005
+    def test_plan_window_value_prices_equal_debits_at_both_stakes(self):
         self.only(["claude", "codex"])
-        models = "claude-sonnet-5-5", "gpt-6.1-sol"
-        allowed = f"claude:{models[0]}:high,codex:{models[1]}:high"
-        self.evidence([quality_row(models[0], mean=.81), quality_row(models[1], mean=.80)])
+        reference = 2.30
+        self.roster["policy"]["selector"]["capacity_reference_usd_equivalent"] = reference
+        plans = (("claude", "claude-sonnet-5-5", 2.30), ("codex", "gpt-6.1-sol", 46.00))
+        allowed = ",".join(f"{pool}:{model}:high" for pool, model, _ in plans)
+        self.evidence([dict(quality_row(model, pass_rate=.6),
+                            own_cost={pool: {"percent_per_task": 1}})
+                       for pool, model, _ in plans])
         runtime = {"quota_snapshots": {}}
-        for pool in ("claude", "codex"):
+        for pool, _, capacity in plans:
+            self.roster["quota_pools"][pool]["value_capacity"] = {
+                "weekly_usd_equivalent": capacity, "source": "test scenario"}
             snapshot = self.snapshot(pool, 10, 10)["quota_snapshots"][pool]
             window = snapshot["windows"].pop("rolling")
             snapshot["windows"]["weekly"] = dict(window, window_minutes=10080)
             runtime["quota_snapshots"][pool] = snapshot
-        self.assertEqual(self.select(runtime, allow=allowed)["top3"][0]["pool"], "claude")
-        for pool, capacity in (("claude", 2.30), ("codex", 46.00)):
-            self.roster["quota_pools"][pool]["value_capacity"] = {
-                "weekly_usd_equivalent": capacity, "source": "test scenario"}
-        best = self.select(runtime, allow=allowed)
-        self.assertEqual(best["choice"]["pool"], "codex")
-        self.assertAlmostEqual(best["choice"]["capacity"]["remaining_usd_equivalent"], 41.4)
-        self.assertAlmostEqual(best["top3"][1]["capacity"]["remaining_usd_equivalent"], 2.07)
-        absolute = self.select(runtime, allow=allowed, value_mode="absolute-best")
-        self.assertEqual(absolute["choice"]["pool"], "codex")
-        self.assertGreater(best["top3"][1]["estimated_price"], best["choice"]["estimated_price"])
-        unknown = selector._capacity_headroom(self.roster, {}, "codex", models[1], 2.3, fleetctl)
+        for stakes in ("routine", "critical"):
+            with self.subTest(stakes=stakes):
+                result = self.select(runtime, allow=allowed, rating_stakes=stakes, no_explore=True)
+                self.assertEqual(result["choice"]["pool"], "claude")
+                for item, (pool, _, capacity) in zip(result["top3"], plans, strict=True):
+                    remaining = capacity * .9
+                    self.assertEqual(item["pool"], pool)
+                    self.assertAlmostEqual(item["capacity"]["remaining_usd_equivalent"], remaining)
+                    scarcity = reference / (reference + remaining)
+                    self.assertAlmostEqual(item["estimated_price"], .01 * capacity * (1 + scarcity))
+        unknown = selector._capacity_headroom(self.roster, {}, "codex", plans[1][1], 2.3, fleetctl)
         self.assertIsNone(unknown["remaining_usd_equivalent"])
         self.assertEqual(unknown["scarcity_penalty"], 1.0)
+
+    # BR-SELECT-005
+    def test_small_plan_forecast_runout_raises_price_at_same_debit(self):
+        pool, model, capacity = "opencode-go", "deepseek-v4-flash", 2.3077
+        self.only([pool])
+        self.roster["quota_pools"][pool]["value_capacity"] = {
+            "weekly_usd_equivalent": capacity, "source": "synthetic Go plan"}
+        self.evidence([dict(quality_row(model, pass_rate=.6),
+                            own_cost={pool: {"percent_per_task": .5}})])
+        items = []
+        for used, projected in ((10, 20), (90, 160)):
+            runtime = self.snapshot(pool, projected, used)
+            windows = runtime["quota_snapshots"][pool]["windows"]
+            windows["weekly"] = dict(windows.pop("rolling"), window_minutes=10080)
+            items.append(self.select(runtime, allow=f"{pool}:{model}:high", no_explore=True)["choice"])
+        ample, drained = items
+        self.assertEqual(ample["cost"]["percent"], drained["cost"]["percent"])
+        self.assertEqual(ample["pool_price"]["lambda"], 0)
+        self.assertGreater(drained["pool_price"]["lambda"], 0)
+        self.assertLess(drained["quota_pace"]["value"], 0)
+        self.assertAlmostEqual(drained["capacity"]["remaining_usd_equivalent"], capacity * .1)
+        self.assertGreater(drained["estimated_price"], 4 * ample["estimated_price"])
 
     # BR-SELECT-003
     def test_recent_work_prices_missing_headroom_without_claiming_a_reading(self):

@@ -24,11 +24,14 @@ class TuningTests(SelectorTests):
         self.only(['codex'])
         self.roster['quota_pools']['codex']['value_capacity'] = {
             'weekly_usd_equivalent': 46, 'source': 'synthetic weekly estimate'}
-        rows = [quality_row('gpt-6.1-sol', mean=.92), quality_row('gpt-6-luna', mean=.75)]
+        rows = [quality_row('gpt-6.1-sol', mean=.92, pass_rate=.92),
+                quality_row('gpt-6-luna', mean=.75, pass_rate=.75)]
         for row, debit in zip(rows, (10, .01)):
             row['own_cost'] = {'codex': {'percent_per_task': debit}}
         self.evidence(rows)
         runtime = self.snapshot('codex', projected=190, used=50)
+        windows = runtime['quota_snapshots']['codex']['windows']
+        windows['weekly'] = dict(windows.pop('rolling'), window_minutes=10080)
         allowed = 'codex:gpt-6.1-sol:high,codex:gpt-6-luna:high'
         with mock.patch.object(selector.rating, 'COMPETENT_RERUN_PRICE', .23):
             result = self.select(runtime, stakes='high', rating_stakes='critical', allow=allowed, no_explore=True)

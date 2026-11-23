@@ -101,14 +101,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Authority: Operator: “Most of the time, I'm going to use Opus or Fable to orchestrate, and then around it anything you want. But I certainly don't want Sonnet on high to do hard reasoning. Probably Opus should do that.”
 - Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, lead reserve, quota circuits and data policy still apply.
 - implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
-- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback`, `tests/test_expected_routing.py:ExpectedRouting.test_hard_reasoning_uses_dedicated_grades_without_an_admission_floor`.
+- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback`, `tests/test_expected_routing.py:ExpectedRouting.test_hard_reasoning_displays_dedicated_grades_but_ranks_pass_rates_without_a_floor`.
 
 ## BR-SELECT-005 — Charge subscription debit at its plan value [ROUTING LEAD DECISION 2026-11-23]
 
 - RULE: Price subscription debit as the share of its window times the sourced service-dollar value of that window, multiplied by the existing run-out and remaining-headroom premium. Keep BR-SELECT-003's labeled 50% estimate when a previously read pool's headroom is unusable and recent work supports the estimate. Metered lanes still use incremental cash; admission and funding rules remain independent.
 - Supersedes: decision B removes the inverse-capacity multiplier from BR-SELECT-003's price input; the forecast premium alone accounts for scarce quota. The routing lead applies the operator's “think of everything as a cost” direction and request to take advantage of Neon, without a model-specific price or pick.
 - implemented-by: `scripts/rating.py:subscription_price`, `scripts/selector.py:routing_price`, `scripts/selector.py:_capacity_headroom`.
-- tested-by: `tests/test_rating_calibration.py:LiveCalibration.test_subscription_price_uses_window_value_and_scarcity`.
+- tested-by: `tests/test_rating_calibration.py:LiveCalibration.test_subscription_price_uses_window_value_and_scarcity`, `tests/test_selector.py:SelectorTests.test_plan_window_value_prices_equal_debits_at_both_stakes`, `test_small_plan_forecast_runout_raises_price_at_same_debit`.
 
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 

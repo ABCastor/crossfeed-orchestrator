@@ -237,9 +237,9 @@ class SelectorRound2(unittest.TestCase):
         self.one_level("codex")
         self.roster["quota_pools"]["codex"]["value_capacity"] = {
             "weekly_usd_equivalent": 46, "source": "synthetic weekly estimate"}
-        known = fixtures.quality_row("gpt-6.1-sol", mean=.71)
+        known = fixtures.quality_row("gpt-6.1-sol", mean=.71, pass_rate=.71)
         known["own_cost"] = {"codex": {"percent_per_task": .1}}
-        missing = fixtures.quality_row("gpt-6-astra", mean=.99)
+        missing = fixtures.quality_row("gpt-6-astra", mean=.99, pass_rate=.99)
         missing["price_1m"] = {"in": None, "out": None}
         self.evidence([known, missing])
         allow = "codex:gpt-6.1-sol:high,codex:gpt-6-astra:high"

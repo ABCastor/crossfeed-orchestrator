@@ -21,7 +21,7 @@ class ExpectedRouting(unittest.TestCase):
         self.roster['effort'][self.opus]['levels']['claude'] = ['low', 'high', 'xhigh']
         self.prices = {'low': .093, 'high': .170, 'xhigh': .250}
         self.runtime = fixtures.claude_binding_fixture(fleet.utc_now())
-        self.evidence([fixtures.quality_row(self.opus, level, grade, family='reasoning')
+        self.evidence([fixtures.quality_row(self.opus, level, grade, family='reasoning', pass_rate=grade)
                        for level, grade in [('low', .383), ('high', .596), ('xhigh', .809)]])
         mock.patch.object(selector, 'routing_price', lambda item: self.prices[item['level']]).start()
         mock.patch.object(selector.rating, 'COMPETENT_RERUN_PRICE', .230769).start()
@@ -37,22 +37,25 @@ class ExpectedRouting(unittest.TestCase):
         self.assertEqual({o['level'] for o in result['top3']}, {'xhigh', 'high', 'low'})
         critical = self.pick(rating_stakes='critical')
         self.assertEqual(critical['choice']['level'], 'xhigh')
-        self.assertIn(result['choice']['level'], ('high', 'xhigh', 'max'))
+        self.assertEqual(result['choice']['expected_cost'], min(o['expected_cost'] for o in result['top3']))
         p = selector.rating.success_prior(.809, 'hard')
         self.assertAlmostEqual(critical['choice']['expected_cost'], .250 + (1-p) * 20 * .230769)
         self.assertEqual(self.pick(rating_stakes='routine')['choice']['level'], 'low')
 
-    # BR-SELECT-004
-    def test_hard_reasoning_uses_dedicated_grades_without_an_admission_floor(self):
+    # BR-SELECT-003 · BR-SELECT-004
+    def test_hard_reasoning_displays_dedicated_grades_but_ranks_pass_rates_without_a_floor(self):
         rows = []
-        for level, grade in [('low', .383), ('high', .596), ('xhigh', .809)]:
-            row = fixtures.quality_row(self.opus, level, .99 if level == 'low' else grade, family='reasoning')
+        for level, grade, rate in [('low', .383, .809), ('high', .596, .596), ('xhigh', .809, .383)]:
+            row = fixtures.quality_row(self.opus, level, .99 if level == 'low' else grade,
+                                       family='reasoning', pass_rate=rate)
             row['q_by_stakes'] = {'high': {'reasoning': dict(row['q']['reasoning'], mean=grade)}}
             rows.append(row)
         self.evidence(rows)
         result = self.pick()
-        self.assertEqual(result['choice']['level'], 'xhigh')
-        self.assertEqual(next(o for o in result['top3'] if o['level'] == 'low')['q']['mean'], .383)
+        self.assertEqual(result['choice']['level'], 'low')
+        self.assertEqual(result['choice']['q']['mean'], .383)
+        self.assertAlmostEqual(result['choice']['p_success'], selector.rating.success_prior(.809, 'hard'))
+        self.assertEqual({o['level'] for o in result['top3']}, {'low', 'high', 'xhigh'})
 
     def test_absolute_best_is_only_a_stakes_alias(self):
         alias = self.pick(value_mode='absolute-best')
@@ -82,13 +85,14 @@ class HardEffortStability(unittest.TestCase):
         levels = [('low', .383, .20), ('medium', .532, .30), ('high', .596, .37),
                   ('xhigh', .809, .54), ('max', .830, .82)]
         self.roster['effort'][opus]['levels']['claude'] = [level for level, _, _ in levels]
-        self.evidence([dict(fixtures.quality_row(opus, level, grade, family='reasoning'),
+        self.evidence([dict(fixtures.quality_row(opus, level, grade, family='reasoning', pass_rate=grade),
                             own_cost={'claude': {'percent_per_task': debit}})
                        for level, grade, debit in levels])
         self.args = dict(role='hard-reasoning', allow=f'claude:{opus}:*', rating_stakes='important',
                          no_explore=True, persist_receipts=False, collect_eligible=True)
 
-    def test_admitted_opus_does_not_drop_below_high_at_important_stakes(self):
+    # BR-SELECT-003 · BR-SELECT-004
+    def test_admitted_opus_ranks_all_efforts_as_weekly_pressure_changes(self):
         runtime = fixtures.claude_binding_fixture(fleet.utc_now())
         window = runtime['quota_snapshots']['claude']['windows']['secondary']
         prices = []
@@ -97,10 +101,12 @@ class HardEffortStability(unittest.TestCase):
                 window.update(used_percent=used, projected_used_percent_at_reset=used + 10)
                 result = self.select(runtime, **self.args)
                 self.assertEqual(result['hard_reasoning_preference']['route'], 'opus')
-                self.assertIn(result['choice']['level'], ('high', 'xhigh', 'max'))
+                options = result['eligible_options']
+                self.assertEqual({item['level'] for item in options}, {'low', 'medium', 'high', 'xhigh', 'max'})
+                self.assertEqual(result['choice']['expected_cost'], min(item['expected_cost'] for item in options))
                 self.assertEqual(result['typical_price_basis'], 'competent_rerun_reference')
                 self.assertAlmostEqual(result['failure_price'], 5 * .005 * (200 * 12 / 52))
-                low = next(item for item in result['eligible_options'] if item['level'] == 'low')
+                low = next(item for item in options if item['level'] == 'low')
                 self.assertIn(low['cost']['basis'], ('measured', 'relative_proxy'))
                 prices.append(low['estimated_price'])
         self.assertGreater(prices[-1], prices[0])
@@ -117,12 +123,14 @@ class HardEffortStability(unittest.TestCase):
         self.assertEqual(before['failure_price'], narrowed['failure_price'])
         self.assertEqual(before['choice'], after['choice'])
 
-    def test_hard_grade_gap_preserves_the_neutral_anchor(self):
+    # BR-SELECT-003
+    def test_hard_difficulty_keeps_benchmark_order_and_reduces_success(self):
         prior = selector.rating.success_prior
-        self.assertAlmostEqual(prior(.5, 'ordinary'), .825)
         self.assertEqual(prior(None, 'hard'), prior(.5, 'hard'))
-        self.assertGreater(prior(.809, 'hard') - prior(.383, 'hard'), .25)
-        self.assertGreater(prior(.809, 'hard') - prior(.383, 'hard'), prior(.809) - prior(.383))
+        self.assertLess(prior(.383, 'hard'), prior(.809, 'hard'))
+        for rate in (.383, .809):
+            self.assertLess(prior(rate, 'hard'), prior(rate, 'ordinary'))
+            self.assertEqual(prior(rate, 'ordinary'), rate)
 
 
 if __name__ == '__main__':

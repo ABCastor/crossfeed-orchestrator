@@ -25,10 +25,10 @@ class ValueModes(unittest.TestCase):
 
     # BR-SELECT-003
     def test_legacy_role_floor_does_not_gate_weak_or_missing_grades(self):
-        cheap = quality_row("gpt-6.1-sol", mean=.99, latency=0)
+        cheap = quality_row("gpt-6.1-sol", mean=.99, latency=0, pass_rate=.30)
         weak = {"mean": .59, "sd": .01, "n_sources": 1}
         cheap["q_by_stakes"] = {"high": {"review": weak}, "low": cheap["q"]}
-        self.evidence([cheap, quality_row("claude-opus-5-5", mean=.80)])
+        self.evidence([cheap, quality_row("claude-opus-5-5", mean=.80, pass_rate=.60)])
         with mock.patch.object(selector, "routing_price", return_value=.3):
             result = self.select(allow=self.allow, stakes="high", value_mode="absolute-best")
         self.assertEqual(result["choice"]["pool"], "claude")

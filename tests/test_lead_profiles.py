@@ -81,7 +81,8 @@ class LeadDetectionTests(unittest.TestCase):
             # This control must actually prefer Fable under expected cost before
             # the lead gate runs. Give both options a debit; selecting critical
             # alone does not bypass quota costs.
-            rows = [dict(quality_row(key, mean=grade), own_cost={"claude": {"percent_per_task": .01}})
+            rows = [dict(quality_row(key, mean=grade, pass_rate=grade),
+                         own_cost={"claude": {"percent_per_task": .01}})
                     for key, grade in ((fable, .99), (opus, .80))]
             (state / "evidence/levels.json").write_text(json.dumps({"rows": rows}))
             allowed = f"claude:{opus}:high,claude:{fable}:high"
