@@ -24,9 +24,10 @@ Scope: the Benchmarks page and local admission-check policy, cash-aware routing 
 
 ## BR-CASH-001 — Cash and quota are separate [DECIDED]
 
-- RULE: A key or list price does not establish who pays. Show funding and incremental cash separately from quota pressure and API-equivalent cost. Unknown funding does not admit a newly configured pool, and unknown or malformed prices are not zero quotes. Normalized API-equivalent quotes are display only; without an envelope, the legacy selector score and quota penalty stay unchanged.
+- RULE: A key or list price does not establish who pays. Show funding and incremental cash separately from quota pressure and API-equivalent cost. Unknown funding does not admit a newly configured pool, and unknown or malformed prices are not zero quotes. Normalized API-equivalent quotes are display only; an envelope still grants no selection admission by itself.
+- Superseded 2026-11-23: the historical requirement to reproduce pre-cash scores and picks without an envelope ends when the operator replaces the selector score with expected cost (Rating Model — Design). Display-only quotes still cannot change routing.
 - implemented-by: `scripts/funding.py:classify`, `scripts/funding.py:paid_lane_quote`, `scripts/providers.py:add`, `scripts/selector.py:enumerate_options`, `scripts/fleetctl.py:cash_by_pool`, `scripts/run_identity.py:selection_metadata`.
-- tested-by: `tests/test_business_cash_routing.py:CashVisibilityTests`, `tests/test_cash_parity.py:CashParityTests.test_selection_grid_matches_d62e54f` and the provider and named Copilot suites.
+- tested-by: `tests/test_business_cash_routing.py:CashVisibilityTests`, `tests/test_cash_parity.py:CashParityTests.test_display_quote_does_not_change_unfunded_routing_grid` and the provider and named Copilot suites.
 
 ## BR-MIMO-001 — MiMo paid calls require explicit opt-in [DECIDED]
 
@@ -74,19 +75,22 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - RULE: When the operator applies the Haiku policy fragment, current and legacy Haiku are ineligible for review, reviewer, audit, second-opinion, audit-retry, hard-reasoning and judgment. Stakes, exploration, explicit selector allow lists and targets grant no exception. Read roles retain their existing admission. The fragment changes no spend level, switch, cap or scoring weight.
 - Authority: The operator may opt into this judgment restriction. It is neither a universal model-quality judgment nor an engine default.
 - implemented-by: `examples/haiku-judgment-policy.json:effort.*.refuse_roles`, consumed by the existing `scripts/selector.py:enumerate_options` refusal check.
-- tested-by: `tests/test_selector_judgment_policy.py:JudgmentPolicyTests.test_judgment_roles_exclude_haiku_at_every_stakes_and_in_receipts`, `test_allow_and_target_cannot_readmit_haiku_for_review`, `test_unknown_quality_exploration_cannot_choose_refused_model`, `test_legacy_haiku_is_refused_but_can_still_probe`; controls `test_missing_policy_reproduces_haiku_review` and `test_nonjudgment_reads_keep_haiku_available` observe real selection and receipts.
+- tested-by: `tests/test_selector_judgment_policy.py:JudgmentPolicyTests.test_judgment_roles_exclude_haiku_at_every_stakes_and_in_receipts`, `test_allow_and_target_cannot_readmit_haiku_for_review`, `test_checked_exploration_cannot_choose_refused_model`, `test_legacy_haiku_is_refused_but_can_still_probe`; controls `test_missing_policy_reproduces_haiku_review` and `test_nonjudgment_reads_keep_haiku_available` observe real selection and receipts.
 
 ## BR-SELECT-002 — Show quota pace and learn from checked outcomes [OPERATOR-DIRECTED]
 
 - RULE: Show surplus or deficit and projected run-out for known windows. After admission, sample checked-outcome ratings only on safe routes within 25% of the best mean expected cost. Cap non-greedy dispatch starts at 15% by default. No paid, Kimi, low-dial, quota-constrained, exact-target or irreversible exploration. Never add an extra run to learn.
 - Evidence: Four pseudo-observations centre an exact route on the calibrated success prior, not its relative grade. Only an independent `accept` verdict counts; deduplicate tasks on each route. Record mean, sample and actual pick. Prefer the mean if a draw cannot be safely recorded.
-- implemented-by: `scripts/fleetctl.py:window_pace`, `scripts/fleetctl.py:_book_rating_trial`, `scripts/rating_explore.py`, `scripts/selector.py:select_option`.
+- implemented-by: `scripts/fleetctl.py:window_pace`, `scripts/fleetctl.py:_book_rating_trial`, `scripts/rating_explore.py`, `scripts/selector.py:pool_pace`, `scripts/selector.py:select_option`.
+- tested-by: `tests/test_business_pace_variety.py`, `tests/test_rating_explore.py`.
+- Superseded 2026-11-23: the old proposed quality-band variety mixer, recency and fixed draw odds are not acceptance criteria for checked Thompson exploration (operator direction and Rating Model — Design). Quota pace, hard gates and eligible fallbacks stay.
 
 ## BR-SELECT-003 — Rank efforts by expected cost [OPERATOR-DIRECTED]
 
 - RULE: Compare all eligible efforts by price plus chance of failure times the typical job price at 1× routine, 5× important or 20× critical. A weak grade prior is calibrated separately from checked outcomes. Absolute-best aliases critical; no pricing option grants admission. Unknown price does not win as cheapest; explicit or policy fallbacks stay unpriced.
 - implemented-by: `scripts/rating.py:expected_cost`, `scripts/rating.py:success_prior`, `scripts/selector.py:select_option`.
-- tested-by: `tests/test_rating_calibration.py`, `tests/test_selector.py`.
+- tested-by: `tests/test_rating_calibration.py`, `tests/test_selector.py`, `tests/test_selector_round2.py`, `tests/test_value_modes.py`.
+- Superseded 2026-11-23: the effort hurdle, absolute-best as a separate ranking, standalone latency/quality score weights and caps, and soft Claude-first routing below the projected 80% threshold (threshold was delegated) are replaced by expected cost under the operator's Rating Model — Design direction. This does not retire configured admission/funding gates, the pressured lead reserve, irreversible highest-known quality, or the hard-reasoning preference.
 
 ## BR-SELECT-004 — Opus handles hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
 

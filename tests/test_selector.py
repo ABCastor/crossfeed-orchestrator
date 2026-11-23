@@ -74,26 +74,32 @@ class SelectorTests(unittest.TestCase):
                 entry.pop("stand_in_ceiling", None)
 
     # BR-SELECT-003
-    def test_best_value_requires_a_marginal_effort_gain_and_absolute_best_does_not(self):
+    def test_every_effort_competes_at_expected_cost_and_stakes_price_failure(self):
         model = "gpt-6.1-sol"
         self.only(["codex"])
         self.roster["effort"][model]["levels"]["codex"] = ["medium", "high", "max"]
-        allowed = f"codex:{model}:*"
+        self.roster["quota_pools"]["codex"]["value_capacity"] = {
+            "weekly_usd_equivalent": 46, "source": "synthetic equal-window debit"}
 
-        def row(level, grade, output):
-            return {**quality_row(model, level, grade), "effort_estimate": {
-                "tokens_per_task": {"in": 100, "out": output}, "price_1m": {"in": 0, "out": 10},
-                "latency_s": 1, "units": output / 100}}
+        def row(level, grade, debit):
+            return dict(quality_row(model, level, grade),
+                        own_cost={"codex": {"percent_per_task": debit}})
 
-        for high, expected in ((.82, "medium"), (.83, "high")):
-            with self.subTest(high=high):
-                self.evidence([row("medium", .65, 100), row("high", high, 125), row("max", .95, 300)])
-                best = self.select(allow=allowed, persist_receipts=False)
-                self.assertEqual(best["choice"]["level"], expected)
-                self.assertEqual([option["level"] for option in best["top3"]], [expected])
-                self.assertEqual(best["effort_decisions"][0]["chosen"], expected)
-                absolute = self.select(allow=allowed, value_mode="absolute-best", persist_receipts=False)
-                self.assertEqual(absolute["choice"]["level"], "max")
+        self.evidence([row("medium", .65, .01), row("high", .9, .14), row("max", .98, .4)])
+        args = dict(allow=f"codex:{model}:*", persist_receipts=False, no_explore=True)
+        with mock.patch.object(selector.rating_log, "typical_price", return_value=.23):
+            routine = self.select(rating_stakes="routine", **args)
+            critical = self.select(rating_stakes="critical", **args)
+            alias = self.select(value_mode="absolute-best", **args)
+        self.assertEqual(routine["choice"]["level"], "medium")
+        self.assertEqual(critical["choice"]["level"], "high")
+        self.assertEqual(alias["choice"], critical["choice"])
+        for result in (routine, critical):
+            self.assertEqual({item["level"] for item in result["top3"]}, {"medium", "high", "max"})
+            for item in result["top3"]:
+                self.assertAlmostEqual(item["expected_cost"], item["estimated_price"]
+                                       + (1 - item["p_success"]) * result["failure_price"])
+            self.assertEqual(result["choice"]["expected_cost"], min(i["expected_cost"] for i in result["top3"]))
 
     # BR-SELECT-004
     def test_opus_hard_reasoning_priority_and_real_quota_fallback(self):
@@ -134,10 +140,12 @@ class SelectorTests(unittest.TestCase):
                     fallback = select(weekly, five_hour)
                     self.assertEqual(fallback["choice"]["model_key"], astra)
                     self.assertIn(cause, fallback["hard_reasoning_preference"]["reason"])
-            # Positive control: the same selection sees Sonnet when the best-value rule does not apply.
-            self.assertEqual(select(89, value_mode="absolute-best")["choice"]["model_key"], sonnet)
+            # Critical uses the same admission and fallback contract.
+            self.assertEqual(select(89, value_mode="absolute-best")["choice"]["model_key"], opus)
+            self.assertEqual(select(90, rating_stakes="critical")["choice"]["model_key"], astra)
 
-    def test_absolute_headroom_breaks_equal_percent_tie_only_in_best_value(self):
+    # BR-SELECT-003
+    def test_absolute_headroom_prices_equal_debits_at_both_stakes(self):
         self.only(["claude", "codex"])
         models = "claude-sonnet-5-5", "gpt-6.1-sol"
         allowed = f"claude:{models[0]}:high,codex:{models[1]}:high"
@@ -157,7 +165,8 @@ class SelectorTests(unittest.TestCase):
         self.assertAlmostEqual(best["choice"]["capacity"]["remaining_usd_equivalent"], 41.4)
         self.assertAlmostEqual(best["top3"][1]["capacity"]["remaining_usd_equivalent"], 2.07)
         absolute = self.select(runtime, allow=allowed, value_mode="absolute-best")
-        self.assertEqual(absolute["choice"]["pool"], "claude")
+        self.assertEqual(absolute["choice"]["pool"], "codex")
+        self.assertGreater(best["top3"][1]["estimated_price"], best["choice"]["estimated_price"])
         unknown = selector._capacity_headroom(self.roster, {}, "codex", models[1], 2.3, fleetctl)
         self.assertIsNone(unknown["remaining_usd_equivalent"])
         self.assertEqual(unknown["scarcity_penalty"], 1.0)
@@ -399,12 +408,10 @@ class SelectorTests(unittest.TestCase):
         runtime = self.snapshot("claude", 95)
         runtime["quota_snapshots"].update(self.snapshot("codex", 70)["quota_snapshots"])
         result = self.select(runtime)
-        # BR-SELECT-002: equal quality is varied; scoring still ranks the surplus pool first and
-        # the varied draw favours it.
+        # BR-SELECT-002: surplus stays first; there are no legacy draw odds.
         ranked = result["top3"][0]
         self.assertEqual(ranked["pool"], "codex")
-        odds = {item["pool"]: item["probability"] for item in result["variety"]["candidates"]}
-        self.assertGreater(odds["codex"], odds["claude"])
+        self.assertGreater(ranked["score"], result["top3"][1]["score"])
         self.assertEqual(result["lambdas"]["codex"], 0)
         self.assertGreater(result["lambdas"]["claude"], 0)
         self.assertAlmostEqual(ranked["cost"]["percent"], .02)

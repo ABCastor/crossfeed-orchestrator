@@ -1,13 +1,10 @@
-"""BR-SELECT-002: pace per limit (CodexBar's deficit/surplus) in the glance, and pace-aware,
-varied model choice that never crosses the quality band or a hard gate.
+"""BR-SELECT-002: visible quota pace and bounded, checked-outcome exploration.
 
-Synthetic roster, evidence and readings; isolated state. Simulated dispatches append the same
-ledger record a wrapper appends when a run starts, so recent use is read the real way."""
+Synthetic readings and isolated state; dispatch booking uses the real shared cap."""
 import collections
 import datetime as dt
 import json
 import os
-import random
 import subprocess
 import sys
 import tempfile
@@ -24,10 +21,7 @@ from tests.test_selector import quality_row
 
 menubar = load_menubar()
 NOW = dt.datetime(2026, 11, 3, 9, 0, tzinfo=dt.timezone.utc)
-# The three equal lanes the variety tests choose among, one level each.
 THREE = "codex:gpt-6-astra:high,codex:gpt-6.1-sol:high,claude:claude-opus-5-5:high"
-# BR-SELECT-002 (proposed default): over 50 equal-quality dispatches no lane takes more than this.
-MAX_SHARE = .5
 
 
 def window(used, minutes, left_s, now, **extra):
@@ -134,7 +128,7 @@ class PaceReadingTests(unittest.TestCase):
         self.assertIn("10% in deficit, runs out in", done.stdout)
 
 
-class VarietyTests(unittest.TestCase):
+class CheckedRoutingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="pace variety ")
         self.addCleanup(self.tmp.cleanup)
@@ -143,9 +137,15 @@ class VarietyTests(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
         mock.patch.dict(os.environ, {"FLEET_QUOTA_POLICY": "clock_aware", "FLEET_IGNORE_QUOTA": "0"}).start()
         mock.patch.object(fleetctl, "_POLICY_CACHE", ("clock_aware", "test")).start()
-        random.seed(20261103)
-        rows = [quality_row(model) for model in ("gpt-6-astra", "gpt-6.1-sol", "claude-opus-5-5")]
-        self.evidence(rows)
+        for pool in ("codex", "claude"):
+            self.roster["quota_pools"][pool]["value_capacity"] = {
+                "weekly_usd_equivalent": 46, "source": "synthetic weekly estimate"}
+        self.evidence([self.row(model) for model in ("gpt-6-astra", "gpt-6.1-sol", "claude-opus-5-5")])
+
+    @staticmethod
+    def row(model, debit=.1):
+        pool = "claude" if model.startswith("claude") else "codex"
+        return dict(quality_row(model), own_cost={pool: {"percent_per_task": debit}})
 
     def evidence(self, rows):
         directory = self.state / "evidence"
@@ -166,10 +166,11 @@ class VarietyTests(unittest.TestCase):
 
     def dispatches(self, count, runtime=None, **kwargs):
         picks = collections.Counter()
-        for _ in range(count):
-            choice = self.select(runtime, **kwargs)["choice"]
+        for n in range(count):
+            result = self.select(runtime, explore_seed=n, **kwargs)
+            booked = fleetctl._book_rating_trial(result, self.state, f"task-{n}", f"run-{n}")
+            choice = booked or result["choice"]
             picks[(choice["pool"], choice["model_key"])] += 1
-            self.ran(choice)
         return picks
 
     def pace_readings(self):
@@ -185,63 +186,63 @@ class VarietyTests(unittest.TestCase):
             "claude": snapshot({"weekly": window(20, 10080, week * .92, now)}, now),
         }, "leases": []}
 
-    # BR-SELECT-002 (a)
-    def test_surplus_pool_about_to_reset_is_preferred_over_equal_quality_deficit_pool(self):
-        allow = "codex:gpt-6-astra:high,claude:claude-opus-5-5:high"
-        runtime = self.pace_readings()
-        result = self.select(runtime, allow=allow)
-        self.assertEqual(result["lambdas"]["codex"], result["lambdas"]["claude"], "price alone ties them")
-        odds = {item["pool"]: item for item in result["variety"]["candidates"]}
-        self.assertGreater(odds["codex"]["pace"]["value"], .7)
-        self.assertLess(odds["claude"]["pace"]["value"], -.1)
-        self.assertGreater(odds["codex"]["probability"], .9)
-        picks = collections.Counter(self.select(runtime, allow=allow)["choice"]["pool"] for _ in range(20))
-        self.assertGreaterEqual(picks["codex"], 17, picks)
-        # The receipt records why: pace and probability travel with the choice.
-        chosen = result["choice"]
-        receipt = json.loads(Path(chosen["selection_file"]).read_text())
-        self.assertEqual(receipt["selection_probability"], chosen["selection_probability"])
-        self.assertIn("pace", receipt["choice"]["variety"])
-
-    # BR-SELECT-002 (b)
-    def test_fifty_equal_quality_dispatches_are_spread_across_lanes(self):
-        picks = self.dispatches(50)
-        self.assertEqual(sum(picks.values()), 50)
-        self.assertEqual(len(picks), 3, picks)
-        self.assertLessEqual(max(picks.values()) / 50, MAX_SHARE, picks)
+    def healthy(self):
+        now = fleetctl.utc_now()
+        good = window(10, 10080, 2 * 86400, now, projected_used_percent_at_reset=20)
+        return {"quota_snapshots": {pool: snapshot({"weekly": good}, now)
+                                    for pool in ("codex", "claude")}}
 
     # BR-SELECT-002
-    def test_in_flight_dispatches_count_as_recent_use(self):
-        # A parallel burst launches before any run finishes: the dispatch receipt counts.
-        attempt = self.state / "dispatches" / "one"
-        attempt.mkdir(parents=True)
-        (attempt / "dispatch.json").write_text(json.dumps({
-            "schema": "fleet-dispatch/v1", "dispatch_id": "one", "pool": "codex",
-            "selected_model": "gpt-6-astra", "started_at": fleetctl.iso(fleetctl.utc_now())}))
-        # The finished run of the same dispatch does not count twice.
-        with (self.state / "runs.jsonl").open("a") as handle:
-            handle.write(json.dumps({"schema": "crossfeed-model-run/v1", "dispatch_id": "one", "quota_pool": "codex",
-                                     "selected_model": "gpt-6-astra",
-                                     "started_at": fleetctl.iso(fleetctl.utc_now())}) + "\n")
-        recent = selector.recent_use(self.state, fleetctl, 3600)
-        self.assertAlmostEqual(recent[("codex", "gpt-6-astra")], 1, places=2)
-        # One half-life later the same run counts half.
-        later = fleetctl.utc_now() + dt.timedelta(hours=1)
-        self.assertAlmostEqual(selector.recent_use(self.state, fleetctl, 3600, now=later)[("codex", "gpt-6-astra")],
-                               .5, places=2)
-        odds = {item["model_key"]: item["probability"] for item in self.select()["variety"]["candidates"]}
-        self.assertLess(odds["gpt-6-astra"], odds["gpt-6.1-sol"])
+    def test_surplus_pool_about_to_reset_is_preferred_over_equal_quality_deficit_pool(self):
+        allow = "codex:gpt-6-astra:high,claude:claude-opus-5-5:high"
+        result = self.select(self.pace_readings(), allow=allow, no_explore=True)
+        self.assertEqual(result["lambdas"]["codex"], result["lambdas"]["claude"])
+        codex, claude = result["top3"]
+        self.assertGreater(codex["quota_pace"]["value"], .7)
+        self.assertLess(claude["quota_pace"]["value"], -.1)
+        self.assertEqual(result["choice"]["pool"], "codex")
+        self.assertLess(codex["estimated_price"], claude["estimated_price"])
+        receipt = json.loads(Path(codex["selection_file"]).read_text())
+        self.assertEqual(receipt["choice"]["quota_pace"], codex["quota_pace"])
 
-    # BR-SELECT-002 (c): the band is a floor, not a suggestion.
-    def test_a_lane_below_the_quality_band_is_never_chosen_however_much_surplus(self):
+    # BR-SELECT-002
+    def test_fifty_dispatches_cap_non_greedy_starts_across_lanes(self):
+        runtime = self.healthy()
+        mean = self.select(runtime, no_explore=True)["choice"]
+        picks = self.dispatches(50, runtime)
+        self.assertEqual(sum(picks.values()), 50)
+        total, explored = selector.rating_explore.read_totals(self.state)
+        self.assertEqual(total, 50)
+        self.assertGreater(explored, 0)
+        self.assertLessEqual(explored / total, .15)
+        self.assertEqual(explored, total - picks[mean["pool"], mean["model_key"]])
+
+    # BR-SELECT-002
+    def test_execution_receipts_do_not_change_the_prior_but_independent_verdicts_do(self):
+        mean = self.select(self.healthy(), no_explore=True)["choice"]
+        self.ran(mean)
+        again = self.select(self.healthy(), no_explore=True)["choice"]
+        self.assertEqual(again["posterior"], mean["posterior"])
+        log = selector.rating_log
+        with (self.state / log.LEDGER).open("a") as ledger:
+            for row in (dict(schema=log.DISPATCH, run_id="r1", task_id="t1", live_pick=mean),
+                        dict(schema=log.ACCEPTANCE, run_id="r1", task_id="t1", verdict="fail", check="test")):
+                ledger.write(json.dumps(row) + "\n")
+        ranked = self.select(self.healthy(), no_explore=True)["top3"]
+        updated = next(item for item in ranked if item["model_key"] == mean["model_key"])
+        self.assertEqual(updated["checked_failures"], 1)
+        self.assertLess(updated["p_success"], mean["p_success"])
+
+    # BR-SELECT-002
+    def test_option_above_cost_band_is_never_sampled(self):
         allow = THREE + ",codex:gpt-6-luna:high"
-        self.evidence([quality_row(model) for model in ("gpt-6-astra", "gpt-6.1-sol", "claude-opus-5-5")]
-                      + [quality_row("gpt-6-luna", mean=.7)])
-        picks = self.dispatches(50, allow=allow)
-        self.assertNotIn(("codex", "gpt-6-luna"), picks, picks)
-        # Control: at equal quality the same lane is chosen, so the probe can see it.
-        self.evidence([quality_row(model) for model in ("gpt-6-astra", "gpt-6.1-sol", "claude-opus-5-5", "gpt-6-luna")])
-        self.assertIn(("codex", "gpt-6-luna"), self.dispatches(50, allow=allow))
+        rows = [self.row(model) for model in ("gpt-6-astra", "gpt-6.1-sol", "claude-opus-5-5")]
+        runtime = self.healthy()
+        self.evidence(rows + [self.row("gpt-6-luna", debit=4)])
+        self.assertNotIn(("codex", "gpt-6-luna"), self.dispatches(50, runtime, allow=allow))
+        # Control: the same admitted option becomes sampleable at equal cost.
+        self.evidence(rows + [self.row("gpt-6-luna")])
+        self.assertIn(("codex", "gpt-6-luna"), self.dispatches(50, runtime, allow=allow))
 
     # BR-SELECT-002
     def test_hard_gates_hold_for_a_surplus_lane(self):
@@ -258,30 +259,33 @@ class VarietyTests(unittest.TestCase):
                          self.dispatches(20, allow="codex:gpt-6-astra:high,codex:gpt-6.1-sol:high"))
 
     # BR-SELECT-002
-    def test_irreversible_and_explicit_targets_are_never_varied(self):
-        for _ in range(3):
-            self.ran({"pool": "codex", "model_key": "gpt-6-astra", "harness": "codex"})
-        with mock.patch("random.random", side_effect=AssertionError("varied an irreversible choice")):
-            result = self.select(stakes="irreversible")
-        self.assertEqual(result["selection_probability"], 1)
-        self.assertEqual(len(result["variety"]["candidates"]), 1)
-        with mock.patch("random.random", side_effect=AssertionError("varied an explicit target")):
-            target = self.select(target=("codex", "gpt-6-astra"), allow=None)
+    def test_irreversible_and_explicit_targets_are_never_sampled(self):
+        self.roster["policy"]["selector"]["exploration_cap"] = 1
+        with mock.patch.object(selector.rating_explore, "sample_choice",
+                               side_effect=AssertionError("sampled a protected choice")):
+            result = self.select(self.healthy(), stakes="irreversible")
+            target = self.select(self.healthy(), target=("codex", "gpt-6-astra"), allow=None)
         self.assertEqual(target["choice"]["model_key"], "gpt-6-astra")
+        for selection in (result, target):
+            self.assertEqual(selection["selection_probability"], 1)
+            self.assertIsNone(selection["rating_sampling"]["sampled_pick"])
 
     # BR-SELECT-002
-    def test_selection_probability_is_the_mixture_probability(self):
-        result = self.select()
-        total = sum(item["probability"] for item in result["variety"]["candidates"])
-        self.assertAlmostEqual(total, 1, places=5)
-        self.assertAlmostEqual(result["selection_probability"],
-                               next(item["probability"] for item in result["variety"]["candidates"]
-                                    if item["model_key"] == result["choice"]["model_key"]), places=5)
+    def test_thompson_draw_records_sample_not_a_selection_probability(self):
+        self.roster["policy"]["selector"]["exploration_cap"] = 1
+        result = self.select(self.healthy(), explore_seed=3)
+        self.assertIsNotNone(result["rating_sampling"]["sampled_pick"])
+        self.assertIsNone(result["selection_probability"])
+        payload = json.loads(Path(result["selection_file"]).read_text())
+        self.assertIsNone(payload["selection_probability"])
+        self.assertEqual(payload["rating_sampling"], result["rating_sampling"])
 
     # BR-SELECT-002
-    def test_variety_can_be_switched_off_by_policy(self):
-        self.roster["policy"]["selector"]["variety"] = False
-        picks = self.dispatches(10)
+    def test_exploration_can_be_switched_off_by_policy(self):
+        self.roster["policy"]["selector"]["exploration_cap"] = 0
+        with mock.patch.object(selector.rating_explore, "sample_choice",
+                               side_effect=AssertionError("sampled with cap off")):
+            picks = self.dispatches(10, self.healthy())
         self.assertEqual(len(picks), 1, picks)
 
 

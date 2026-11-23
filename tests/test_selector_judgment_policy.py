@@ -1,5 +1,6 @@
 """Exercise the opt-in Haiku policy through real selection and its receipts."""
 import copy
+import datetime as dt
 import json
 from pathlib import Path
 import unittest
@@ -19,7 +20,7 @@ class JudgmentPolicyTests(unittest.TestCase):
     def setUp(self):
         fixture.SelectorTests.setUp(self)
         fixture.SelectorTests.only(self, ['claude'])
-        self.roster['policy']['selector']['explore'] = 0
+        self.roster['policy']['selector']['exploration_cap'] = 0
         self.haiku = 'claude-haiku-5-5'
         self.roster['model_cards'][self.haiku] = {
             'pool': 'claude', 'status': 'current', 'aliases': ['haiku']}
@@ -93,16 +94,28 @@ class JudgmentPolicyTests(unittest.TestCase):
         self.assertEqual(self.select(role='probe', allow=f'claude:{legacy}:*')['choice']['model_key'], legacy)
 
     # BR-SELECT-001
-    def test_unknown_quality_exploration_cannot_choose_refused_model(self):
+    def test_checked_exploration_cannot_choose_refused_model(self):
+        self.roster['policy']['selector']['exploration_cap'] = 1
+        self.roster['quota_pools']['claude']['value_capacity'] = {
+            'weekly_usd_equivalent': 46, 'source': 'synthetic measured quota'}
+        models = (self.haiku, 'claude-sonnet-5-5', 'claude-opus-5-5')
+        self.evidence([dict(quality_row(model), own_cost={'claude': {'percent_per_task': .1}})
+                       for model in models])
+        now = fleetctl.utc_now()
+        runtime = {'quota_snapshots': {'claude': {'observed_at': fleetctl.iso(now), 'windows': {'weekly': {
+            'used_percent': 10, 'window_minutes': 10080, 'projected_used_percent_at_reset': 20,
+            'reset_at': fleetctl.iso(now + dt.timedelta(days=2))}}}}}
+        allow = ','.join(f'claude:{model}:high' for model in models)
+        def picks():
+            return [self.select(runtime, stakes='low', allow=allow, explore_seed=seed) for seed in range(20)]
+        self.assertTrue(any(result['rating_sampling']['sampled_pick']['model_key'] == self.haiku
+                            for result in picks()))  # control: the sampler can pick Haiku without the rule.
         self.apply_policy()
-        self.roster['policy']['selector']['explore'] = 1
-        self.evidence([quality_row(self.haiku, sources=0),
-                       quality_row('claude-sonnet-5-5', sources=0),
-                       quality_row('claude-opus-5-5', sources=0)])
-        result = self.select(stakes='low')
-        self.assertTrue(result['exploration'])
-        self.assertNotEqual(result['choice']['model_key'], self.haiku)
-        self.assertTrue(all(o['model_key'] != self.haiku for o in result['top3']))
+        results = picks()
+        self.assertTrue(any(result['exploration'] for result in results))
+        for result in results:
+            self.assertNotEqual(result['choice']['model_key'], self.haiku)
+            self.assertTrue(all(o['model_key'] != self.haiku for o in result['top3']))
 
 
 if __name__ == '__main__':

@@ -142,13 +142,12 @@ class GaugeErrorTests(unittest.TestCase):
         unmeasured = copy.deepcopy(runtime)
         unmeasured.pop("quota_refresh_errors")
         control = selector.select_option(self.roster, unmeasured, self.state, "default", allow=allow, fleet=fleetctl)
-        # BR-SELECT-002: the two are within the variety band, so the pick is varied; the gauge
-        # price still decides the ranking and tilts the draw.
+        # BR-SELECT-002: the gauge fault changes the ranking, not admission.
         self.assertEqual(control["top3"][0]["pool"], "opencode-go")
         result = selector.select_option(self.roster, runtime, self.state, "default", allow=allow, fleet=fleetctl)
         self.assertEqual(result["top3"][0]["pool"], "codex")
-        odds = {item["pool"]: item["probability"] for item in result["variety"]["candidates"]}
-        self.assertGreater(odds["codex"], odds["opencode-go"])
+        self.assertEqual(result["choice"]["pool"], "codex")
+        self.assertGreater(result["top3"][0]["score"], result["top3"][1]["score"])
         self.assertEqual(result["lambdas"]["codex"], .5)
         self.assertEqual(result["lambdas"]["opencode-go"], 1.0)
         fallback = selector.select_option(self.roster, runtime, self.state, "default",

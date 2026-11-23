@@ -202,20 +202,19 @@ class SelectorRound2(unittest.TestCase):
         self.assertEqual(result["choice"]["model_key"], "gpt-6-astra")
         self.assertTrue(result["choice"]["cost"]["unknown"])
 
-    def test_default_latency_penalty_scales_by_stakes(self):
+    # BR-SELECT-003
+    def test_latency_is_reported_without_a_separate_score_weight(self):
         self.only(["claude"])
-        self.roster["effort"]["claude-opus-5-5"]["levels"]["claude"] = ["xhigh", "max"]
-        self.evidence([fixtures.quality_row("claude-opus-5-5", "max", mean=.9, latency=462),
-                       fixtures.quality_row("claude-opus-5-5", "xhigh", mean=.8, latency=52)])
-        normal = self.select()["choice"]
-        high = self.select(stakes="high")["choice"]
-        irreversible = self.select(stakes="irreversible")["choice"]
-        self.assertEqual(normal["level"], "xhigh", "default latency cost rejects small quality gains with long waits")
-        self.assertEqual(high["level"], "max")
-        self.assertEqual(irreversible["level"], "max")
-        self.assertEqual(normal["mu"], .001)
-        self.assertEqual(high["mu"], .0005)
-        self.assertEqual(irreversible["mu"], 0)
+        model = "claude-opus-5-5"
+        self.roster["effort"][model]["levels"]["claude"] = ["xhigh", "max"]
+        allow = f"claude:{model}:*"
+        for fast, slow in ((52, 462), (462, 52)):
+            self.evidence([fixtures.quality_row(model, "max", mean=.9, latency=slow),
+                           fixtures.quality_row(model, "xhigh", mean=.8, latency=fast)])
+            result = self.select(allow=allow, no_explore=True)
+            self.assertEqual(result["choice"]["level"], "max")
+            self.assertEqual({item["level"]: item["latency_s"] for item in result["top3"]},
+                             {"xhigh": fast, "max": slow})
 
     def test_selector_enforces_older_rule_even_with_stale_switches(self):
         self.only(["codex"])
@@ -232,31 +231,28 @@ class SelectorRound2(unittest.TestCase):
                 "reason": "synthetic measured advantage", "evidence": "fixture"}}
             self.assertEqual(self.select(stakes="irreversible")["choice"]["model_key"], "gpt-5.6-luna")
 
-    def test_low_stakes_exploration_and_unconditional_receipt_probability(self):
+    # BR-SELECT-003
+    def test_missing_price_stays_unknown_and_does_not_win_as_cheapest(self):
         self.only(["codex"])
         self.one_level("codex")
-        self.evidence([fixtures.quality_row("gpt-6-astra", mean=.95)])
-        options, _ = selector.enumerate_options(self.roster, {}, "review", fleet=fleetctl)
-        unknown = [o for o in options if o["model_key"] != "gpt-6-astra"]
-        self.assertTrue(unknown)
-        with mock.patch("random.random", return_value=0), mock.patch("random.choice", side_effect=lambda seq: seq[-1]):
-            result = self.select(stakes="low")
-        chosen = result["choice"]
-        self.assertTrue(chosen["q"]["unknown"], "low stakes must actually explore unknown options")
-        self.assertAlmostEqual(result["selection_probability"], .1 / len(unknown))
-        payload = json.loads(Path(chosen["selection_file"]).read_text())
-        self.assertAlmostEqual(payload["selection_probability"], .1 / len(unknown))
-        metadata = run_identity.selection_metadata(payload, model=chosen["model_key"], effort=chosen["effort"], pool=chosen["pool"], harness=chosen["harness"], role="review")
-        self.assertAlmostEqual(metadata["selection"]["selection_probability"], .1 / len(unknown))
-        with mock.patch("random.random", return_value=.99):
-            exploit = self.select(stakes="low")
-        self.assertEqual(exploit["choice"]["model_key"], "gpt-6-astra")
-        self.assertAlmostEqual(exploit["selection_probability"], .9)
-        for stakes in ("normal", "high", "irreversible"):
-            with mock.patch("random.random", side_effect=AssertionError("exploration outside low stakes")):
-                result = self.select(stakes=stakes)
-            self.assertEqual(result["choice"]["model_key"], "gpt-6-astra")
-            self.assertEqual(result["selection_probability"], 1)
+        self.roster["quota_pools"]["codex"]["value_capacity"] = {
+            "weekly_usd_equivalent": 46, "source": "synthetic weekly estimate"}
+        known = fixtures.quality_row("gpt-6.1-sol", mean=.71)
+        known["own_cost"] = {"codex": {"percent_per_task": .1}}
+        missing = fixtures.quality_row("gpt-6-astra", mean=.99)
+        missing["price_1m"] = {"in": None, "out": None}
+        self.evidence([known, missing])
+        allow = "codex:gpt-6.1-sol:high,codex:gpt-6-astra:high"
+        result = self.select(stakes="low", allow=allow, no_explore=True)
+        self.assertEqual(result["choice"]["model_key"], "gpt-6.1-sol")
+        unpriced = result["top3"][1]
+        self.assertGreater(unpriced["p_success"], result["choice"]["p_success"])
+        self.assertIsNone(unpriced["estimated_price"])
+        self.assertIsNone(unpriced["expected_cost"])
+        fallback = self.select(allow="codex:gpt-6-astra:high", no_explore=True)
+        payload = json.loads(Path(fallback["selection_file"]).read_text())
+        self.assertEqual(payload["choice"]["model_key"], "gpt-6-astra")
+        self.assertIsNone(payload["choice"]["estimated_price"])
 
 
 if __name__ == "__main__":

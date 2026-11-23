@@ -1,7 +1,6 @@
-"""Pinned pre-cash selector replay; no live roster, model calls or quota refreshes."""
+"""Cash visibility does not authorize spend or make display-only quotes routing inputs."""
 import json
 import os
-import random
 import sys
 import tempfile
 import unittest
@@ -21,7 +20,7 @@ FIXTURE = ROOT / 'tests/fixtures/access-overlay.test.json'
 EXPECTED = ROOT / 'tests/fixtures/selector-parity-d62e54f.json'
 
 
-def replay(roster, state):
+def replay(roster, state, display_scale):
     assert not roster.get('cash_accounts')
     outcomes = {}
     identities = set()
@@ -36,17 +35,18 @@ def replay(roster, state):
             quality = {family: {'n_sources': 1, 'mean': .8, 'sd': .01} for family in sorted(families)}
             rows = [{'model_key': model, 'level': level, 'q': quality,
                      'tokens_per_task': {'in': 2000, 'out': 1000},
-                     'price_1m': {'input': i, 'output': 2 * i}}
+                     'price_1m': {'input': i * display_scale, 'output': 2 * i * display_scale}}
                     for i, (model, level) in enumerate(sorted(identities), 1)]
             (state / 'evidence').mkdir()
             (state / 'evidence/levels.json').write_text(json.dumps({'rows': rows}))
         for role in ROLES:
             for stakes in STAKES:
                 for allow in (None, ALLOW):
-                    random.seed(19)
                     try:
                         choice = selector.select_option(roster, {}, state, role, stakes=stakes,
-                                                        allow=allow, fleet=fleetctl)['choice']
+                                                        allow=allow, fleet=fleetctl, no_explore=True,
+                                                        persist_receipts=False)['choice']
+                        assert choice['funding'] != 'metered'
                         result = key(choice)
                     except fleetctl.FleetError:
                         result = 'refused'
@@ -56,11 +56,16 @@ def replay(roster, state):
 
 
 class CashParityTests(unittest.TestCase):
-    def test_selection_grid_matches_d62e54f(self):
-        expected = json.loads(EXPECTED.read_text())
+    # BR-CASH-001
+    def test_display_quote_does_not_change_unfunded_routing_grid(self):
+        historical_grid = json.loads(EXPECTED.read_text())
+        roster = json.loads(FIXTURE.read_text())
         with patch.dict(os.environ, {}, clear=True), tempfile.TemporaryDirectory() as tmp:
-            actual = replay(json.loads(FIXTURE.read_text()), Path(tmp))
-        self.assertEqual(len(expected), 96)
-        self.assertEqual(actual.keys(), expected.keys())
-        differences = {key: (expected[key], value) for key, value in actual.items() if value != expected[key]}
-        self.assertEqual(differences, {}, f'{len(differences)} of 96 outcomes differ from d62e54f')
+            ordinary, inflated = Path(tmp) / 'ordinary', Path(tmp) / 'inflated'
+            ordinary.mkdir()
+            inflated.mkdir()
+            actual = replay(roster, ordinary, display_scale=1)
+            control = replay(roster, inflated, display_scale=100)
+        self.assertEqual(len(actual), 96)
+        self.assertEqual(actual.keys(), historical_grid.keys())
+        self.assertEqual(actual, control)

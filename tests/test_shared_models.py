@@ -283,7 +283,7 @@ class SharedRoutingTests(unittest.TestCase):
 
     def test_declared_marginal_price_breaks_equal_score_ties(self):
         self.roster['lanes'][0]['price_1m'] = {'in': 0, 'out': 0}
-        # BR-SELECT-002: an exact tie is varied; the declared price still orders the ranking.
+        # A declared source-specific estimate can order otherwise equal unpriced fallbacks.
         self.assertEqual(self.select()['top3'][0]['pool'], 'opencode-go')
 
     def test_conflicting_legacy_alias_caches_remain_unknown(self):
@@ -325,18 +325,22 @@ class SharedRoutingTests(unittest.TestCase):
         routes = {r['pool']: r for r in result['top3']}
         self.assertEqual(routes['opencode-go']['cost']['estimated_usd'], 0)
         self.assertEqual(routes['codex']['cost']['estimated_usd'], .006)
+        # Keep the same priced task; change only the source completion-time observations.
         self.write_rows([{'model_key': 'gpt-6-luna', 'level': 'high',
                          'q': {'review': {'mean': .8, 'sd': .01, 'n_sources': 1}}, 'latency_s': 99,
+                         'tokens_per_task': {'in': 1000, 'out': 1000}, 'price_1m': {'in': 2, 'out': 4},
                          'latency_by_stakes': {'high': 0.001},
                          'source_telemetry': {'opencode-go/opencode': {'latency_s': 1},
                                               'codex/codex': {'latency_s': 20}}}])
-        # BR-SELECT-002: within the variety band the faster source ranks first and is favoured.
-        faster = self.select()
-        self.assertEqual(faster['top3'][0]['pool'], 'opencode-go')
-        odds = {item['pool']: item['probability'] for item in faster['variety']['candidates']}
-        self.assertGreater(odds['opencode-go'], odds['codex'])
-        routes = {r['pool']: r for r in self.select(stakes='high')['top3']}
-        self.assertEqual(routes['codex']['latency_s'], 20)
+        # Latency remains source-scoped telemetry and no longer ranks offers.
+        updated = self.select()
+        self.assertEqual(updated['top3'][0]['pool'], result['top3'][0]['pool'])
+        for stakes in ('normal', 'high'):
+            routes = {r['pool']: r for r in self.select(stakes=stakes)['top3']}
+            self.assertEqual(routes['codex']['latency_s'], 20)
+            self.assertEqual(routes['opencode-go']['latency_s'], 1)
+            self.assertEqual(routes['codex']['cost']['estimated_usd'], .006)
+            self.assertEqual(routes['opencode-go']['cost']['estimated_usd'], 0)
 
     def test_invalid_source_price_stays_unknown_without_using_shared_price(self):
         for price in ['invalid', {'in': -1, 'out': 0}, {'in': 0}]:

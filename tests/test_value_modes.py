@@ -1,4 +1,4 @@
-"""Hard-grade gating, cost independence, and weekly reserve regressions."""
+"""Hard-grade gating, the critical alias, and lead reserve regressions."""
 import datetime as dt
 import unittest
 from unittest import mock
@@ -17,7 +17,7 @@ class ValueModes(unittest.TestCase):
     def setUp(self):
         fixtures.SelectorTests.setUp(self)
         self.roster["policy"]["selector"] = {
-            "quality_floors_by_role": {"review": .6}, "entitled_only": True, "variety": False,
+            "quality_floors_by_role": {"review": .6}, "entitled_only": True, "exploration_cap": 0,
         }
         self.codex = "codex:gpt-6.1-sol:high"
         self.claude = "claude:claude-opus-5-5:high"
@@ -37,28 +37,29 @@ class ValueModes(unittest.TestCase):
         with self.assertRaisesRegex(fleet.FleetError, "quality floor requires task family review"):
             self.select(allow=self.allow, family="reasoning")
 
-    def test_absolute_best_ignores_cost_but_not_admission(self):
-        self.roster["policy"]["selector"]["mu"] = .1
+    # BR-SELECT-003
+    def test_absolute_best_is_critical_and_keeps_admission(self):
         self.evidence([quality_row("gpt-6.1-sol", mean=.92, latency=1000),
                        quality_row("claude-opus-5-5", mean=.7, latency=1)])
-        self.assertEqual(self.select(allow=self.allow)["choice"]["pool"], "claude")
-        result = self.select(allow=self.allow, value_mode="absolute-best")
-        self.assertEqual((result["choice"]["pool"], result["choice"]["score"]), ("codex", .92))
-        self.assertEqual(result["selection_probability"], 1)
+        opts = dict(allow=self.allow, persist_receipts=False)
+        result = self.select(value_mode="absolute-best", **opts)
+        critical = self.select(rating_stakes="critical", **opts)
+        self.assertEqual(result["rating_stakes"], "critical")
+        self.assertEqual(result["choice"], critical["choice"])
         self.assertEqual(self.select(allow=self.claude, value_mode="absolute-best")["choice"]["pool"], "claude")
 
-    def test_weekly_reserve_uses_strict_threshold_and_unknown_does_not_prefer(self):
-        self.evidence([quality_row("gpt-6.1-sol", mean=.95), quality_row("claude-opus-5-5", mean=.65)])
+    # BR-SELECT-003
+    def test_removed_soft_claude_first_does_not_remove_pressured_lead_reserve(self):
+        self.evidence([quality_row("gpt-6.1-sol", mean=.65), quality_row("claude-opus-5-5", mean=.95)])
         now = fleet.utc_now()
         window = {"used_percent": 45, "window_minutes": 10080,
                   "reset_at": fleet.iso(now + dt.timedelta(hours=48))}
-        snapshot = {"observed_at": fleet.iso(now), "windows": {"weekly": window}}
-        runtime = {"quota_snapshots": {"claude": snapshot}}
-        for projected, expected in ((79.9, "claude"), (80, "codex"), (None, "codex")):
-            with self.subTest(projected=projected):
-                window["projected_used_percent_at_reset"] = projected
-                window["will_last_to_reset"] = True
-                result = self.select(runtime, allow=self.allow)
-                self.assertEqual(result["choice"]["pool"], expected)
-                self.assertEqual(result["claude_preference"], expected == "claude")
-                self.assertEqual(self.select(runtime, allow=self.allow, value_mode="absolute-best")["choice"]["pool"], "codex")
+        runtime = {"quota_snapshots": {"claude": {"observed_at": fleet.iso(now), "windows": {"weekly": window}}}}
+        window["projected_used_percent_at_reset"] = 79.9
+        self.assertEqual(self.select(runtime, lead="claude", allow=self.allow)["choice"]["pool"], "claude")
+        window.update(used_percent=92, projected_used_percent_at_reset=108)
+        for rating_stakes in ("routine", "critical"):
+            result = self.select(runtime, lead="claude", allow=self.allow, rating_stakes=rating_stakes)
+            self.assertEqual(result["choice"]["pool"], "codex")
+            self.assertEqual(result["lead_pressure"]["pool"], "claude")
+            self.assertTrue(any("pressured lead" in row for row in result["rejected"]))

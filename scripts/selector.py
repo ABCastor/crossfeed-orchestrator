@@ -535,7 +535,7 @@ def _routing_price(item):
     minutes = 10080 if cost["basis"] == "relative_proxy" else binding["window_minutes"]
     if not minutes and cost["basis"] == "measured":
         minutes = 10080  # weekly planning proxy when the gauge has no window
-    pace = max(binding["lambda"], -item["quota_pace"]["value"])
+    pace = binding["lambda"] + max(0.0, -item["quota_pace"]["value"])
     return rating.subscription_price(cost["percent"], capacity.get("weekly_usd_equivalent"),
                                      pace, window_minutes=minutes,
                                      scarcity=capacity.get("scarcity_penalty", 0))
@@ -543,7 +543,7 @@ def _routing_price(item):
 
 def _unpriced_rank(item):
     """An unpriced fallback's grade/pressure ordering is not a price quote."""
-    pressure = max(item["pool_price"]["lambda"], -item["quota_pace"]["value"])
+    pressure = item["pool_price"]["lambda"] + max(0.0, -item["quota_pace"]["value"])
     return item["quality"] - pressure * item["cost"]["penalty_percent"] / 2
 
 

@@ -19,15 +19,24 @@ class TuningTests(SelectorTests):
                 self.assertEqual(result['choice']['model_key'], option['model_key'])
                 self.assertEqual(result['allow'], [allowed])
 
-    def test_high_stakes_quality_survives_extreme_price_pressure(self):
+    # BR-SELECT-003
+    def test_critical_stakes_do_not_hide_extreme_price_pressure(self):
         self.only(['codex'])
-        self.evidence([quality_row('gpt-6.1-sol', mean=.92, price=20),
-                       quality_row('gpt-6-luna', mean=.75, price=.1)])
+        self.roster['quota_pools']['codex']['value_capacity'] = {
+            'weekly_usd_equivalent': 46, 'source': 'synthetic weekly estimate'}
+        rows = [quality_row('gpt-6.1-sol', mean=.92), quality_row('gpt-6-luna', mean=.75)]
+        for row, debit in zip(rows, (10, .01)):
+            row['own_cost'] = {'codex': {'percent_per_task': debit}}
+        self.evidence(rows)
         runtime = self.snapshot('codex', projected=190, used=50)
         allowed = 'codex:gpt-6.1-sol:high,codex:gpt-6-luna:high'
-        result = self.select(runtime, stakes='high', allow=allowed)
-        self.assertEqual(result['choice']['model_key'], 'gpt-6.1-sol')
-        self.assertEqual(self.select(runtime, stakes='normal', allow=allowed)['choice']['model_key'], 'gpt-6-luna')
+        with mock.patch.object(selector.rating_log, 'typical_price', return_value=.23):
+            result = self.select(runtime, stakes='high', rating_stakes='critical', allow=allowed, no_explore=True)
+        cheap, expensive = result['top3']
+        self.assertEqual(cheap['model_key'], 'gpt-6-luna')
+        self.assertGreater(expensive['p_success'], cheap['p_success'])
+        self.assertGreater(expensive['estimated_price'] - cheap['estimated_price'],
+                           result['failure_price'] * (expensive['p_success'] - cheap['p_success']))
 
     def test_hard_evidence_is_not_drowned_by_easy_successes(self):
         self.only(['codex'])
@@ -56,13 +65,15 @@ class TuningTests(SelectorTests):
         self.assertEqual(cost['penalty_percent'], 0)
         self.assertNotIn('chat_usage_unpriced', flags)
 
-    def test_high_cost_cap_rejects_invalid_configuration(self):
+    # BR-SELECT-002
+    def test_exploration_cap_rejects_invalid_configuration(self):
         self.only(['codex'])
-        self.roster['policy']['selector']['high_cost_cap'] = float('nan')
-        with self.assertRaisesRegex(Exception, 'high_cost_cap'):
+        self.roster['policy']['selector']['exploration_cap'] = float('nan')
+        with self.assertRaisesRegex(Exception, 'exploration_cap'):
             self.select(stakes='high')
 
-    def test_high_stakes_completion_time_changes_equal_quality_choice(self):
+    # BR-SELECT-003
+    def test_high_stakes_records_completion_time_without_using_it_as_price(self):
         self.only(['codex'])
         rows = [quality_row('gpt-6.1-sol', mean=.9, latency=1),
                 quality_row('gpt-6-luna', mean=.9, latency=100)]
@@ -70,13 +81,11 @@ class TuningTests(SelectorTests):
         rows[1]['latency_by_stakes'] = {'high': 10}
         self.evidence(rows)
         allowed = 'codex:gpt-6.1-sol:high,codex:gpt-6-luna:high'
-        self.assertEqual(self.select(stakes='normal', allow=allowed)['choice']['model_key'], 'gpt-6.1-sol')
-        # BR-SELECT-002: at high stakes the two are within the variety band, so the choice is
-        # varied; completion time still ranks Luna first and tilts the draw towards it.
+        normal = self.select(stakes='normal', allow=allowed)
         high = self.select(stakes='high', allow=allowed)
-        self.assertEqual(high['top3'][0]['model_key'], 'gpt-6-luna')
-        odds = {item['model_key']: item['probability'] for item in high['variety']['candidates']}
-        self.assertGreater(odds['gpt-6-luna'], odds['gpt-6.1-sol'])
+        self.assertEqual(normal['choice']['model_key'], high['choice']['model_key'])
+        self.assertEqual({i['model_key']: i['latency_s'] for i in high['top3']},
+                         {'gpt-6.1-sol': 800, 'gpt-6-luna': 10})
 
 
 if __name__ == '__main__':
