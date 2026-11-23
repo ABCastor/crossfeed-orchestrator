@@ -1497,7 +1497,6 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
     evidence = fleetctl.load_json(state_dir / 'evidence' / 'levels.json', {}) or {}
     return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
             'runner': runner, 'exploring': result.get('exploration', False), 'why': why, 'refusals': prioritized[:16], 'hidden_pick': hidden_pick,
-            'floor_rejections': {tuple(route) for route in result.get('floor_rejections', [])},
             'evidence': selector.evidence_index(roster, evidence.get('rows', [])),
             'as_of': fleetctl.utc_now().astimezone().strftime('%H:%M'), 'count': count}
 
@@ -1582,9 +1581,7 @@ def _compare_cells(option, scored, pool, roster):
 def _comparison_grade(data, item, scored, role, policy):
     family = policy.get('families_by_role', {}).get(role) or selector.FAMILY_BY_ROLE.get(role, 'coding-agent')
     row = data['evidence'].get((item['model_identity'], item['level']), {})
-    floor = policy.get('quality_floors_by_role', {}).get(role)
-    strata = row.get('q_by_stakes', {})
-    scoped = strata.get('high' if floor else 'normal', {}).get(family)
+    scoped = row.get('q_by_stakes', {}).get('normal', {}).get(family)
     replayed = (scored or {}).get('q') if role == data['role'] else None
     q = replayed or (scoped if scoped is not None else row.get('q', {}).get(family) or {})
     mean = _number(q.get('mean'))
@@ -1592,10 +1589,8 @@ def _comparison_grade(data, item, scored, role, policy):
     if mean is None or q.get('unknown') or (not replayed and ('unknown' in (row.get('flags') or []) or not sourced)):
         return '—'
     pick = role == data['role'] and data['pick'] and _compare_key(data['pick']) == _compare_key(item)
-    identity = item['pool'], item['model_key'], item['level']
-    below = role == data['role'] and not scored and identity in data['floor_rejections']
-    cls = ' pick-grade' if pick else ' below-grade' if below else ''
-    note = '<small>Pick</small>' if pick else '<small>Below floor</small>' if below else ''
+    cls = ' pick-grade' if pick else ''
+    note = '<small>Pick</small>' if pick else ''
     return f'<span class="wb-grade{cls}">{mean:.3f}</span>{note}'
 
 

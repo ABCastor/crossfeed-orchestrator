@@ -1,4 +1,4 @@
-"""Hard-grade gating, the critical alias, and lead reserve regressions."""
+"""Expected-cost admission, the critical alias, and lead reserve regressions."""
 import datetime as dt
 import unittest
 from unittest import mock
@@ -23,19 +23,22 @@ class ValueModes(unittest.TestCase):
         self.claude = "claude:claude-opus-5-5:high"
         self.allow = self.codex + "," + self.claude
 
-    def test_hard_gate_precedes_value_and_cannot_use_low_fit_or_relabel(self):
+    # BR-SELECT-003
+    def test_legacy_role_floor_does_not_gate_weak_or_missing_grades(self):
         cheap = quality_row("gpt-6.1-sol", mean=.99, latency=0)
         weak = {"mean": .59, "sd": .01, "n_sources": 1}
         cheap["q_by_stakes"] = {"high": {"review": weak}, "low": cheap["q"]}
-        self.evidence([cheap, quality_row("claude-opus-5-5", mean=.61)])
-        with mock.patch.object(selector, "_task_cost", wraps=selector._task_cost) as cost:
-            result = self.select(allow=self.allow, stakes="low")
+        self.evidence([cheap, quality_row("claude-opus-5-5", mean=.80)])
+        with mock.patch.object(selector, "routing_price", return_value=.3):
+            result = self.select(allow=self.allow, stakes="high", value_mode="absolute-best")
         self.assertEqual(result["choice"]["pool"], "claude")
-        self.assertEqual([call.args[1]["pool"] for call in cost.call_args_list], ["claude"])
-        with self.assertRaisesRegex(fleet.FleetError, r"grade 0\.590 does not clear review floor 0\.600"):
-            self.select(allow=self.codex, value_mode="absolute-best")
-        with self.assertRaisesRegex(fleet.FleetError, "quality floor requires task family review"):
-            self.select(allow=self.allow, family="reasoning")
+        weak_option = next(item for item in result["top3"] if item["pool"] == "codex")
+        self.assertEqual(weak_option["q"]["mean"], .59)
+        self.assertGreater(weak_option["expected_cost"], result["choice"]["expected_cost"])
+        self.assertEqual(self.select(allow=self.codex, value_mode="absolute-best",
+                                     stakes="high")["choice"]["pool"], "codex")
+        self.assertEqual(self.select(allow=self.codex, stakes="low")["choice"]["q"]["mean"], .99)
+        self.assertTrue(self.select(allow=self.codex, family="reasoning")["choice"]["q"]["unknown"])
 
     # BR-SELECT-003
     def test_absolute_best_is_critical_and_keeps_admission(self):

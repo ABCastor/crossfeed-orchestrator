@@ -106,7 +106,7 @@ class SelectorTests(unittest.TestCase):
         opus, sonnet, astra = "claude-opus-5-5", "claude-sonnet-5-5", "gpt-6-astra"
         self.only(["claude", "codex"])
         policy = self.roster["policy"]["selector"]
-        policy.update(prefer_opus_hard_reasoning=True, quality_floors_by_role={"hard-reasoning": .85})
+        policy.update(prefer_opus_hard_reasoning=True)
         self.roster["effort"][opus]["levels"]["claude"] = ["medium", "high"]
         allowed = f"claude:{opus}:*,claude:{sonnet}:high,codex:{astra}:high,codex:gpt-6.1-sol:high"
 
@@ -129,12 +129,15 @@ class SelectorTests(unittest.TestCase):
         with mock.patch.object(selector, "ASTRA_HARD_REASONING", astra):
             result = select(89)
             self.assertEqual((result["choice"]["model_key"], result["choice"]["level"]), (opus, "medium"))
-            self.assertTrue(result["hard_reasoning_preference"]["floor_exception"])
+            self.assertEqual(result["hard_reasoning_preference"]["route"], "opus")
+            self.assertEqual(select(89, family="coding-agent")["choice"]["model_key"], opus)
             self.assertTrue(any("Sonnet excluded" in row for row in result["rejected"]))
             self.assertNotIn(sonnet, [o["model_key"] for o in result["top3"]])
             clear = select(89, opus_high=.87)
-            self.assertEqual(clear["choice"]["level"], "high")
-            self.assertFalse(clear["choice"]["floor_exception"])
+            high = next(o for o in clear["top3"] if o["model_key"] == opus and o["level"] == "high")
+            self.assertEqual(high["q"]["mean"], .87)
+            self.assertIn("medium", {o["level"] for o in clear["top3"] if o["model_key"] == opus})
+            self.assertEqual(clear["hard_reasoning_preference"]["route"], "opus")
             for weekly, five_hour, cause in ((90, 3, "weekly"), (30, 100, "five-hour")):
                 with self.subTest(cause=cause):
                     fallback = select(weekly, five_hour)
@@ -171,9 +174,8 @@ class SelectorTests(unittest.TestCase):
         self.assertIsNone(unknown["remaining_usd_equivalent"])
         self.assertEqual(unknown["scarcity_penalty"], 1.0)
 
-    def test_low_kimi_is_last_resort_after_subscription_and_floor_checks(self):
+    def test_low_kimi_is_last_resort_after_subscription_checks(self):
         self.only(["codex", "opencode-go"])
-        self.roster["policy"]["selector"]["quality_floors_by_role"] = {"implementation": .65}
         self.roster["quota_pools"]["opencode-go"]["plan"] = {"name": "OpenCode Go"}
         kimi = "kimi-k3.1-pro"
         lane = next(l for l in self.roster["lanes"] if l["model_key"] == "deepseek-v4-flash")
@@ -191,7 +193,7 @@ class SelectorTests(unittest.TestCase):
             normal = self.select(runtime, **opts)
             self.assertEqual(normal["choice"]["model_key"], codex)
             self.assertFalse(any(o["model_key"] == kimi for o in normal["top3"]))
-            self.assertIn(f"{kimi}/max: low spend fallback withheld; another subscription clears the role floor",
+            self.assertIn(f"{kimi}/max: low spend fallback withheld; another subscription is eligible",
                           normal["rejected"])
             exhausted = self.snapshot("codex", 100, 100)
             exhausted["quota_snapshots"].update(runtime["quota_snapshots"])

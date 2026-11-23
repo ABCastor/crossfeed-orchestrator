@@ -94,7 +94,8 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 
 ## BR-SELECT-004 — Opus handles hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
 
-- RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, exclude Sonnet. Prefer Opus 5.5 at its lowest expected-cost effort, with a floor exception only if no admitted Opus effort clears the floor. The legacy irreversible setting still bypasses the preference and floor exception.
+- RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, exclude Sonnet. Prefer Opus 5.5 at its lowest expected-cost admitted effort. The legacy irreversible setting still bypasses the Opus ranking preference.
+- Superseded 2026-11-23: per-role grade floors (implementation 0.650, review 0.600, debug 0.600, hard reasoning 0.850) and the Opus exception to them. Operator: “don't put too many minimum grades, too much stuff. Ideally, you need to know things in a structured way, get together benchmarks, and then you just take an informed decision.” Grades feed BR-SELECT-003, not admission. BR-CASH-004 and BR-REFRESH-001 retain their separate quality requirements.
 - Authority: Operator: “Most of the time, I'm going to use Opus or Fable to orchestrate, and then around it anything you want. But I certainly don't want Sonnet on high to do hard reasoning. Probably Opus should do that.”
 - Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, lead reserve, quota circuits and data policy still apply.
 - implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.

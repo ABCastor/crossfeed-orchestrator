@@ -839,20 +839,12 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                      "important" if role in IMPORTANT_ROLES else "routine")
     if rating_stakes not in rating.STAKES:
         raise fleet.FleetError(f"unknown rating stakes: {rating_stakes}")
-    floors = policy.get("quality_floors_by_role", {})
-    if not isinstance(floors, dict):
-        raise fleet.FleetError("quality_floors_by_role must be a role-to-grade map")
-    role_floor = _number(floors.get(role))
-    if role in floors and (role_floor is None or not 0 < role_floor <= 1):
-        raise fleet.FleetError(f"invalid quality floor for {role}; expected a grade in (0, 1]")
     entitled_only = policy.get("entitled_only", False)
     if not isinstance(entitled_only, bool):
         raise fleet.FleetError("entitled_only must be a boolean")
     if stakes not in {"low", "normal", "high", "irreversible"}:
         raise fleet.FleetError(f"unknown stakes: {stakes}")
     role_family = policy.get("families_by_role", {}).get(role) or FAMILY_BY_ROLE.get(role, "coding-agent")
-    if role_floor is not None and family is not None and family != role_family:
-        raise fleet.FleetError(f"{role} quality floor requires task family {role_family}")
     family = family or role_family
     difficulty = difficulty or ("hard" if role == "hard-reasoning" else "ordinary")
     if difficulty not in rating.DIFFICULTY:
@@ -863,7 +855,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if not isinstance(prefer_opus, bool):
         raise fleet.FleetError("prefer_opus_hard_reasoning must be a boolean")
     hard_preference = prefer_opus and role == "hard-reasoning"
-    prefer_opus = hard_preference and family == "reasoning" and stakes != "irreversible"
+    prefer_opus = hard_preference and stakes != "irreversible"
     opus_refusal = _opus_quota_refusal(roster, runtime, fleet) if prefer_opus else None
     allow_list = parse_allow(allow, fleet)
     explicit_pools = {entry.split(":", 1)[0] for entry in allow_list or []}
@@ -955,7 +947,6 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         return row
     pool_cash = fleet.cash_by_pool(roster, state_dir)
     scored = []
-    floor_rejections = []
     uncertainty_weight = max(1e-9, float(policy.get("uncertainty_weight", DEFAULTS["uncertainty_weight"])))
     pool_costs = {}
     for option in options:
@@ -981,22 +972,12 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             # Preserve legacy high-value routing without mislabeling the fit
             # as a hard grade. Irreversible selection still fails closed.
             scoped = {**strata["low"][family], "basis": "local_fit_no_hard_benchmark"}
-        if role_floor is not None:
-            # A hard role cannot use the easy-fit stratum, even at low stakes.
-            scoped = strata.get("high", {}).get(family)
         q = scoped if scoped is not None else row.get("q", {}).get(family) or {}
         mean, sd = _number(q.get("mean")), _number(q.get("sd"))
         unknown = mean is None or not q.get("n_sources") and not row.get("own", {}).get(family, {}).get("trials")
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
         opus = (prefer_opus and option["pool"] == "claude" and option["funding"] == "included"
                 and option["model_identity"] == OPUS_HARD_REASONING)
-        below_floor = role_floor is not None and (unknown or not role_floor <= mean <= 1)
-        if below_floor and not opus:
-            floor_rejections.append((option['pool'], option['model_key'], option['level']))
-            grade = "unknown" if unknown else f"{mean:.3f}"
-            rejected.append(f"{option['model_key']}/{option['level']}: {family} grade {grade} "
-                            f"does not clear {role} floor {role_floor:.3f}")
-            continue
         # BR-CASH-004: an owner floor applies to the exact task family and effort.
         if funding.requires_reservation(option):
             floors = option.get("cash_quality_floors")
@@ -1040,26 +1021,20 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                 estimate = None  # Recorded tokens outside this route's bound do not price this task.
             cash = dict(cash, estimate_usd=estimate)
         scored.append(dict(option, cash=cash, quality=quality, quality_basis=q.get("basis"),
-                           **({"hard_reasoning_opus": True, "floor_exception": below_floor} if opus else {}),
+                           **({"hard_reasoning_opus": True} if opus else {}),
                            q={"mean": mean, "sd": sd, "unknown": unknown},
                            cost=cost, latency_s=latency, pool_price=pool_price, quota_pace=paces[capacity_key],
                            **({"capacity": capacity} if capacity is not None else {}),
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
-    if any(o.get("hard_reasoning_opus") and not o["floor_exception"] for o in scored):
-        scored = [o for o in scored if not o.get("floor_exception")]
-    # Apply the lowest enabled spend dial after admission and quality, not as
-    # a score tiebreak. A low lane is not eligible for exploration or dispatch retry
-    # while any normal subscription candidate still clears the floor.
-    ordinary_subscription = any(item["funding"] == "included" and item.get("spend_level") != "low"
-                                for item in scored)
-    for item in list(scored):
-        if item.get("spend_level") != "low":
-            continue
-        if role_floor is None or ordinary_subscription:
-            reason = "no configured role floor" if role_floor is None else "another subscription clears the role floor"
-            rejected.append(f"{item['model_key']}/{item['level']}: low spend fallback withheld; {reason}")
-            scored.remove(item)
+    # Low spend remains a last resort for its declared roles, not a score
+    # tiebreak or a way to retry past an eligible normal subscription.
+    if any(item["funding"] == "included" and item.get("spend_level") != "low" for item in scored):
+        for item in list(scored):
+            if item.get("spend_level") == "low":
+                rejected.append(f"{item['model_key']}/{item['level']}: low spend fallback withheld; "
+                                "another subscription is eligible")
+                scored.remove(item)
     eligible = list(scored) if collect_eligible else None
     # Missing cells are not a cheaper substitute for measured equal-mean cells.
     # This dominance rule matters even when their price difference exceeds one
@@ -1131,7 +1106,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if prefer_opus:
         preferred = [o for o in scored if o.get("hard_reasoning_opus")]
         if preferred:
-            hard_reasoning_preference = {"route": "opus", "floor_exception": preferred[0]["floor_exception"]}
+            hard_reasoning_preference = {"route": "opus"}
         else:
             gpt = [o for o in scored if o["pool"] == "codex"]
             preferred = [o for o in gpt if o["model_identity"] == ASTRA_HARD_REASONING] or gpt
@@ -1187,7 +1162,6 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "failure_price": failure_price,
               "calibration_difficulty": difficulty, "cash_preference": cash_preference,
               "quota_fallback": "measured-pi-coding-relay" if relay is not None else None,
-              "quality_floor": role_floor, "floor_rejections": floor_rejections,
               "hard_reasoning_preference": hard_reasoning_preference,
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
               "pool_prices": prices, "pool_cash": pool_cash, "role": role, "family": family, "stakes": stakes,

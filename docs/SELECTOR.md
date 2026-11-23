@@ -45,15 +45,15 @@ Only the frozen fit split enters the ledger. Held-out payloads and excluded task
 
 **Keep exports private.** Artificial Analysis scores are fetched at runtime into host-local state; its raw numbers must never be committed to a public repository. Tests use invented scores. Other leaderboards used for human roster decisions do not silently become selector inputs.
 
-## Expected cost and hard-role floors
+## Expected cost and hard-reasoning preference
 
 Compare eligible model, effort and funding routes by **price + (1 − chance of success) × stakes multiplier × competent rerun budget**. Grades inform a provisional success estimate, and independent checks update it. Additional effort wins when reducing expected failures is worth the extra price. Set `--rating-stakes routine|important|critical` for 1×, 5× or 20× the rerun budget. Hard reasoning, review, debug and implementation default to important; other roles default to routine. `--value-mode absolute-best` aliases critical unless `--rating-stakes` is explicit. The separate `--stakes` flag still selects evidence and admission rules. `policy.selector.entitled_only: true` limits ranking to included and verified-free routes.
 
 The fixed reference for a competent rerun appears in the selection as `typical_price`. Missing route prices don't count as zero: priced routes rank first within their policy tier. If none is priced, use the available grade proxy and don't explore.
 
-`policy.selector.quality_floors_by_role` sets the minimum exact-effort hard grade and family for a role. Unknown or below-floor options are excluded even at low stakes. The role's family cannot be overridden. If nothing clears the floor, selection refuses, except for the Opus preference.
+Role grades inform predicted success and expected rerun cost; they no longer gate admission. The selector ignores legacy `quality_floors_by_role` entries. Data class, confinement, access, lead reserve and the separate paid-route quality floor still apply.
 
-With `policy.selector.prefer_opus_hard_reasoning`, exclude Sonnet from hard reasoning and rank eligible Opus 5.5 efforts first. If no admitted Opus effort clears the floor, record a floor exception for the chosen Opus effort. At 90% actual use of an applicable Claude weekly window, a full five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex routes. The legacy `--stakes irreversible` exception to Opus-first still applies; `--rating-stakes critical` does not bypass the preference. Switches, lead reserve, quota circuits and data policy still apply.
+With `policy.selector.prefer_opus_hard_reasoning`, exclude Sonnet from hard reasoning and rank eligible Opus 5.5 efforts first. At 90% actual use of an applicable Claude weekly window, a full five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex routes. The legacy `--stakes irreversible` exception to Opus-first still applies; `--rating-stakes critical` does not bypass the preference. Switches, lead reserve, quota circuits and data policy still apply.
 
 ## Running a worker
 

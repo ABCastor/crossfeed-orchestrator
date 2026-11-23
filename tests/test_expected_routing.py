@@ -16,10 +16,7 @@ class ExpectedRouting(unittest.TestCase):
 
     def setUp(self):
         fixtures.SelectorTests.setUp(self)
-        self.roster['policy']['selector'] = {
-            'prefer_opus_hard_reasoning': True,
-            'quality_floors_by_role': {'hard-reasoning': .85},
-        }
+        self.roster['policy']['selector'] = {'prefer_opus_hard_reasoning': True}
         self.opus = 'claude-opus-5-5'
         self.roster['effort'][self.opus]['levels']['claude'] = ['low', 'high', 'xhigh']
         self.prices = {'low': .093, 'high': .170, 'xhigh': .250}
@@ -36,7 +33,7 @@ class ExpectedRouting(unittest.TestCase):
     def test_hard_role_ranks_each_admitted_effort(self):
         result = self.pick()
         self.assertEqual(result['rating_stakes'], 'important')
-        self.assertTrue(result['hard_reasoning_preference']['floor_exception'])
+        self.assertEqual(result['hard_reasoning_preference']['route'], 'opus')
         self.assertEqual({o['level'] for o in result['top3']}, {'xhigh', 'high', 'low'})
         critical = self.pick(rating_stakes='critical')
         self.assertEqual(critical['choice']['level'], 'xhigh')
@@ -66,10 +63,7 @@ class HardEffortStability(unittest.TestCase):
     def setUp(self):
         fixtures.SelectorTests.setUp(self)
         opus = 'claude-opus-5-5'
-        self.roster['policy']['selector'] = {
-            'prefer_opus_hard_reasoning': True,
-            'quality_floors_by_role': {'hard-reasoning': .85},
-        }
+        self.roster['policy']['selector'] = {'prefer_opus_hard_reasoning': True}
         self.roster['quota_pools']['claude']['value_capacity'] = {
             'weekly_usd_equivalent': 200 * 12 / 52, 'source': 'synthetic reference subscription',
         }
