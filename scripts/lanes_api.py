@@ -130,7 +130,7 @@ class LanesAPI:
             raise APIError(429, "no admitted lane is available; check fleet quota, switches and selector receipts", "lane_unavailable") from None
         response = {}
         args = argparse.Namespace(dir=self.directory, last=None, overlay=self.overlay, dry_run=False)
-        rc = fleetctl.dispatch_selection(selection, args, self.state_dir, prompt, response=response)
+        rc = fleetctl.dispatch_selection(selection, args, self.state_dir, prompt, response=response, roster=roster)
         if rc:
             status = 429 if rc in {4, 5, 6} else 502
             raise APIError(status, "worker refused or failed; inspect local dispatch receipts", "dispatch_failed")

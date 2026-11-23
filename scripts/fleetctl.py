@@ -3284,7 +3284,7 @@ def select_option(
     allow: str | Path | None = None, lead: str | None = None,
     target: tuple[str, str] | None = None,
     data_class: str | None = None, prompt: str | None = None,
-    value_mode: str = "best-value",
+    value_mode: str = "best-value", collect_eligible: bool = True,
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -3295,6 +3295,7 @@ def select_option(
         exclude_lineage=exclude_lineage, mode=mode, modality=modality, allow=allow, lead=lead,
         fleet=types.SimpleNamespace(**globals()),
         target=target, data_class=data_class, prompt=prompt, value_mode=value_mode,
+        collect_eligible=collect_eligible,
     )
 
 
@@ -3331,8 +3332,67 @@ class DispatchInterrupted(BaseException):
         self.signum = signum
 
 
+def _rating_log():
+    if __package__:
+        from . import rating_log
+    else:
+        import rating_log
+    return rating_log
+
+
+def _rating_typical(log, state_dir):
+    try:
+        return log.typical_price(state_dir)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _rating_forecast(log, selection, live, labels, typical):
+    try:
+        return log.forecast(selection, live, labels, typical)
+    except Exception:
+        # Never let optional ratings or malformed historical telemetry stop a live pick.
+        return {"live_pick": log.describe(live), "shadow_pick": None,
+                "eligible_options": [log.describe(option) for option in log.options(selection)],
+                "typical_price": None, "hard_route": None, "shadow_status": "rating_error"}
+
+
+def _rating_snapshot(state_dir, option, roster):
+    try:
+        runtime = load_json(state_dir / "runtime.json", {}) or {}
+        pool = option["pool"]
+        sample = runtime.get("quota_snapshots", {}).get(pool, {})
+        return {**sample, "windows": {name: window for name, window in sample.get("windows", {}).items()
+                                      if quota_window_applies(roster, pool, name, window, option["model_key"])}}
+    except Exception:
+        return {}
+
+
+def _record_rating_dispatch(log, state_dir, record, labels, forecast, index, option, roster, before, identity):
+    ended_at = record.get("ended_at") or iso()
+    try:
+        observed = log.debit(before, _rating_snapshot(state_dir, option, roster), record["started_at"], ended_at)
+    except Exception:
+        observed = []
+    try:
+        shared = load_json(identity, {}) or {}
+        worker_id = (shared.get("run_id") if shared.get("schema") == "crossfeed-model-run/v1"
+                     and shared.get("dispatch_id") == record["dispatch_id"] else None)
+    except (OSError, ValueError, AttributeError):
+        worker_id = None
+    with ledger_lock(state_dir):
+        with (state_dir / log.LEDGER).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"schema": log.DISPATCH, "run_id": record["dispatch_id"],
+                                     "worker_run_id": worker_id, "selection_file": record["selection_file"],
+                                     **labels, **forecast, "attempt_index": index,
+                                     "started_at": record["started_at"], "ended_at": ended_at,
+                                     "returncode": record.get("returncode"), "observed_quota_debit": observed},
+                                    sort_keys=True, allow_nan=False) + "\n")
+
+
 def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, state_dir: Path,
-                       prompt: str, *, response: dict[str, Any] | None = None) -> int:
+                       prompt: str, *, response: dict[str, Any] | None = None,
+                       roster: dict[str, Any] | None = None) -> int:
     previous = {}
     def interrupted(signum, frame):
         raise DispatchInterrupted(signum)
@@ -3340,7 +3400,7 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
         if threading.current_thread() is threading.main_thread():
             for signum in (signal.SIGTERM, signal.SIGHUP):
                 previous[signum] = signal.signal(signum, interrupted)
-        return _dispatch_selection(selection, args, state_dir, prompt, response=response)
+        return _dispatch_selection(selection, args, state_dir, prompt, response=response, roster=roster)
     except DispatchInterrupted as exc:
         return 128 + exc.signum
     finally:
@@ -3349,7 +3409,8 @@ def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, stat
 
 
 def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, state_dir: Path,
-                       prompt: str, *, response: dict[str, Any] | None = None) -> int:
+                       prompt: str, *, response: dict[str, Any] | None = None,
+                       roster: dict[str, Any] | None = None) -> int:
     directory = args.dir.expanduser().resolve()
     requested_last = args.last.expanduser().resolve() if args.last else None
     # Refuse once, before any candidate or dry run, a dispatch that would put a worker's writes
@@ -3372,6 +3433,8 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
         if option["selection_file"] not in seen:
             options.append(option)
             seen.add(option["selection_file"])
+    trial_task_id = getattr(args, "task_id", None) or str(uuid.uuid4())
+    typical = None
     for index, option in enumerate(options):
         # BR-CASH-003: an older or separately prepared receipt cannot relabel today's input.
         if funding.requires_reservation(option) and option.get("data_class") != _data_policy.classification(
@@ -3403,7 +3466,20 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
                               "receipt": str(receipt), "model_receipt": str(identity)}, indent=2))
             return 0
         attempt_dir.mkdir(parents=True)
+        log = None
+        try:
+            log = _rating_log()
+            labels = log.labels(args, trial_task_id)
+            if index == 0:
+                typical = _rating_typical(log, state_dir)
+            trial = _rating_forecast(log, selection, option, labels, typical)
+            before = _rating_snapshot(state_dir, option, roster)
+        except Exception:
+            log = None
+            print("fleetctl: rating telemetry unavailable", file=sys.stderr)
         record = {"schema": "fleet-dispatch/v1", "dispatch_id": dispatch_id,
+                  "run_id": dispatch_id, "task_id": trial_task_id,
+                  **({"rating_ledger": log.LEDGER} if log else {}),
                   "started_at": iso(), "selection_file": option["selection_file"],
                   "pool": option["pool"], "selected_model": option["model_key"],
                   "level": option["level"], "model_receipt": str(identity), "cash": cash,
@@ -3475,6 +3551,11 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
             print(f"fleetctl: {option['harness']}:{option['model_key']} failed (exit {returncode}); "
                   f"using {replacement['harness']}:{replacement['model_key']} instead", file=sys.stderr, flush=True)
         finally:
+            if log:
+                try:
+                    _record_rating_dispatch(log, state_dir, record, labels, trial, index, option, roster, before, identity)
+                except Exception:
+                    print("fleetctl: rating telemetry could not be written", file=sys.stderr)
             # The caller already received the answer (stdout, --last or API response).
             # Keep the stable receipt path and diagnostics, never private answer copies.
             # Native diagnostics have no safe text contract. Retain metadata only,
@@ -5749,6 +5830,13 @@ def codexbar_snapshot_command(
     return results
 
 
+def _trial_task_id(value):
+    try:
+        return _rating_log().task_id(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--overlay", type=Path, default=DEFAULT_OVERLAY)
@@ -5866,6 +5954,17 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--last", type=Path)
     dispatch.add_argument("--dry-run", action="store_true")
     dispatch.add_argument("--no-refresh", action="store_true", help=refresh_help)
+    for command in (select, dispatch):
+        command.add_argument("--task-id", type=_trial_task_id, help="opaque ID shared by paired attempts")
+        command.add_argument("--work-kind", choices=["coding", "review", "research", "writing"])
+        command.add_argument("--difficulty", choices=["easy", "ordinary", "hard"])
+        command.add_argument("--rating-stakes", choices=["routine", "important", "critical"],
+                             help="shadow rating label; does not change live --stakes")
+
+    accept = sub.add_parser("accept", help="attach a checked verdict to a dispatch run")
+    accept.add_argument("run_id", type=_trial_task_id)
+    accept.add_argument("--verdict", choices=["pass", "fail"], required=True)
+    accept.add_argument("--check", required=True, help="what was checked (local ledger text)")
 
     acquire = sub.add_parser("acquire", help="atomically reserve a lane concurrency slot")
     acquire.add_argument("--lane", required=True)
@@ -6075,6 +6174,14 @@ def main() -> int:
             refresh_stale_pools(state_dir, pools, roster=roster)
 
     try:
+        if args.command == "accept":
+            log = _rating_log()
+            with ledger_lock(state_dir):
+                verdict = log.acceptance(state_dir, args.run_id, args.verdict, args.check, iso())
+                with (state_dir / log.LEDGER).open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(verdict, sort_keys=True) + "\n")
+            print(json.dumps(verdict, sort_keys=True))
+            return 0
         if args.command == "traces":
             return traces_command(args, state_dir)
         if args.command == "serve-api":
@@ -6421,8 +6528,13 @@ def main() -> int:
                 prompt=prompt if args.command == "dispatch" else None, value_mode=args.value_mode,
             )
             if args.command == "dispatch":
-                return dispatch_selection(selection, args, state_dir, prompt)
+                return dispatch_selection(selection, args, state_dir, prompt, roster=roster)
             if args.json:
+                log = _rating_log()
+                labels = log.labels(args, "unknown")
+                selection["rating_trial"] = {**labels, **_rating_forecast(
+                    log, selection, selection["choice"], labels, _rating_typical(log, state_dir))}
+                selection.pop("eligible_options", None)
                 print(json.dumps(selection, indent=2, sort_keys=True))
             else:
                 print(selection["choice"]["command"])

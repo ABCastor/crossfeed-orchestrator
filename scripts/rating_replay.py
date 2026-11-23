@@ -12,7 +12,10 @@ from itertools import groupby
 from pathlib import Path
 from statistics import mean, median
 
-from scripts import rating
+try:
+    from . import rating
+except ImportError:  # Installed CLI runs from scripts/.
+    import rating
 
 HOLDOUT = datetime(2026, 11, 22, tzinfo=timezone.utc)
 KINDS = {"coding-agent": "coding", "repo-qa": "research", "research": "research",

@@ -27,6 +27,10 @@ python3 scripts/fleetctl.py dispatch --role review --prompt-file /project/brief.
 
 Stakes: `low` = cheap and reversible; `normal`; `high` = costly to redo; `irreversible` = cannot undo, no price term. Save through routing, never downgrading judgment; reduce parallelism before quality.
 
+For `dispatch` and `select`, label the task before viewing picks: pass `--work-kind coding|review|research|writing`, `--difficulty easy|ordinary|hard` and `--rating-stakes routine|important|critical`. These shadow labels default to `unknown` and do not change routing or `--stakes`.
+Reuse an opaque `--task-id ID` across paired attempts; otherwise dispatch assigns one. Inspect the shadow forecast with `select --json`.
+After an independent check, record `fleetctl.py accept RUN_ID --verdict pass|fail --check "what was checked"` with the dispatch receipt ID or linked worker run ID. Exit zero is not acceptance.
+
 Brief, one row per pool:
 
 ```text
@@ -58,8 +62,8 @@ Crossfeed retires run-owned sessions after receipt capture. Use `fleetctl.py tra
 
 ## Hard rules
 
-- Official CLIs, intended logins, owner's account; recheck terms before sustained automation. API and partner-plan lanes must declare and enforce their authentication class; never infer billing from an API key. Crossfeed Chat is a separate read-only subscription-relay route requiring dated account-risk acceptance, which does not imply vendor permission; see `docs/CHATGPT.md`. `claude -p` never uses `--bare` (API billing). `fleetctl.py doctor` names missing prerequisites.
-- Control authority is defined by BR-SWITCH-001 in `BUSINESS-RULES.md` (checkout or installed root): agents may change controls within recorded owner limits. Read [controls](references/controls.md) before changing them.
+- Official CLIs, intended logins, operator's account; recheck terms before sustained automation. API and partner-plan lanes must declare and enforce their authentication class; never infer billing from an API key. Crossfeed Chat is a separate read-only subscription-relay route requiring dated account-risk acceptance, which does not imply vendor permission; see `docs/CHATGPT.md`. `claude -p` never uses `--bare` (API billing). `fleetctl.py doctor` names missing prerequisites.
+- Control authority is defined by BR-SWITCH-001 in `BUSINESS-RULES.md` (checkout or installed root): agents may change controls within recorded operator limits. Read [controls](references/controls.md) before changing them.
 - Free/anonymous lanes, OpenRouter free lanes and research-scout: public/synthetic material only. No private facts, notes, memory, personal/client data, credentials or unreleased names. Citations count only after you open them. OpenRouter checks live free-only pricing before every default call; paid MiMo is a separate explicit opt-in.
 - Do not use the bounded paid transport without the operator's account envelope and a reservation. No envelope ships. Quota exhaustion, `forced`, a target or an allow list do not grant spend. Automatic paid selection requires a separate operator grant and measured fit. Only operator-approved exact public prompt text goes to the paid transport; no tools, files or private material. MiMo retains its explicit opt-in. The legacy explicit Gemini text route has an estimate-only cap outside the hard ledger and is never automatic. Read [cash policy](../docs/SELECTOR.md#cash-funding-and-owner-envelopes) and optional `LIVE-RULES.md`.
 - Copilot Student is read-only and Auto-only. Another account may admit operator-verified exact named models sharing one subscription pool with a per-call credit cap; follow [the account rule](references/lane-copilot.md).

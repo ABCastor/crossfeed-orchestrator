@@ -975,7 +975,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   lead: str | None = None, fleet: Any = None,
                   target: tuple[str, str] | None = None, data_class: str | None = None,
                   prompt: str | None = None, value_mode: str = "best-value",
-                  persist_receipts: bool = True) -> dict:
+                  persist_receipts: bool = True, collect_eligible: bool = False) -> dict:
     """Rank eligible options; read-only previews do not refresh or emit receipts."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -1214,6 +1214,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             reason = "no configured role floor" if role_floor is None else "another subscription clears the role floor"
             rejected.append(f"{item['model_key']}/{item['level']}: low spend fallback withheld; {reason}")
             scored.remove(item)
+    # Keep routes after live admission/floor gates, before ranking-only effort pruning.
+    eligible = list(scored) if collect_eligible else None
     effort_decisions = []
     if not absolute and stakes != "irreversible":
         scored, effort_decisions = _efficient_efforts(scored)
@@ -1329,6 +1331,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "target": list(target) if target is not None else None,
               "lead": lead, "lead_pressure": pressure}
     if receipt is None:
+        if collect_eligible:
+            result["eligible_options"] = eligible
         return result
     snapshot = json.loads(json.dumps(result))
     receipt_options = [choice] + [item for item in top3 if item is not choice]
@@ -1340,4 +1344,6 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         option["selection_file"] = str(option_receipt)
         option["command_argv"] = _command(option, role, option_receipt, fleet=fleet)
         option["command"] = shlex.join(option["command_argv"])
+    if collect_eligible:
+        result["eligible_options"] = eligible
     return result
