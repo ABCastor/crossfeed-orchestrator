@@ -25,13 +25,12 @@ try:
     import funding
     import go_quota_tariffs
     import rating
-    import rating_log
     import rating_explore
     from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
-    from scripts import funding, go_quota_tariffs, rating, rating_explore, rating_log
+    from scripts import funding, go_quota_tariffs, rating, rating_explore
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
@@ -702,7 +701,8 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
                              "request_estimate_source": tariff_source}
             if not observed:
                 flags.append("go_task_request_count_unmeasured")
-    nominal = _number(roster.get("quota_pools", {}).get(pool, {}).get("nominal_percent_per_task", .5))
+    nominal = _number(roster.get("quota_pools", {}).get(pool, {}).get(
+        "nominal_percent_per_task", rating.NOMINAL_TASK_PERCENT))
     nominal = nominal if nominal is not None and nominal >= 0 else .5
     if percent is None and usd is not None and median_usd is not None and median_usd > 0:
         percent, basis = usd / median_usd * nominal, "relative_proxy"
@@ -1106,17 +1106,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         item["posterior"] = (alpha, beta)
         item["checked_passes"], item["checked_failures"] = passed, failed
         item["p_success"] = alpha / (alpha + beta)
-    typical = None
-    try:
-        typical = rating_log.typical_price(state_dir, pricing_basis=rating.LIVE_PRICE_BASIS)
-    except OSError:
-        pass  # A history read failure should not block dispatch.
-    typical_basis = "prior_dispatch_median"
-    if typical is None or typical <= 0:
-        positive = [item["estimated_price"] for item in scored if (item["estimated_price"] or 0) > 0]
-        typical = statistics.median(positive) if positive else None
-        typical_basis = "eligible_price_median" if typical is not None else "unavailable"
-    failure_price = rating.STAKES[rating_stakes] * (typical or 0)
+    typical = rating.COMPETENT_RERUN_PRICE
+    failure_price = rating.STAKES[rating_stakes] * typical
     for item in scored:
         expected = rating.expected_cost(item["estimated_price"], item["p_success"], failure_price)
         item["expected_cost"] = expected
@@ -1192,7 +1183,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "unknown_options": len(unknown_options),
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
               "value_mode": value_mode, "rating_stakes": rating_stakes, "rating_sampling": sampling,
-              "typical_price": typical, "typical_price_basis": typical_basis, "failure_price": failure_price,
+              "typical_price": typical, "typical_price_basis": "competent_rerun_reference",
+              "failure_price": failure_price,
               "calibration_difficulty": difficulty, "cash_preference": cash_preference,
               "quota_fallback": "measured-pi-coding-relay" if relay is not None else None,
               "quality_floor": role_floor, "floor_rejections": floor_rejections,

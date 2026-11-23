@@ -30,7 +30,7 @@ class TuningTests(SelectorTests):
         self.evidence(rows)
         runtime = self.snapshot('codex', projected=190, used=50)
         allowed = 'codex:gpt-6.1-sol:high,codex:gpt-6-luna:high'
-        with mock.patch.object(selector.rating_log, 'typical_price', return_value=.23):
+        with mock.patch.object(selector.rating, 'COMPETENT_RERUN_PRICE', .23):
             result = self.select(runtime, stakes='high', rating_stakes='critical', allow=allowed, no_explore=True)
         cheap, expensive = result['top3']
         self.assertEqual(cheap['model_key'], 'gpt-6-luna')

@@ -87,7 +87,7 @@ class SelectorTests(unittest.TestCase):
 
         self.evidence([row("medium", .65, .01), row("high", .9, .14), row("max", .98, .4)])
         args = dict(allow=f"codex:{model}:*", persist_receipts=False, no_explore=True)
-        with mock.patch.object(selector.rating_log, "typical_price", return_value=.23):
+        with mock.patch.object(selector.rating, "COMPETENT_RERUN_PRICE", .23):
             routine = self.select(rating_stakes="routine", **args)
             critical = self.select(rating_stakes="critical", **args)
             alias = self.select(value_mode="absolute-best", **args)

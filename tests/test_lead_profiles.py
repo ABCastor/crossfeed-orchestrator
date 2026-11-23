@@ -79,14 +79,11 @@ class LeadDetectionTests(unittest.TestCase):
             state = Path(d)
             (state / "evidence").mkdir()
             # This control must actually prefer Fable under expected cost before
-            # the lead gate runs. Give both options a debit and the same prior
-            # job price; selecting critical alone does not bypass quota costs.
+            # the lead gate runs. Give both options a debit; selecting critical
+            # alone does not bypass quota costs.
             rows = [dict(quality_row(key, mean=grade), own_cost={"claude": {"percent_per_task": .01}})
                     for key, grade in ((fable, .99), (opus, .80))]
             (state / "evidence/levels.json").write_text(json.dumps({"rows": rows}))
-            log = selector.rating_log
-            (state / log.LEDGER).write_text(json.dumps({"schema": log.DISPATCH, "attempt_index": 0,
-                "live_pick": {"pricing_basis": selector.rating.LIVE_PRICE_BASIS, "estimated_price": .23}}) + "\n")
             allowed = f"claude:{opus}:high,claude:{fable}:high"
             lead = fleetctl.resolve_lead_pool(roster)
             unaffiliated = selector.select_option(roster, runtime, state, "review", allow=allowed,

@@ -15,6 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import fleetctl
+import rating_log
 import selector
 from tests.test_menubar import load_menubar
 from tests.test_selector import quality_row
@@ -223,10 +224,9 @@ class CheckedRoutingTests(unittest.TestCase):
         self.ran(mean)
         again = self.select(self.healthy(), no_explore=True)["choice"]
         self.assertEqual(again["posterior"], mean["posterior"])
-        log = selector.rating_log
-        with (self.state / log.LEDGER).open("a") as ledger:
-            for row in (dict(schema=log.DISPATCH, run_id="r1", task_id="t1", live_pick=mean),
-                        dict(schema=log.ACCEPTANCE, run_id="r1", task_id="t1", verdict="fail", check="test")):
+        with (self.state / rating_log.LEDGER).open("a") as ledger:
+            for row in (dict(schema=rating_log.DISPATCH, run_id="r1", task_id="t1", live_pick=mean),
+                        dict(schema=rating_log.ACCEPTANCE, run_id="r1", task_id="t1", verdict="fail", check="test")):
                 ledger.write(json.dumps(row) + "\n")
         ranked = self.select(self.healthy(), no_explore=True)["top3"]
         updated = next(item for item in ranked if item["model_key"] == mean["model_key"])

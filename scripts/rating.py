@@ -83,15 +83,26 @@ def quota_price(percent, weekly_capacity, pace, *, window_minutes=10080):
     return number(percent / 100 * weekly_capacity * (window_minutes / 10080) * (1 + pace))
 
 
-# Provisional planning anchor, not an observed acceptance rate. The operator's
-# brief calls for 80–85% on a typical routine job; use its midpoint and reuse
-# the replay's weak benchmark prior and difficulty offsets.
-TYPICAL_SUCCESS = .825
+# A competent rerun budgets the standard task debit on the reference
+# subscription at neutral pressure. This is a planning value, not the bill
+# for a specific lane or a statistic of the live policy's cheapest picks.
+REFERENCE_WEEKLY_CAPACITY = 200 * 12 / 52
+NOMINAL_TASK_PERCENT = .5
+COMPETENT_RERUN_PRICE = NOMINAL_TASK_PERCENT / 100 * REFERENCE_WEEKLY_CAPACITY
 LIVE_PRICE_BASIS = "subscription-opportunity/v1"
+
+# Provisional planning anchor, not an observed acceptance rate. The operator's
+# 80–85% range centers a neutral-grade route on 82.5% for ordinary work.
+TYPICAL_SUCCESS = .825
 
 
 def success_prior(grade, difficulty="ordinary"):
-    gap = log(TYPICAL_SUCCESS / (1 - TYPICAL_SUCCESS)) + seed(grade) - DIFFICULTY[difficulty]
+    # Hard grades discriminate the routes on work that needs the skill:
+    # transfer their relative odds at unit slope, rather than raising their
+    # odds ratio to the one-quarter power as for easier work. The slope
+    # pivots at grade .5 so the common anchor and difficulty offset still hold.
+    weight = 1.0 if difficulty == "hard" else .25
+    gap = log(TYPICAL_SUCCESS / (1 - TYPICAL_SUCCESS)) + seed(grade, weight=weight) - DIFFICULTY[difficulty]
     return 1 / (1 + exp(-gap))
 
 
@@ -102,7 +113,7 @@ def subscription_price(percent, weekly_capacity, pace, *, window_minutes, scarci
     rather than multiplying by the plan's own list value (which reverses the
     incentive). Pace and observed remaining capacity add nonnegative premiums.
     """
-    reference = 200 * 12 / 52
+    reference = REFERENCE_WEEKLY_CAPACITY
     if not weekly_capacity or weekly_capacity <= 0:
         return None
     return quota_price(percent, reference * reference / weekly_capacity,
@@ -114,13 +125,13 @@ def expected_cost(price, probability, failure_price):
     return None if price is None else price + (1 - probability) * failure_price
 
 
-def seed(grade):
-    """Use a benchmark weakly; a benchmark fraction is not a pass forecast."""
+def seed(grade, *, weight=.25):
+    """Transfer clipped benchmark log odds, not the raw benchmark fraction."""
     grade = _probability(grade)
     if grade is None:
         return 0.0
     grade = min(0.95, max(0.05, grade))
-    return 0.25 * log(grade / (1 - grade))
+    return weight * log(grade / (1 - grade))
 
 
 def success(offer: Offer, task: Task, corrections: Mapping[RatingKey, float]) -> float:
