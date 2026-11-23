@@ -7,6 +7,7 @@ data. An API-equivalent cost is an estimate, not a measured subscription debit.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 import importlib
 import json
@@ -19,7 +20,7 @@ import re
 import shlex
 import tempfile
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 try:
     import funding
@@ -559,8 +560,60 @@ def _relay_fallback(scored, stakes):
     return max(relays, key=_unpriced_rank, default=None)
 
 
+def _recent_working_pools(roster: dict, state_dir: Path, pools: set[str], fleet: Any) -> set[str]:
+    """Look for a successful operational receipt within one weekly refill period."""
+    now = fleet.utc_now()
+
+    def recent(stamp):
+        try:
+            return now - timedelta(days=7) <= fleet.parse_iso(stamp) <= now
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    lanes = [lane for lane in roster.get("lanes", [])
+             if lane.get("quota_pool") in pools and lane.get("model_key")
+             and lane.get("access_status") == "verified" and lane.get("admission_status") == "active"]
+    active = {(lane["quota_pool"], lane["model_key"]) for lane in lanes}
+    working = set()
+    for lane in lanes:
+        pool, model = lane["quota_pool"], lane["model_key"]
+        # An operator smoke is not a checked acceptance rate or a quota reading.
+        smoke = (roster.get("model_evidence", {}).get(model) or {}).get("admission_evidence") or {}
+        if (lane.get("selector") and smoke.get("selector_requested") == lane["selector"]
+                and smoke.get("result") == "PASS" and smoke.get("exit_code_reported_by_operator") == 0
+                and recent(smoke.get("date"))):
+            working.add(pool)
+    pending = {pool for pool, _ in active} - working
+    if not pending:
+        return working
+    try:
+        with (state_dir / "runs.jsonl").open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not any(pool in line for pool in pending):
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("schema") != "crossfeed-model-run/v1":
+                    continue
+                pool = record.get("quota_pool")
+                if (pool in pending and (pool, record.get("model_identity")) in active
+                        and record.get("status") == "ok" and record.get("returncode") == 0
+                        and recent(record.get("ended_at"))):
+                    working.add(pool)
+                    pending.remove(pool)
+                    if not pending:
+                        break
+    except OSError:
+        pass  # A receipt we cannot read cannot justify an estimate.
+    return working
+
+
+# BR-SELECT-003
 def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
-                       reference: float, fleet: Any) -> dict | None:
+                       reference: float, fleet: Any,
+                       recently_worked: Callable[[str], bool] | None = None) -> dict | None:
     """Explicit weekly-equivalent service capacity, not cash or a quota reading."""
     profile = roster.get("quota_pools", {}).get(pool, {}).get("value_capacity")
     if profile is None:
@@ -568,8 +621,8 @@ def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
     capacity = _number(profile.get("weekly_usd_equivalent")) if isinstance(profile, dict) else None
     if capacity is None or capacity <= 0 or not isinstance(profile.get("source"), str) or not profile["source"].strip():
         raise fleet.FleetError(f"{pool}: value_capacity needs positive weekly_usd_equivalent and source")
-    _, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
-                                          roster=roster, model_key=model)
+    state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
+                                              roster=roster, model_key=model)
     applicable = set(evidence.get("applicable_windows", evidence.get("windows", {})))
     observations = []
     for name, window in evidence.get("windows", {}).items():
@@ -583,12 +636,28 @@ def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
             observations.append((max(0., min(100., used)), name))
     used, window = max(observations, default=(None, None))
     remaining = capacity * (1 - used / 100) if used is not None else None
-    # Unknown capacity utilization never earns an abundance discount. The
-    # separate quota forecast still prices pace and short-window constraints.
+    basis = "observed" if remaining is not None else "unknown"
+    estimate = None
+    if remaining is None and recently_worked is not None:
+        snapshot = runtime.get("quota_snapshots", {}).get(pool) or {}
+        idle = snapshot.get("idle_windows", {})
+        windows = snapshot.get("windows", {})
+        applies = lambda rows: any(fleet.quota_window_applies(roster, pool, name, row, model)
+                                   for name, row in rows.items())
+        incomplete = state == "UNKNOWN" and evidence.get("confidence") == "direct" and applies(
+            {name: row for name, row in idle.items() if row.get("reset_unknown")})
+        failed_after_read = state == "GAUGE_ERROR" and (applies(windows) or applies(idle))
+        if (incomplete or failed_after_read) and recently_worked(pool):
+            # The midpoint neither presumes a just-refilled week nor prices a
+            # missing clock as a fully consumed week. It is for pricing only.
+            estimate = capacity / 2
+            basis = "neutral_recent_work"
+    priced_remaining = estimate if estimate is not None else remaining
     return {"weekly_usd_equivalent": capacity, "remaining_usd_equivalent": remaining,
             "window": window, "used_percent": used, "source": profile["source"],
-            "reference_usd_equivalent": reference,
-            "scarcity_penalty": reference / (reference + (remaining or 0.))}
+            "reference_usd_equivalent": reference, "headroom_basis": basis,
+            **({"estimated_remaining_usd_equivalent": estimate} if estimate is not None else {}),
+            "scarcity_penalty": reference / (reference + (priced_remaining or 0.))}
 
 
 def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
@@ -961,6 +1030,15 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if capacity_reference is None or capacity_reference <= 0:
         raise fleet.FleetError("capacity_reference_usd_equivalent must be positive")
     capacities, paces = {}, {}
+    working_pools = None
+
+    def recently_worked(pool):
+        nonlocal working_pools
+        if working_pools is None:
+            included = {o["pool"] for o in options if o["funding"] == "included"}
+            working_pools = _recent_working_pools(roster, state_dir, included, fleet)
+        return pool in working_pools
+
     for option in options:
         row = evidence_for(option)
         strata = row.get("q_by_stakes", {})
@@ -1004,8 +1082,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             latency = _number(source["latency_s"])
         capacity_key = option["pool"], option["model_key"]
         if capacity_key not in capacities:
-            capacities[capacity_key] = (_capacity_headroom(roster, runtime, *capacity_key, capacity_reference, fleet)
-                                        if option["funding"] == "included" else None)
+            capacities[capacity_key] = (
+                _capacity_headroom(roster, runtime, *capacity_key, capacity_reference, fleet, recently_worked)
+                if option["funding"] == "included" else None)
         capacity = capacities[capacity_key]
         if capacity_key not in paces:
             paces[capacity_key] = pool_pace(roster, runtime, option['pool'], fleet, model_key=option['model_key'])

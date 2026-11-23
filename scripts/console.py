@@ -1565,7 +1565,10 @@ def _compare_cells(option, scored, pool, roster):
                     if _number(source.get(field)) and source[field] > 0), None)
     price = (scored or {}).get('pool_price') or {}
     used = _number(price.get('window', {}).get('used_percent'))
-    if pool.get('gauge_error') or pool.get('stale_age_s') is not None:
+    capacity = (scored or {}).get('capacity') or {}
+    if capacity.get('headroom_basis') == 'neutral_recent_work':
+        headroom = 'Unknown · neutral price estimate'
+    elif pool.get('gauge_error') or pool.get('stale_age_s') is not None:
         headroom = 'Refresh failed' if pool.get('gauge_error') else 'Stale'
     elif used is not None:
         title, scope = fleetctl.limit_name(price['binding_window'], price['window'], pool.get('label', ''))

@@ -174,6 +174,48 @@ class SelectorTests(unittest.TestCase):
         self.assertIsNone(unknown["remaining_usd_equivalent"])
         self.assertEqual(unknown["scarcity_penalty"], 1.0)
 
+    # BR-SELECT-003
+    def test_recent_work_prices_missing_headroom_without_claiming_a_reading(self):
+        pool, model = "antigravity-gemini", "gemini-3.8-flash"
+        weekly = "antigravity-quota-summary-gemini-weekly"
+        now = fleetctl.utc_now()
+        self.only([pool])
+        self.roster["quota_pools"][pool]["value_capacity"] = {
+            "weekly_usd_equivalent": 4.6, "source": "synthetic plan"}
+        self.evidence([quality_row(model, family="coding-agent")])
+        opts = dict(role="implementation", allow=f"{pool}:{model}:high", persist_receipts=False)
+        self.roster["model_evidence"] = {model: {"admission_evidence": {
+            "date": fleetctl.iso(now), "selector_requested": model + "-high",
+            "result": "PASS", "exit_code_reported_by_operator": 0}}}
+        runtime = {"quota_snapshots": {pool: {"observed_at": fleetctl.iso(now), "windows": {},
+                   "idle_windows": {weekly: {"window_minutes": 10080, "used_percent": 0,
+                                             "reset_unknown": True}}}}}
+        with mock.patch.object(fleetctl, "utc_now", return_value=now):
+            incomplete = self.select(runtime, **opts)["choice"]
+            self.assertEqual(incomplete["pool_price"]["state"], "UNKNOWN")
+            self.assertIsNone(incomplete["capacity"]["used_percent"])
+            self.assertIsNone(incomplete["capacity"]["remaining_usd_equivalent"])
+            self.assertEqual(incomplete["capacity"]["estimated_remaining_usd_equivalent"], 2.3)
+            self.assertEqual(incomplete["capacity"]["headroom_basis"], "neutral_recent_work")
+            self.assertEqual(incomplete["capacity"]["scarcity_penalty"], .5)
+            runtime["quota_refresh_errors"] = {pool: {"attempted_at": fleetctl.iso(now),
+                                                     "reason": "oracle failed"}}
+            failure = self.select(runtime, **opts)["choice"]
+            self.assertEqual(failure["pool_price"]["state"], "GAUGE_ERROR")
+            self.assertEqual(failure["capacity"]["scarcity_penalty"], .5)
+            record = self.roster["model_evidence"][model]["admission_evidence"]
+            record["date"] = fleetctl.iso(now - dt.timedelta(days=8))
+            no_recent_work = self.select(runtime, **opts)["choice"]
+            self.assertEqual(no_recent_work["capacity"]["scarcity_penalty"], 1)
+            self.assertLess(failure["estimated_price"], no_recent_work["estimated_price"])
+            self.assertNotIn("estimated_remaining_usd_equivalent", no_recent_work["capacity"])
+            run = {"schema": "crossfeed-model-run/v1", "quota_pool": pool, "model_identity": model,
+                   "ended_at": fleetctl.iso(now), "status": "ok", "returncode": 0}
+            (self.state / "runs.jsonl").write_text(json.dumps(run) + "\n")
+            self.assertEqual(self.select(runtime, **opts)["choice"]["capacity"]["scarcity_penalty"], .5)
+            runtime["quota_snapshots"].clear()
+            self.assertEqual(self.select(runtime, **opts)["choice"]["capacity"]["scarcity_penalty"], 1)
+
     def test_low_kimi_is_last_resort_after_subscription_checks(self):
         self.only(["codex", "opencode-go"])
         self.roster["quota_pools"]["opencode-go"]["plan"] = {"name": "OpenCode Go"}
