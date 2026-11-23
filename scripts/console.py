@@ -496,7 +496,8 @@ def _settings_content(overview: dict[str, Any], token: str, *, panel: bool = Fal
                          f'<label>Pro weekly allowance<input type="number" name="allowance" min="0" max="999999" required '
                          f'value="{config.get("pro_weekly_allowance", 200)}"></label><button type="submit">Save allowance</button>'
                          '<p class="quiet">Local estimate over the last seven days, not a published ChatGPT limit. '
-                         'This changes the Pro meter and its fallback threshold. Zero disables Pro by this estimate.</p></form>')
+                         'This changes the Pro meter and its fallback threshold. Zero disables Pro by this estimate.</p>'
+                         '<p class="wb-error" role="status"></p></form>')
     return ('<section class="settings"><div class="setting-row"><label for="theme-choice">Theme</label>'
                  '<select id="theme-choice" data-theme-choice><option value="system">System</option>'
                  '<option value="light">Light</option><option value="dark">Dark</option></select>'
@@ -1063,7 +1064,8 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
                                f'{key}={"off" if option["on"] else "on"}', disabled=blocked, hint_id=target)
         return (f'<li class="opt wb-model" id="{target}" data-model="{html.escape(key)}" '
                 f'data-search-label="{html.escape(name)}" tabindex="-1"><div class="wb-model-name">'
-                f'{_handle(name)}{_page_link(model, name)}</div><div class="wb-model-control">{control}</div></li>')
+                f'{_handle(name)}{_page_link(model, name)}</div><div class="wb-model-control">{control}'
+                '<span class="wb-error" role="status"></span></div></li>')
     line = _older_reason(model, option, by_key) if older else _best_for(model, pool["pool"])
     if any(lane.get("catalog_state") == "sleeping" for lane in model.get("lanes", [])):
         line = "Sleeping; wakes automatically when selected" + (". " + line if line else "")
@@ -1189,7 +1191,9 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
                       "control_actor": _control_text(p.get("control")),
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
-                      "gauge": _provider_gauge(p, overview) + _pro_usage(p), "on": (p.get("models") or {}).get("on", []),
+                      "gauge": _provider_gauge(p, overview) + _pro_usage(p),
+                      "wallet_gauge": _work_gauge(p, overview) + _pro_usage(p),
+                      "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
             "agy_summary": _agy_summary(overview['pools']),
@@ -1598,10 +1602,10 @@ def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, 
                 f'{return_fields}<input type="hidden" name="t" value="{html.escape(form_token)}">'
                 f'<input type="hidden" name="pool" value="{pool_id}">'
                 + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal')
-                + f'<span class="wb-muted">{LEVEL_WORDS[pool["level"]] if on else "Enables at Normal"}</span></form>'
-                '<details class="wb-advanced"><summary>Spend policy</summary>' + controls
+                + f'<span class="wb-level wb-muted">{LEVEL_WORDS[pool["level"]] if on else "Enables at Normal"}</span></form>'
+                '<details class="wb-advanced" open><summary>Spend policy</summary>' + controls
                 + f'<div class="wb-explicit">Explicit-only pool flag {_work_switch("explicit-only", explicit, "Explicit-only pool flag", disabled="Configured in roster.", hint_id=pool_id)}</div>'
-                + '</details></div>'
+                + '</details><p class="wb-error" role="status"></p></div>'
             )
             gauge = _work_gauge(pool, overview) + _pro_usage(pool)
         return (
@@ -1839,9 +1843,10 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     return
                 if path == '/settings/pro':
                     console.set_pro_allowance(pool, fields.get('allowance', [''])[0])
-                    self._redirect('/#settings' if fields.get('return', [''])[0] == 'panel' else '/settings')
-                    return
-                if path == '/order':
+                    if self.headers.get('Accept') != 'application/json':
+                        self._redirect('/#settings' if fields.get('return', [''])[0] == 'panel' else '/settings')
+                        return
+                elif path == '/order':
                     console.set_order(json.loads(fields.get('order', [''])[0]))
                 elif path == "/refresh":
                     outcomes = console.refresh_now()
@@ -1870,6 +1875,8 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 return
             if self.headers.get("Accept") == "application/json":
                 payload = snapshot_payload(console.overview(refresh=False))
+                if path == '/settings/pro':
+                    payload['allowance'] = int(fields['allowance'][0])
                 if outcomes is not None:
                     payload["refresh"] = outcomes
                 self._send(200, json.dumps(payload).encode(), "application/json; charset=utf-8")

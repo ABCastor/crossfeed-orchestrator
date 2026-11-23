@@ -577,16 +577,28 @@ function boot(document, window) {
   }
   const picks = new Map([...document.querySelectorAll('.pick')].map(pick => [pick.dataset.pool, pick]));
   const switchesOf = pick => [...pick.querySelectorAll('.sw')];
-  const onOf = pick => switchesOf(pick).filter(sw => sw.getAttribute('aria-checked') === 'true').map(sw => sw.dataset.key);
+  const onOf = pick => switchesOf(pick).filter(sw => sw.getAttribute('aria-checked') === 'true')
+    .map(sw => sw.dataset.key || Crossfeed.splitChange(sw.value)[0]);
   for (const [pool, pick] of picks) confirmed.set(`model:${pool}`, onOf(pick));
   for (const form of document.querySelectorAll('.lv')) {
     confirmed.set(`level:${form.querySelector('[name=pool]').value}`, form.querySelector('.stop.on')?.value);
   }
 
+  function showSwitch(button, on, next) {
+    button.setAttribute('aria-checked', String(on));
+    button.setAttribute('value', next);
+    button.querySelector('.st').textContent = on ? 'On' : 'Off';
+  }
   function showLevel(pool, level, means) {
     const row = document.getElementById(`pool-${pool}`);
     const form = row?.querySelector('.lv');
     if (!form) return;
+    const toggle = row.querySelector('.wb-pool-switch button');
+    if (toggle) {
+      const on = level !== 'off';
+      showSwitch(toggle, on, on ? 'off' : 'normal');
+      row.querySelector('.wb-level').textContent = on ? form.querySelector(`[value="${level}"]`).getAttribute('aria-label') : 'Enables at Normal';
+    }
     const stops = [...form.querySelectorAll('.stop')];
     row.className = row.className.replace(/\blvl-\S+/g, `lvl-${level}`);
     form.className = `lv at-${stops.findIndex(b => b.value === level)} is-${level}`;
@@ -602,7 +614,15 @@ function boot(document, window) {
   }
   function showModels(pool, on, told) {
     const pick = picks.get(pool);
-    if (!pick || workbench) return;
+    if (!pick) return;
+    if (workbench) {
+      for (const sw of pick.querySelectorAll('button[name="switch"]:not(:disabled)')) {
+        const [model] = Crossfeed.splitChange(sw.value);
+        const isOn = on.includes(model);
+        showSwitch(sw, isOn, `${model}=${isOn ? 'off' : 'on'}`);
+      }
+      return;
+    }
     const models = [];
     const every = [];
     for (const sw of switchesOf(pick)) {
@@ -647,7 +667,16 @@ function boot(document, window) {
       confirmed.set(`level:${pool.pool}`, pool.level);
       if (!skip(`level:${pool.pool}`)) showLevel(pool.pool, pool.level, pool.means);
       const row = document.getElementById(`pool-${pool.pool}`);
-      if (row && !workbench && pool.gauge !== undefined) row.querySelector('.gauge').innerHTML = pool.gauge;
+      const gauge = row?.querySelector('.gauge');
+      const markup = workbench ? pool.wallet_gauge : pool.gauge;
+      if (gauge && markup !== undefined && (!workbench || gauge.dataset.markup !== markup)) {
+        if (workbench) {
+          const open = gauge.querySelector('.pro-note')?.open;
+          gauge.dataset.markup = markup;
+          gauge.innerHTML = markup;
+          if (open && gauge.querySelector('.pro-note')) gauge.querySelector('.pro-note').open = true;
+        } else gauge.innerHTML = markup;
+      }
       if (row && !skip(`level:${pool.pool}`) && pool.control_actor !== undefined) {
         const actor = row.querySelector('.level-actor');
         if (actor) actor.textContent = pool.control_actor;
@@ -669,9 +698,12 @@ function boot(document, window) {
     if (briefText && data.brief !== undefined) briefText.textContent = fullShown ? briefFull : briefCompact;
     if (data.console_order !== undefined) {
       confirmedOrder = clone(data.console_order);
-      if (!orderDraft && !skip('order')) { order = clone(confirmedOrder); applyOrder(); }
+      if (!orderDraft && !skip('order') && (!workbench || JSON.stringify(order) !== JSON.stringify(confirmedOrder))) {
+        order = clone(confirmedOrder); applyOrder();
+      }
     }
-    if (data.stamp !== undefined) document.querySelector('.stamp').textContent = data.stamp;
+    const stamp = document.querySelector('.stamp');
+    if (stamp && data.stamp !== undefined) stamp.textContent = workbench ? (data.wallet_stamp ?? data.stamp) : data.stamp;
   }
 
   async function post(url, body) {
@@ -683,7 +715,7 @@ function boot(document, window) {
     send: ({url, body}) => post(url, body),
     onConfirmed: (data, key) => {
       update(data, other => saver.pending(other));
-      if (!saver.busy()) say(key === 'order' ? 'Saved this page’s order.' : key.startsWith('model:') ? 'Saved. The next task uses these models.' : 'Saved. Routing uses this setting now.');
+      if (!saver.busy() && (!workbench || key === 'order')) say(key === 'order' ? 'Saved this page’s order.' : key.startsWith('model:') ? 'Saved. The next task uses these models.' : 'Saved. Routing uses this setting now.');
     },
     onFailed: (key, newer) => {
       if (!newer) {
@@ -692,7 +724,7 @@ function boot(document, window) {
         else if (kind === 'level') showLevel(pool, confirmed.get(key));
         else showModels(pool, confirmed.get(key));
       }
-      say('Could not save that change, so the page shows the setting that is still in force. Try again.');
+      if (!workbench || key === 'order') say('Could not save that change, so the page shows the setting that is still in force. Try again.');
     },
   });
 
@@ -888,18 +920,46 @@ function boot(document, window) {
 
   document.addEventListener('submit', async event => {
     const form = event.target;
-    if (workbench || !form.matches('.lv, .choose, .quota-refresh')) return;
+    if (!form.matches('.lv, .choose, .quota-refresh, .wb-pool-switch, .wb-models, [action="/settings/pro"]')) return;
     event.preventDefault();
     const body = new URLSearchParams(new FormData(form));
-    if (event.submitter?.name) body.set(event.submitter.name, event.submitter.value);
-    if (form.matches('.lv')) {
+    const {submitter} = event;
+    if (submitter?.name) body.set(submitter.name, submitter.value);
+    if (form.matches('[action="/settings/pro"]')) {
+      if (form.getAttribute('aria-busy') === 'true') return;
+      const input = form.querySelector('input[name="allowance"]');
+      const output = form.querySelector('.wb-error');
+      form.setAttribute('aria-busy', 'true');
+      output.textContent = 'Saving…';
+      try {
+        const data = await post(form.action, body);
+        input.defaultValue = String(data.allowance);
+        if (input.value === body.get('allowance')) input.value = input.defaultValue;
+        if (workbench) update(data, key => saver.pending(key));
+        output.textContent = 'Saved.';
+      } catch (_) {
+        if (input.value === body.get('allowance')) input.value = input.defaultValue;
+        output.textContent = 'Not saved. Try again.';
+      } finally {
+        form.removeAttribute('aria-busy');
+      }
+      return;
+    }
+    const output = (submitter?.closest('.wb-model') || form.closest('.wb-pool-control'))?.querySelector('.wb-error');
+    const save = async key => {
+      if (output) output.textContent = '';
+      if (!await saver.save(key, {url: form.action, body}) && output && !saver.pending(key)) {
+        output.textContent = 'Not saved. Try again.';
+      }
+    };
+    if (form.matches('.lv, .wb-pool-switch')) {
       const pool = body.get('pool'), level = body.get('level');
       showLevel(pool, level);   // at once; the server's answer brings the matching words
       say('');
-      saver.save(`level:${pool}`, {url: form.action, body});
+      await save(`level:${pool}`);
       return;
     }
-    if (form.matches('.choose')) {
+    if (form.matches('.choose, .wb-models')) {
       const pool = body.get('pool');
       const pick = picks.get(pool);
       const on = new Set(onOf(pick));
@@ -912,7 +972,7 @@ function boot(document, window) {
       }
       showModels(pool, [...on]);
       say('');
-      saver.save(`model:${pool}`, {url: form.action, body});
+      await save(`model:${pool}`);
       return;
     }
     const button = form.querySelector('button');
@@ -1014,7 +1074,7 @@ function boot(document, window) {
       }
     } catch (_) { /* Stored readings remain visible with their age. */ }
   }
-  if (status && !workbench) { window.setTimeout(refresh, 1000); window.setInterval(refresh, 30000); }
+  if (status) { window.setTimeout(refresh, 1000); window.setInterval(refresh, 30000); }
   return {update, showModels, showLevel, saver, openSearch, closeSearch};
 }
 
