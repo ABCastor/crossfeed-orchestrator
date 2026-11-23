@@ -99,9 +99,9 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, exclude Sonnet. Prefer Opus 5.5 at its lowest expected-cost admitted effort. The legacy irreversible setting still bypasses the Opus ranking preference.
 - Superseded 2026-11-23: per-role grade floors (implementation 0.650, review 0.600, debug 0.600, hard reasoning 0.850) and the Opus exception to them. Operator: “don't put too many minimum grades, too much stuff. Ideally, you need to know things in a structured way, get together benchmarks, and then you just take an informed decision.” Benchmark pass rates feed BR-SELECT-003, not admission. BR-CASH-004 and BR-REFRESH-001 retain their separate quality requirements.
 - Authority: Operator: “Most of the time, I'm going to use Opus or Fable to orchestrate, and then around it anything you want. But I certainly don't want Sonnet on high to do hard reasoning. Probably Opus should do that.”
-- Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, lead reserve, quota circuits and data policy still apply.
-- implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
-- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback`, `tests/test_expected_routing.py:ExpectedRouting.test_hard_reasoning_displays_dedicated_grades_but_ranks_pass_rates_without_a_floor`.
+- Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, the BR-SELECT-006 lead reserve, quota circuits and data policy still apply.
+- implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`.
+- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback`, `tests/test_expected_routing.py:ExpectedRouting.test_hard_reasoning_displays_dedicated_grades_but_ranks_pass_rates_without_a_floor`, `tests/test_lead_profiles.py:LeadSelectionTests.test_claude_lead_hard_reasoning_reserves_only_a_tight_window`.
 
 ## BR-SELECT-005 — Charge subscription debit at its plan value [ROUTING LEAD DECISION 2026-11-23]
 
@@ -109,6 +109,13 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Supersedes: decision B removes the inverse-capacity multiplier from BR-SELECT-003's price input; the forecast premium alone accounts for scarce quota. The routing lead applies the operator's “think of everything as a cost” direction and request to take advantage of Neon, without a model-specific price or pick.
 - implemented-by: `scripts/rating.py:subscription_price`, `scripts/selector.py:routing_price`, `scripts/selector.py:_capacity_headroom`.
 - tested-by: `tests/test_rating_calibration.py:LiveCalibration.test_subscription_price_uses_window_value_and_scarcity`, `tests/test_selector.py:SelectorTests.test_plan_window_value_prices_equal_debits_at_both_stakes`, `test_small_plan_forecast_runout_raises_price_at_same_debit`.
+
+## BR-SELECT-006 — Reserve Claude lead quota when it is at risk [ROUTING LEAD DECISION 2026-11-23]
+
+- RULE: When the lead uses Claude, reserve a shared window from workers if it is at least 90% used, is CRITICAL or EXHAUSTED, or is in deficit with a projected run-out before reset. Apply the same test to windows scoped to the lead model; block only workers that share an at-risk scoped window when no shared window triggers the reserve. A window on pace or in surplus at 75–89% does not trigger the reserve. Separate operator spend switches and other admission rules still apply.
+- Supersedes: the Claude lead reserve’s automatic block at CONSERVE (75%). The reserve keeps an orchestrating Opus or Fable session from running out before reset; blocking otherwise-eligible Opus at 76% with a 14-point surplus and a reset the next day overrides BR-SELECT-004 while leaving quota to expire unused.
+- implemented-by: `scripts/fleetctl.py:_claude_lead_window_at_risk`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
+- tested-by: `tests/test_lead_profiles.py:LeadSelectionTests.test_claude_lead_hard_reasoning_reserves_only_a_tight_window`, `LeadDetectionTests.test_claude_lead_uses_the_at_risk_window_not_the_most_used`, `LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
 
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 

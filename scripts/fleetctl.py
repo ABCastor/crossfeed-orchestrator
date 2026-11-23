@@ -540,6 +540,17 @@ def resolve_lead_pool(roster: dict[str, Any], explicit: str | None = None) -> st
     return pool
 
 
+# BR-SELECT-006
+def _claude_lead_window_at_risk(window: dict[str, Any]) -> bool:
+    if window["used_percent"] >= 90:
+        return True
+    pace = window_pace(window)
+    return (pace is not None and pace["status"] == "deficit"
+            and pace["runs_out_in_s"] is not None
+            and pace["runs_out_in_s"] < window["seconds_to_reset"])
+
+
+# BR-SELECT-006
 def lead_pressure(runtime: dict[str, Any], pool: str | None,
                   roster: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Lead preservation uses observed pressure, independent of worker spend overrides."""
@@ -548,32 +559,45 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
     observed = _without_levels(runtime)
     state, evidence = current_pool_state(observed, pool, roster=roster)
     level = pool_level(runtime, pool)
-    pressured = {"CONSERVE", "CRITICAL", "EXHAUSTED"}
     scoped = False
-    if level not in {"low", "off"} and state not in pressured:
+
+    def applicable_windows(evidence, *, scoped_only=False):
+        windows = evidence.get("windows") or {}
+        return {name: window for name, window in windows.items()
+                if name in evidence.get("applicable_windows", windows)
+                and (not scoped_only or not quota_window_applies(roster, pool, name, window, None))}
+
+    windows = applicable_windows(evidence)
+    if level not in {"low", "off"}:
         if pool != "claude":
-            return None
-        # An exact subscribed lead model can also draw a model-exclusive window.
-        model = (os.environ.get("PI_MODEL") if (os.environ.get("PI_PROVIDER") == "claude-bridge" or
-                                                 os.environ.get("PI_QUOTA_POOL") == "claude")
-                 else os.environ.get("ANTHROPIC_MODEL")) or ""
-        if not model.startswith("claude-"):
-            return None
-        state, evidence = current_pool_state(observed, pool, roster=roster, model_key=model)
-        if state not in pressured:
-            return None
-        scoped = True
-    windows = {name: window for name, window in (evidence.get("windows") or {}).items()
-               if name in evidence.get("applicable_windows", evidence.get("windows") or {})
-               and (not scoped or not quota_window_applies(roster, pool, name, window, None))}
+            if state not in {"CONSERVE", "CRITICAL", "EXHAUSTED"}:
+                return None
+        else:
+            windows = {name: window for name, window in windows.items() if _claude_lead_window_at_risk(window)}
+            if not windows and state not in {"CRITICAL", "EXHAUSTED"}:
+                # An exact subscribed lead model can also draw a model-exclusive window.
+                model = (os.environ.get("PI_MODEL") if (os.environ.get("PI_PROVIDER") == "claude-bridge" or
+                                                         os.environ.get("PI_QUOTA_POOL") == "claude")
+                         else os.environ.get("ANTHROPIC_MODEL")) or ""
+                if not model.startswith("claude-"):
+                    return None
+                state, evidence = current_pool_state(observed, pool, roster=roster, model_key=model)
+                windows = {name: window for name, window in applicable_windows(evidence, scoped_only=True).items()
+                           if _claude_lead_window_at_risk(window)}
+                if not windows:
+                    return None
+                scoped = True
     name, window = max(windows.items(), key=lambda item: item[1]["used_percent"],
                        default=(None, {}))
+    if pool == "claude" and name and level not in {"low", "off"} and state != "EXHAUSTED":
+        state = _state_for_used(window["used_percent"])
     return {"pool": pool, "level": level, "state": state,
             "used_percent": window.get("used_percent"),
             "window": (_compact_window_label(name, window) if name else None),
             **({"scoped_window": name} if scoped and name else {})}
 
 
+# BR-SELECT-006
 def lead_blocks(runtime, roster, pressure, option):
     if not pressure or option["pool"] != pressure["pool"]:
         return False

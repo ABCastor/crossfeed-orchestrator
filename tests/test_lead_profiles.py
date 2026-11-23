@@ -63,7 +63,7 @@ class LeadDetectionTests(unittest.TestCase):
             runtime["switches"] = {"claude": "on"}
             self.assertEqual(fleetctl.lead_directive(fleetctl.lead_pressure(runtime, "claude")), expected)
 
-    # BR-SELECT-004
+    # BR-SELECT-004 / BR-SELECT-006
     def test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus(self):
         fable, opus = "claude-fable-5-2", "claude-opus-5-5"
         roster = json.loads((ROOT / "tests/fixtures/access-overlay.test.json").read_text())
@@ -97,6 +97,35 @@ class LeadDetectionTests(unittest.TestCase):
             self.assertEqual(protected["lead"], "claude")
             self.assertEqual(protected["lead_pressure"]["scoped_window"], "weekly-fable")
             self.assertTrue(any("scoped window excluded" in reason for reason in protected["rejected"]))
+
+    # BR-SELECT-006
+    def test_claude_lead_uses_the_at_risk_window_not_the_most_used(self):
+        fable, opus = "claude-fable-5-2", selector.OPUS_HARD_REASONING
+        runtime = snapshot(used=76)
+        windows = runtime["quota_snapshots"]["claude"]["windows"]
+        weekly = windows["weekly"]
+        weekly["reset_at"] = fleetctl.iso(NOW + dt.timedelta(hours=17))
+        windows["weekly-fable"] = dict(weekly, label="Fable only", used_percent=70,
+                                       reset_at=fleetctl.iso(NOW + dt.timedelta(days=3)))
+        with mock.patch.object(fleetctl, "utc_now", return_value=NOW), \
+                mock.patch.dict(os.environ, {"PI_PROVIDER": "claude-bridge", "PI_MODEL": fable}, clear=True):
+            pressure = fleetctl.lead_pressure(runtime, "claude")
+            self.assertEqual(pressure["scoped_window"], "weekly-fable")
+            self.assertEqual(pressure["used_percent"], 70)
+            self.assertTrue(fleetctl.lead_blocks(runtime, None, pressure, {"pool": "claude", "model_key": fable}))
+            self.assertFalse(fleetctl.lead_blocks(runtime, None, pressure, {"pool": "claude", "model_key": opus}))
+
+            windows["primary"] = {"used_percent": 35, "window_minutes": 300,
+                                  "reset_at": fleetctl.iso(NOW + dt.timedelta(minutes=240))}
+            pressure = fleetctl.lead_pressure(runtime, "claude")
+            self.assertNotIn("scoped_window", pressure)
+            self.assertEqual(pressure["used_percent"], 35)
+
+            # Remove the scoped deficit. The new five-hour reading alone is too
+            # early to project, so it cannot reserve the pool just for a deficit.
+            windows["weekly-fable"]["reset_at"] = weekly["reset_at"]
+            windows["primary"]["reset_at"] = fleetctl.iso(NOW + dt.timedelta(minutes=299))
+            self.assertIsNone(fleetctl.lead_pressure(runtime, "claude"))
 
     def test_low_off_unknown_and_stale_truth_boundary(self):
         for level in ("low", "off"):
@@ -203,6 +232,38 @@ class LeadSelectionTests(unittest.TestCase):
                 receipt = json.loads(Path(result["selection_file"]).read_text())
                 self.assertEqual(receipt["lead"], "codex")
                 self.assertEqual(receipt["lead_pressure"], result["lead_pressure"])
+
+    # BR-SELECT-004 / BR-SELECT-006
+    def test_claude_lead_hard_reasoning_reserves_only_a_tight_window(self):
+        opus, astra = selector.OPUS_HARD_REASONING, selector.ASTRA_HARD_REASONING
+        self.roster["policy"]["selector"]["prefer_opus_hard_reasoning"] = True
+        self.roster["model_cards"][astra] = self.roster["model_cards"]["gpt-6-astra"]
+        self.roster["effort"][astra] = self.roster["effort"]["gpt-6-astra"]
+        allowed = f"claude:{opus}:high,codex:{astra}:high"
+        for used, reset_hours, expected, reason in (
+            (76, 17, opus, None),          # surplus
+            (80, 34, opus, None),          # on pace
+            (80, 72, astra, "Opus not admitted"),  # deficit with run-out before reset
+            (90, 12, astra, "Claude weekly window at least 90% used"),  # even in surplus
+        ):
+            with self.subTest(used=used, reset_hours=reset_hours):
+                runtime = snapshot(used=used)
+                weekly = runtime["quota_snapshots"]["claude"]["windows"]["weekly"]
+                weekly["reset_at"] = fleetctl.iso(NOW + dt.timedelta(hours=reset_hours))
+                controls = selector.select_option(self.roster, runtime, self.state, "hard-reasoning",
+                                                  allow=allowed, no_explore=True, persist_receipts=False)
+                self.assertEqual(controls["choice"]["model_key"], astra if used >= 90 else opus)
+                result = selector.select_option(self.roster, runtime, self.state, "hard-reasoning",
+                                                lead="claude", allow=allowed, no_explore=True,
+                                                persist_receipts=False)
+                self.assertEqual(result["choice"]["model_key"], expected)
+                preference = result["hard_reasoning_preference"]
+                if reason is None:
+                    self.assertIsNone(result["lead_pressure"])
+                    self.assertEqual(preference["route"], "opus")
+                else:
+                    self.assertEqual(result["lead_pressure"]["used_percent"], used)
+                    self.assertEqual(preference, {"route": "gpt-fallback", "reason": reason})
 
     def test_unknown_normal_lead_stays_eligible(self):
         result = self.select({})
