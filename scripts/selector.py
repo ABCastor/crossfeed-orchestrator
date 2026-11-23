@@ -522,7 +522,7 @@ def _cash_band(scored, stakes, policy):
     return preferred, "lower-marginal-cash" if len(preferred) < len(peers) else None
 
 
-# BR-SELECT-003
+# BR-SELECT-003 · BR-SELECT-005
 def routing_price(item):
     """Use only a debit and sourced capacity, or an actual incremental quote."""
     cash = item["cash"]
@@ -614,7 +614,7 @@ def _recent_working_pools(roster: dict, state_dir: Path,
     return working
 
 
-# BR-SELECT-003
+# BR-SELECT-003 · BR-SELECT-005
 def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
                        reference: float, fleet: Any,
                        recently_worked: Callable[[str], bool] | None = None) -> dict | None:

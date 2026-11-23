@@ -89,7 +89,7 @@ def quota_price(percent, weekly_capacity, pace, *, window_minutes=10080):
 REFERENCE_WEEKLY_CAPACITY = 200 * 12 / 52
 NOMINAL_TASK_PERCENT = .5
 COMPETENT_RERUN_PRICE = NOMINAL_TASK_PERCENT / 100 * REFERENCE_WEEKLY_CAPACITY
-LIVE_PRICE_BASIS = "subscription-opportunity/v1"
+LIVE_PRICE_BASIS = "subscription-plan-value/v1"
 
 # BR-SELECT-003
 def success_prior(pass_rate, difficulty="ordinary"):
@@ -100,18 +100,10 @@ def success_prior(pass_rate, difficulty="ordinary"):
     return rate * odds_multiplier / (1 - rate + rate * odds_multiplier)
 
 
+# BR-SELECT-005
 def subscription_price(percent, weekly_capacity, pace, *, window_minutes, scarcity=0):
-    """Price the same quota share higher in a smaller subscription.
-
-    Normalize opportunity cost to a roughly $200/month reference subscription,
-    rather than multiplying by the plan's own list value (which reverses the
-    incentive). Pace and observed remaining capacity add nonnegative premiums.
-    """
-    reference = REFERENCE_WEEKLY_CAPACITY
-    if not weekly_capacity or weekly_capacity <= 0:
-        return None
-    return quota_price(percent, reference * reference / weekly_capacity,
-                       pace + scarcity, window_minutes=window_minutes)
+    """Price the debit at the plan's window value with the existing scarcity premium."""
+    return quota_price(percent, weekly_capacity, pace + scarcity, window_minutes=window_minutes)
 
 
 def expected_cost(price, probability, failure_price):

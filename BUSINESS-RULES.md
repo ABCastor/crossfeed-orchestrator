@@ -92,6 +92,8 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - tested-by: `tests/test_success_evidence.py`, `tests/test_selector.py`, `tests/test_selector_round2.py`, `tests/test_value_modes.py`.
 - Superseded 2026-11-23: the effort hurdle, absolute-best as a separate ranking, standalone latency/quality score weights and caps, and soft Claude-first routing below the projected 80% threshold (threshold was delegated) are replaced by expected cost under the operator's Rating Model — Design direction. This does not retire configured admission/funding gates, the pressured lead reserve, irreversible highest-known quality, or the hard-reasoning preference.
 
+- Superseding decision A (2026-11-23, routing lead implementing the operator's benchmark-informed direction): the benchmark-pass-rate prior supersedes the grade-to-82.5% anchor. Accept the resulting eligible picks rather than prescribing an effort or tuning the prior to match a hand pick. Use checked exploration and independent `fleetctl accept` verdicts to test the estimates.
+
 ## BR-SELECT-004 — Opus handles hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
 
 - RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, exclude Sonnet. Prefer Opus 5.5 at its lowest expected-cost admitted effort. The legacy irreversible setting still bypasses the Opus ranking preference.
@@ -100,6 +102,13 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, lead reserve, quota circuits and data policy still apply.
 - implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
 - tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback`, `tests/test_expected_routing.py:ExpectedRouting.test_hard_reasoning_uses_dedicated_grades_without_an_admission_floor`.
+
+## BR-SELECT-005 — Charge subscription debit at its plan value [ROUTING LEAD DECISION 2026-11-23]
+
+- RULE: Price subscription debit as the share of its window times the sourced service-dollar value of that window, multiplied by the existing run-out and remaining-headroom premium. Keep BR-SELECT-003's labeled 50% estimate when a previously read pool's headroom is unusable and recent work supports the estimate. Metered lanes still use incremental cash; admission and funding rules remain independent.
+- Supersedes: decision B removes the inverse-capacity multiplier from BR-SELECT-003's price input; the forecast premium alone accounts for scarce quota. The routing lead applies the operator's “think of everything as a cost” direction and request to take advantage of Neon, without a model-specific price or pick.
+- implemented-by: `scripts/rating.py:subscription_price`, `scripts/selector.py:routing_price`, `scripts/selector.py:_capacity_headroom`.
+- tested-by: `tests/test_rating_calibration.py:LiveCalibration.test_subscription_price_uses_window_value_and_scarcity`.
 
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 
