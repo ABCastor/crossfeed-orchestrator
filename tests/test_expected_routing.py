@@ -35,8 +35,12 @@ class ExpectedRouting(unittest.TestCase):
         result = self.pick()
         self.assertEqual(result['rating_stakes'], 'important')
         self.assertTrue(result['hard_reasoning_preference']['floor_exception'])
-        self.assertEqual([o['level'] for o in result['top3']], ['xhigh', 'high', 'low'])
-        self.assertAlmostEqual(result['choice']['expected_cost'], .250 + (1-.809) * 5 * .230769)
+        self.assertEqual({o['level'] for o in result['top3']}, {'xhigh', 'high', 'low'})
+        critical = self.pick(rating_stakes='critical')
+        self.assertEqual(critical['choice']['level'], 'xhigh')
+        self.assertEqual(result['choice']['level'], 'low')
+        p = selector.rating.success_prior(.809, 'hard')
+        self.assertAlmostEqual(critical['choice']['expected_cost'], .250 + (1-p) * 20 * .230769)
         self.assertEqual(self.pick(rating_stakes='routine')['choice']['level'], 'low')
 
     def test_absolute_best_is_only_a_stakes_alias(self):
@@ -48,7 +52,7 @@ class ExpectedRouting(unittest.TestCase):
 
     def test_unknown_price_is_not_implicitly_free(self):
         self.prices['xhigh'] = None
-        result = self.pick()
+        result = self.pick(rating_stakes='critical')
         self.assertEqual(result['choice']['level'], 'high')
         self.assertIsNone(result['top3'][-1]['expected_cost'])
 

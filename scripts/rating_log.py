@@ -41,8 +41,8 @@ def rows(lines):
             yield row
 
 
-def typical_price(state_dir):
-    """Use up to 256 prior priced first attempts, before the present forecast."""
+def typical_price(state_dir, *, pricing_basis=None):
+    """Use up to 256 priced first attempts from the same pricing model."""
     try:
         with (state_dir / LEDGER).open("rb") as handle:
             size = handle.seek(0, os.SEEK_END)
@@ -55,7 +55,10 @@ def typical_price(state_dir):
     prices = []
     for row in reversed(recent):
         if row.get("schema") == DISPATCH and row.get("attempt_index") == 0:
-            price = rating.number((row.get("live_pick") or {}).get("estimated_price"))
+            live = row.get("live_pick") or {}
+            if live.get("pricing_basis") != pricing_basis:
+                continue
+            price = rating.number(live.get("estimated_price"))
             if price is not None and price >= 0:
                 prices.append(price)
                 if len(prices) == 256:
@@ -70,11 +73,13 @@ def options(selection):
     return [choice, *(item for item in selection["top3"] if item is not choice)]
 
 
-def describe(item, rated=None, predicted=None):
+def describe(item, rated=None, predicted=None, *, live=True):
+    actual = live and "pricing_basis" in item
     return {**{key: item.get(key) for key in ("pool", "model_key", "model_identity", "level",
                                              "harness", "lane_id")},
-            "estimated_price": rated.price if rated else None,
-            "predicted_success": predicted,
+            **({"pricing_basis": item["pricing_basis"]} if actual else {}),
+            "estimated_price": item["estimated_price"] if actual else rated.price if rated else None,
+            "predicted_success": item["p_success"] if actual else predicted,
             "grade": (item.get("q") or {}).get("mean") if (item.get("q") or {}).get("unknown") is False else None,
             "quota_price_inputs": {"cost": item.get("cost"), "pool_price": item.get("pool_price"),
                                    "capacity": item.get("capacity"), "cash": item.get("cash")}}
@@ -119,7 +124,7 @@ def forecast(selection, live, task_labels, typical):
             item, rated = next((item, rated) for item, rated in rated_items
                                if rated.route == plan.first and rated.price == plan.price
                                and rating.success(rated, task, {}) == plan.success)
-            result["shadow_pick"] = describe(item, rated, plan.success)
+            result["shadow_pick"] = describe(item, rated, plan.success, live=False)
     return result
 
 

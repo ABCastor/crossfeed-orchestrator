@@ -30,10 +30,9 @@ def route_key(item):
     return key if all(isinstance(part, str) and part for part in key) else None
 
 
-def posterior(grade, passes=0, failures=0):
-    # A Beta distribution needs two positive shape parameters. A clipped grade
-    # is still only a proxy; even a benchmark's 100% is not certainty here.
-    p = min(0.99, max(0.01, grade))
+def posterior(prior, passes=0, failures=0):
+    # Beta needs positive shape parameters; an estimate is never certainty.
+    p = min(0.99, max(0.01, prior))
     return PRIOR_STRENGTH * p + passes, PRIOR_STRENGTH * (1 - p) + failures
 
 

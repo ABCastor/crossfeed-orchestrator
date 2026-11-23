@@ -521,7 +521,7 @@ def _cash_band(scored, stakes, policy):
 
 
 # BR-SELECT-003
-def _routing_price(item):
+def routing_price(item):
     """Use only a debit and sourced capacity, or an actual incremental quote."""
     cash = item["cash"]
     if cash["funding"] == "metered":
@@ -1089,7 +1089,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             key = item["model_identity"]
             sibling_grades[key] = min(item["quality"], sibling_grades.get(key, 1.0))
     for item in scored:
-        item["estimated_price"] = _routing_price(item)
+        item.update(estimated_price=routing_price(item), pricing_basis=rating.LIVE_PRICE_BASIS)
         grade = item["quality"]
         sibling = sibling_grades.get(item["model_identity"])
         basis = "grade" if not item["q"]["unknown"] else "unknown_grade"
@@ -1106,7 +1106,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         item["p_success"] = alpha / (alpha + beta)
     typical = None
     try:
-        typical = rating_log.typical_price(state_dir)
+        typical = rating_log.typical_price(state_dir, pricing_basis=rating.LIVE_PRICE_BASIS)
     except OSError:
         pass  # A history read failure should not block dispatch.
     typical_basis = "prior_dispatch_median"

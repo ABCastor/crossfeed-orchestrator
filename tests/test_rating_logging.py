@@ -114,6 +114,26 @@ class RatingLoggingTests(unittest.TestCase):
         self.assertEqual(observed["attribution"], "pool_window_not_isolated")
         self.assertEqual(self.calls, ["model-0", "model-0"])
 
+    def test_live_price_epoch_does_not_mix_shadow_prices_or_retry_cost(self):
+        self.assertEqual(self.dispatch(), 0)
+        basis = rating_log.rating.LIVE_PRICE_BASIS
+        self.assertIsNone(rating_log.typical_price(self.root, pricing_basis=basis))
+        old = self.option
+
+        def live_option(name, price, pool="claude"):
+            return dict(old(name, price, pool), pricing_basis=basis, estimated_price=price / 100,
+                        p_success=.82)
+
+        with mock.patch.object(self, "option", side_effect=live_option):
+            self.assertEqual(self.dispatch(codes=(5, 0)), 0)
+        first, retry = self.records()[-2:]
+        self.assertEqual(first["live_pick"]["pricing_basis"], basis)
+        self.assertEqual(first["live_pick"]["estimated_price"], .04)
+        self.assertEqual(first["live_pick"]["predicted_success"], .82)
+        self.assertEqual(retry["live_pick"]["estimated_price"], .03)
+        self.assertEqual(rating_log.typical_price(self.root, pricing_basis=basis), .04)
+        self.assertEqual(rating_log.typical_price(self.root), 4)
+
     def test_scoring_failure_and_retries_keep_live_choices(self):
         self.assertEqual(self.dispatch(), 0)
         with mock.patch.object(rating_log.rating, "choose", side_effect=RuntimeError("broken ratings")) as choose:

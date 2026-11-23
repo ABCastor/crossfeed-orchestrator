@@ -87,6 +87,7 @@ def quota_price(percent, weekly_capacity, pace, *, window_minutes=10080):
 # brief calls for 80–85% on a typical routine job; use its midpoint and reuse
 # the replay's weak benchmark prior and difficulty offsets.
 TYPICAL_SUCCESS = .825
+LIVE_PRICE_BASIS = "subscription-opportunity/v1"
 
 
 def success_prior(grade, difficulty="ordinary"):
