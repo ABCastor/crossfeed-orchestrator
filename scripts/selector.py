@@ -12,6 +12,7 @@ import importlib
 import json
 import math
 import os
+import random
 import statistics
 from pathlib import Path
 import re
@@ -25,12 +26,13 @@ try:
     import go_quota_tariffs
     import rating
     import rating_log
+    import rating_explore
     from rating_replay import price as routing_price
     from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
-    from scripts import funding, go_quota_tariffs, rating, rating_log
+    from scripts import funding, go_quota_tariffs, rating, rating_explore, rating_log
     from scripts.rating_replay import price as routing_price
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
@@ -681,7 +683,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   target: tuple[str, str] | None = None, data_class: str | None = None,
                   prompt: str | None = None, value_mode: str = "best-value",
                   persist_receipts: bool = True, collect_eligible: bool = False,
-                  rating_stakes: str | None = None) -> dict:
+                  rating_stakes: str | None = None, no_explore: bool = False,
+                  explore_seed: int | None = None) -> dict:
     """Rank eligible options; read-only previews do not refresh or emit receipts."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -922,9 +925,23 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                              and not (item.get("pro_fallback") or item.get("hard_reasoning_opus")))]
     if not scored:
         raise fleet.FleetError("no eligible selector option: " + "; ".join(rejected))
+    exploration_cap = _number(policy.get("exploration_cap", rating_explore.DEFAULT_EXPLORATION_CAP))
+    if exploration_cap is None or not 0 <= exploration_cap <= 1:
+        raise fleet.FleetError("selector exploration_cap must be in [0, 1]")
+    try:
+        counts = rating_explore.checked_counts(state_dir)
+    except OSError:
+        counts = {}
+        no_explore = True
     for item in scored:
         item["estimated_price"] = routing_price(item)
-        item["p_success"] = item["quality"]  # Current grade is a proxy, not a calibrated pass rate.
+        key = rating_explore.route_key(item)
+        passed, failed = (counts.get((key, verdict), 0) for verdict in ("pass", "fail"))
+        alpha, beta = rating_explore.posterior(item["quality"], passed, failed)
+        item["posterior"] = (alpha, beta)
+        item["checked_passes"], item["checked_failures"] = passed, failed
+        # Before any checked outcomes, the grade is a proxy, not a measured pass rate.
+        item["p_success"] = alpha / (alpha + beta) if passed or failed else item["quality"]
     typical = None
     try:
         typical = rating_log.typical_price(state_dir)
@@ -961,17 +978,30 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if target is not None and any(option.get("pro_fallback") for option in scored):
         # An exact ChatGPT Pro request follows its established effort fallback.
         scored.sort(key=lambda option: option.get("worker_level") != "xhigh")
-    choice = scored[0]
-    exploring = False
+    mean_pick = choice = scored[0]
+    sample_p = sample_cost = None
+    if not no_explore and target is None and stakes != "irreversible" and exploration_cap:
+        try:
+            allowed = rating_explore.budget_allows(rating_explore.read_totals(state_dir), exploration_cap)
+        except (OSError, ValueError):
+            allowed = False
+        if allowed:
+            choice, sample_p, sample_cost = rating_explore.sample_choice(
+                preferred or scored, failure_price, random.Random(explore_seed))
+    exploring = choice is not mean_pick
+    sampling = {"cap": exploration_cap, "mean_pick": rating_explore.pick_summary(mean_pick),
+                "sampled_pick": (dict(rating_explore.pick_summary(choice), sampled_p_success=sample_p,
+                                      sampled_expected_cost=sample_cost) if sample_p is not None else None)}
     for item in scored:
-        item["selection_probability"] = float(item is choice)
+        # One Thompson draw is not an estimate of its selection probability.
+        item["selection_probability"] = None if sample_p is not None else float(item is choice)
     receipt = state_dir / "selections" / (str(uuid.uuid4()) + ".json") if persist_receipts else None
     top3 = scored[:3]
     result = {"schema": "fleet-selection/v1", "choice": choice, "top3": top3,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
               "unknown_options": len(unknown_options),
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
-              "value_mode": value_mode, "rating_stakes": rating_stakes,
+              "value_mode": value_mode, "rating_stakes": rating_stakes, "rating_sampling": sampling,
               "typical_price": typical, "typical_price_basis": typical_basis, "failure_price": failure_price,
               "quality_floor": role_floor, "hard_reasoning_preference": hard_reasoning_preference,
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},

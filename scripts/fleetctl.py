@@ -3285,7 +3285,7 @@ def select_option(
     target: tuple[str, str] | None = None,
     data_class: str | None = None, prompt: str | None = None,
     value_mode: str = "best-value", collect_eligible: bool = True,
-    rating_stakes: str | None = None,
+    rating_stakes: str | None = None, no_explore: bool = False, explore_seed: int | None = None,
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -3297,6 +3297,7 @@ def select_option(
         fleet=types.SimpleNamespace(**globals()),
         target=target, data_class=data_class, prompt=prompt, value_mode=value_mode,
         collect_eligible=collect_eligible, rating_stakes=rating_stakes,
+        no_explore=no_explore, explore_seed=explore_seed,
     )
 
 
@@ -3391,6 +3392,34 @@ def _record_rating_dispatch(log, state_dir, record, labels, forecast, index, opt
                                     sort_keys=True, allow_nan=False) + "\n")
 
 
+def _book_rating_trial(selection, state_dir, task_id, run_id):
+    """Serialize dispatch starts, rechecking the global cap after any concurrent preview."""
+    trial = selection.get("rating_sampling")
+    if trial is None:  # Old receipts and direct/fixed callers have no draw.
+        return selection["choice"]
+    try:
+        from . import rating_explore
+    except ImportError:
+        import rating_explore
+    mean = selection["top3"][0]
+    proposed = selection["choice"]
+    log = _rating_log()
+    try:
+        with ledger_lock(state_dir):
+            totals = rating_explore.read_totals(state_dir)
+            applied = selection["exploration"] and rating_explore.budget_allows(totals, trial["cap"])
+            routed = proposed if applied else mean
+            row = {"schema": rating_explore.TRIAL, "run_id": run_id, "task_id": task_id,
+                   "recorded_at": iso(), "role": selection["role"], "rating_stakes": selection["rating_stakes"],
+                   **trial, "routed_pick": rating_explore.pick_summary(routed), "applied": applied,
+                   "dispatches": totals[0] + 1, "non_greedy_dispatches": totals[1] + int(applied)}
+            with (state_dir / log.LEDGER).open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+            return routed
+    except (OSError, ValueError):
+        return mean  # Never explore without recording the draw and the cap reservation.
+
+
 def dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, state_dir: Path,
                        prompt: str, *, response: dict[str, Any] | None = None,
                        roster: dict[str, Any] | None = None) -> int:
@@ -3422,19 +3451,23 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
             "dispatch", getattr(args, "mode", None) or "read-only", str(directory), prompt,
             [str(requested_last)] if requested_last else [])):
         return vault_guard.REFUSED
-    options = [selection["choice"]]
-    seen = {selection["choice"]["selection_file"]}
+    trial_task_id = getattr(args, "task_id", None) or str(uuid.uuid4())
+    first_dispatch_id = str(uuid.uuid4())
+    chosen = selection["choice"]
+    if not args.dry_run:
+        chosen = _book_rating_trial(selection, state_dir, trial_task_id, first_dispatch_id)
+    options = [chosen]
+    seen = {chosen["selection_file"]}
     # BR-CASH-004: one bounded attempt; the explicit legacy Gemini route keeps its old dispatch rules.
-    for option in [] if funding.requires_reservation(selection["choice"]) else selection["top3"][:3]:
+    for option in [] if funding.requires_reservation(chosen) else selection["top3"][:3]:
         if funding.requires_reservation(option):
             continue
-        if (selection["choice"].get("worker_level") == "pro" or selection["choice"].get("pro_fallback")) and (
+        if (chosen.get("worker_level") == "pro" or chosen.get("pro_fallback")) and (
                 option.get("harness") == "chatgpt-chat" and option.get("worker_level") not in {"pro", "xhigh", "high"}):
             continue
         if option["selection_file"] not in seen:
             options.append(option)
             seen.add(option["selection_file"])
-    trial_task_id = getattr(args, "task_id", None) or str(uuid.uuid4())
     typical = None
     for index, option in enumerate(options):
         # BR-CASH-003: an older or separately prepared receipt cannot relabel today's input.
@@ -3442,7 +3475,7 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
                 getattr(args, "data_class", None)):
             print("fleetctl: paid selection material class no longer matches the dispatch", file=sys.stderr)
             return 5
-        dispatch_id = str(uuid.uuid4())
+        dispatch_id = first_dispatch_id if index == 0 else str(uuid.uuid4())
         attempt_dir = state_dir.resolve() / "dispatches" / dispatch_id
         last = attempt_dir / "answer.txt"
         identity = Path(str(last) + ".crossfeed.json")
@@ -3457,6 +3490,8 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
         notice = (f"fleetctl: selected pool={option['pool']} model={option['model_key']} "
                   f"level={option['level']} selection={option['selection_file']} receipt={receipt} "
                   f"model_receipt={identity} diagnostics={attempt_dir / 'stderr.log'}")
+        if index == 0 and selection.get("exploration") and option is selection["choice"]:
+            notice += " exploring"
         cash = option.get("cash") or funding.quote("unknown")
         print(f"{notice} | cash {funding.summary(cash)}", file=sys.stderr, flush=True)
         if args.dry_run:
@@ -5954,6 +5989,8 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--dry-run", action="store_true")
     dispatch.add_argument("--no-refresh", action="store_true", help=refresh_help)
     for command in (select, dispatch):
+        command.add_argument("--no-explore", action="store_true", help="use the lowest mean expected cost")
+        command.add_argument("--explore-seed", type=int, help="seed the exploration draw for replay/testing")
         command.add_argument("--task-id", type=_trial_task_id, help="opaque ID shared by paired attempts")
         command.add_argument("--work-kind", choices=["coding", "review", "research", "writing"])
         command.add_argument("--difficulty", choices=["easy", "ordinary", "hard"])
@@ -6542,7 +6579,7 @@ def main() -> int:
                 mode=args.mode, modality=getattr(args, "modality", "text"), allow=args.allow,
                 lead=resolve_lead_pool(roster, args.lead), data_class=args.data_class,
                 prompt=prompt if args.command == "dispatch" else None, value_mode=args.value_mode,
-                rating_stakes=args.rating_stakes,
+                rating_stakes=args.rating_stakes, no_explore=args.no_explore, explore_seed=args.explore_seed,
             )
             if args.command == "dispatch":
                 return dispatch_selection(selection, args, state_dir, prompt, roster=roster)
