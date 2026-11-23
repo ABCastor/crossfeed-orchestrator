@@ -718,13 +718,14 @@ function boot(document, window) {
   }
   function showLevel(pool, level, means) {
     const row = document.getElementById(`pool-${pool}`);
-    const form = row?.querySelector('.lv');
-    if (!form) return;
+    const policy = workbench ? document.getElementById(`policy-${pool}`) || row : row;
+    const form = policy?.querySelector('.lv');
+    if (!row || !form) return;
     const toggle = row.querySelector('.wb-pool-switch button');
     if (toggle) {
       const on = level !== 'off';
       showSwitch(toggle, on, on ? 'off' : 'normal');
-      const caption = row.querySelector('.wb-level');
+      const caption = policy.querySelector('.wb-level');
       if (caption) caption.textContent = form.querySelector(`[value="${level}"]`).getAttribute('aria-label');
     }
     const stops = [...form.querySelectorAll('.stop')];
@@ -738,7 +739,7 @@ function boot(document, window) {
       button.tabIndex = selected ? 0 : -1;   // one stop in the tab order; arrows move between them
       if (selected && meaning === undefined && button.title) meaning = button.title;
     }
-    if (meaning !== undefined) row.querySelector('.means').textContent = meaning;
+    if (meaning !== undefined) policy.querySelector('.means').textContent = meaning;
   }
   function showModels(pool, on, told) {
     const pick = picks.get(pool);
@@ -1096,7 +1097,7 @@ function boot(document, window) {
       }
       return;
     }
-    const output = (submitter?.closest('.wb-model') || form.closest('.wb-pool-control'))?.querySelector('.wb-error');
+    const output = (submitter?.closest('.wb-model') || form.closest('.wb-pool-control, .wb-agy-policy'))?.querySelector('.wb-error');
     const save = async key => {
       if (output) output.textContent = '';
       if (!await saver.save(key, {url: form.action, body}) && output && !saver.pending(key)) {
