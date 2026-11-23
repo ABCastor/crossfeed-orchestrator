@@ -1046,10 +1046,13 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         scoped = strata.get(stakes, {}).get(family)
         if scoped is None and stakes == "irreversible":
             scoped = strata.get("high", {}).get(family)
-        if role in IMPORTANT_ROLES:
-            # These task families use their hard-task benchmark when present,
-            # regardless of the rerun budget. A low grade still competes.
-            scoped = strata.get("high", {}).get(family)
+        hard_grade = strata.get("high", {}).get(family)
+        bounded_cash = funding.requires_reservation(option)
+        if role in IMPORTANT_ROLES and hard_grade is not None and (
+                bounded_cash or not hard_grade.get("unknown")):
+            # Prefer a measured hard-task grade when available. An unknown
+            # hard-task cell cannot admit a bounded paid route.
+            scoped = hard_grade
         elif (stakes == "high" and not have_hard_grade and scoped is not None and scoped.get("unknown")
                 and family in strata.get("low", {})):
             # Preserve legacy high-value routing without mislabeling the fit
@@ -1061,8 +1064,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         unknown = unknown or q.get("unknown", False) or "unknown" in (row.get("flags") or [])
         opus = (prefer_opus and option["pool"] == "claude" and option["funding"] == "included"
                 and option["model_identity"] == OPUS_HARD_REASONING)
-        # BR-CASH-004: an owner floor applies to the exact task family and effort.
-        if funding.requires_reservation(option):
+        # BR-CASH-004: the operator's floor applies to the exact task family and effort.
+        if bounded_cash:
             floors = option.get("cash_quality_floors")
             floor = _number(floors.get(family)) if isinstance(floors, dict) else None
             if (unknown or q.get("imputation") is not None or floor is None
