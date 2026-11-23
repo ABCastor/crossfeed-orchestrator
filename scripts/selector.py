@@ -1048,10 +1048,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             scoped = strata.get("high", {}).get(family)
         hard_grade = strata.get("high", {}).get(family)
         bounded_cash = funding.requires_reservation(option)
-        if role in IMPORTANT_ROLES and hard_grade is not None and (
-                bounded_cash or not hard_grade.get("unknown")):
-            # Prefer a measured hard-task grade when available. An unknown
-            # hard-task cell cannot admit a bounded paid route.
+        if hard_grade is not None and ((difficulty == "hard" and not hard_grade.get("unknown"))
+                                       or (bounded_cash and role in IMPORTANT_ROLES)):
+            # Use hard fit on hard tasks even when the rerun budget is small.
+            # Bounded paid routes keep the exact hard-role quality check.
             scoped = hard_grade
         elif (stakes == "high" and not have_hard_grade and scoped is not None and scoped.get("unknown")
                 and family in strata.get("low", {})):

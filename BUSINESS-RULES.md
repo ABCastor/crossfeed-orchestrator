@@ -99,6 +99,7 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - Authority: Operator: “Most of the time, I'm going to use Opus or Fable to orchestrate, and then around it anything you want. But I certainly don't want Sonnet on high to do hard reasoning. Probably Opus should do that.”
 - Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, lead reserve, quota circuits and data policy still apply.
 - implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
+- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback`, `tests/test_expected_routing.py:ExpectedRouting.test_hard_reasoning_uses_dedicated_grades_without_an_admission_floor`.
 
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 

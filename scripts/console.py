@@ -1586,7 +1586,7 @@ def _comparison_grade(data, item, scored, role, policy):
     row = data['evidence'].get((item['model_identity'], item['level']), {})
     strata = row.get('q_by_stakes', {})
     hard_grade = strata.get('high', {}).get(family)
-    scoped = (hard_grade if role in selector.IMPORTANT_ROLES and hard_grade and not hard_grade.get('unknown')
+    scoped = (hard_grade if role == 'hard-reasoning' and hard_grade and not hard_grade.get('unknown')
               else strata.get('normal', {}).get(family))
     replayed = (scored or {}).get('q') if role == data['role'] else None
     q = replayed or (scoped if scoped is not None else row.get('q', {}).get(family) or {})
