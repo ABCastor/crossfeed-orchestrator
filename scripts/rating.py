@@ -83,6 +83,11 @@ def quota_price(percent, weekly_capacity, pace, *, window_minutes=10080):
     return number(percent / 100 * weekly_capacity * (window_minutes / 10080) * (1 + pace))
 
 
+def expected_cost(price, probability, failure_price):
+    """Cost to run the route plus the expected cost of checked failure."""
+    return None if price is None else price + (1 - probability) * failure_price
+
+
 def seed(grade):
     """Use a benchmark weakly; a benchmark fraction is not a pass forecast."""
     grade = _probability(grade)

@@ -12,7 +12,6 @@ import importlib
 import json
 import math
 import os
-import random
 import statistics
 from pathlib import Path
 import re
@@ -24,34 +23,22 @@ from typing import Any
 try:
     import funding
     import go_quota_tariffs
+    import rating
+    import rating_log
+    from rating_replay import price as routing_price
     from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
-    from scripts import funding, go_quota_tariffs
+    from scripts import funding, go_quota_tariffs, rating, rating_log
+    from scripts.rating_replay import price as routing_price
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 
 
-DEFAULTS = {"target": 90.0, "lambda0": 1.0, "mu": .001, "explore": .1,
-            "uncertainty_weight": 1.0,
-            "high_cost_cap": 1.0,
-            "stakes_weights": {"low": 1.0, "normal": 2.0, "high": 40.0}}
-# BR-SELECT-002: variety among near-equal options. Defaults are subject to operator approval.
-#   quality_band  how much estimated quality (0..1) a varied choice may give up against the
-#                 option plain scoring would pick, per stakes; 0 keeps that pick
-#   pace_weight   preference per unit of pool pace (+1 = a whole allowance about to be
-#                 destroyed unused, -1 = a whole allowance ahead of pace)
-#   recency_half_life_s  how fast a lane's recent use stops counting against it
-#   temperature   softness of the random draw over preferences (lower = more decisive)
-VARIETY = {"quality_band": {"low": .05, "normal": .03, "high": .01, "irreversible": 0.0},
-           "pace_weight": 2.0, "recency_half_life_s": 3600.0, "temperature": .5}
-# A deficit smaller than this (allowance fraction) does not outweigh another window's surplus:
-# one task at the start of a short window reads as a small deficit and must not flip the pool.
-PACE_DEFICIT_DEAD_ZONE = .05
-# Recent use is read from the tail of runs.jsonl and from in-flight dispatch receipts.
-RECENT_RUNS_TAIL_BYTES = 1 << 20
+DEFAULTS = {"target": 90.0, "lambda0": 1.0, "uncertainty_weight": 1.0}
+IMPORTANT_ROLES = frozenset({"hard-reasoning", "review", "debug", "implementation"})
 FAMILIES = {"coding-agent", "review", "debug", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
 WRAPPERS = {name: name + "-agent.sh" for name in
             ("codex", "claude", "opencode", "agy", "copilot", "openrouter", "pi")}
@@ -340,27 +327,6 @@ def _window_projection(window: dict, fleet: Any) -> tuple[float | None, dict]:
     return value, forecast
 
 
-def _claude_weekly_projection(roster: dict, runtime: dict, option: dict, fleet: Any) -> float | None:
-    pool = option["pool"]
-    if option["harness"] != "claude" or option["funding"] != "included":
-        return None
-    state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool, roster=roster,
-                                               model_key=option["model_key"])
-    if state in {"UNKNOWN", "GAUGE_ERROR", "EXHAUSTED"} or evidence.get("confidence") == "stale":
-        return None
-    weekly = []
-    for name in evidence.get("applicable_windows", []):
-        window = evidence["windows"][name]
-        if window.get("window_minutes") != 7 * 24 * 60:
-            continue
-        value, _ = _window_projection(window, fleet)
-        used = _number(window.get("used_percent"))
-        if value is None or used is None:
-            return None  # A boolean "lasts to reset" cannot prove a 20% reserve.
-        weekly.append(max(used, value))
-    return max(weekly, default=None)
-
-
 # BR-SELECT-004
 OPUS_HARD_REASONING = "claude-opus-5-5"
 ASTRA_HARD_REASONING = "gpt-6.2-astra"
@@ -480,228 +446,6 @@ def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
             "window": window, "used_percent": used, "source": profile["source"],
             "reference_usd_equivalent": reference,
             "scarcity_penalty": reference / (reference + (remaining or 0.))}
-
-
-def window_routing_pace(window: dict, fleet: Any) -> dict | None:
-    """The CodexBar pace of one window plus the signed value routing uses for it.
-
-    Without an oracle projection the value is the pace itself, (elapsed% - used%) / 100. With
-    one (a projected total at reset, or an ETA to exhaustion), the value is the same quantity
-    computed from that better estimate: elapsed fraction * (1 - projected / 100). Both are the
-    allowance the reset destroys at the expected rate (+) or the shortfall before it (-),
-    weighted by how much of the window the estimate has seen.
-    """
-    pace = fleet.window_pace(window)
-    if not pace:
-        return None
-    elapsed = pace["elapsed_percent"] / 100
-    used = pace["used_percent"]
-    projected = _number(window.get("projected_used_percent_at_reset"))
-    if projected is None:
-        eta, left = _number(window.get("eta_seconds")), _number(window.get("seconds_to_reset"))
-        if eta is not None and eta > 0 and left is not None:
-            projected = used + (100 - used) * left / eta
-    if projected is None:
-        value, projected_basis = pace["delta_percent"] / 100, False
-    else:
-        value, projected_basis = elapsed * (1 - max(projected, used) / 100), True
-    return dict(pace, value=max(-1.0, min(1.0, value)), projected=projected_basis)
-
-
-# BR-SELECT-002
-def pool_pace(roster: dict, runtime: dict, pool: str, fleet: Any, *,
-              model_key: str | None = None) -> dict:
-    """One signed pace for a pool, in allowance fractions: + surplus, - deficit.
-
-    A task spends from every applicable window at once, so any window running out before its
-    reset makes the pool one to avoid: the worst deficit is the pool's pace. Otherwise the
-    largest surplus is, since that is the allowance the next reset destroys. Deficits within
-    PACE_DEFICIT_DEAD_ZONE count as on pace. Unknown, stale or unlimited pools are neutral (0).
-    """
-    if fleet.pool_has_no_known_limit(roster, pool):
-        return {"value": 0.0, "basis": "none-known", "window": None}
-    state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
-                                               roster=roster, model_key=model_key)
-    if state in {"GAUGE_ERROR", "UNKNOWN"} or evidence.get("gauge_error"):
-        return {"value": 0.0, "basis": "unknown", "window": None}
-    windows = evidence.get("windows") or {}
-    applicable = evidence.get("applicable_windows", windows)
-    readings = [(name, window_routing_pace(window, fleet)) for name, window in windows.items()
-                if name in applicable]
-    readings = [(name, pace) for name, pace in readings if pace]
-    if not readings:
-        return {"value": 0.0, "basis": "unknown", "window": None}
-    deficits = [(name, pace) for name, pace in readings if pace["value"] <= -PACE_DEFICIT_DEAD_ZONE]
-    if deficits:
-        name, pace = min(deficits, key=lambda row: row[1]["value"])
-        value = pace["value"]
-    else:
-        name, pace = max(readings, key=lambda row: row[1]["value"])
-        value = max(0.0, pace["value"])
-    return {"value": round(value, 4), "basis": "projection" if pace["projected"] else "window_pace",
-            "window": name, "status": pace["status"], "words": pace["words"]}
-
-
-# BR-SELECT-002
-def recent_use(state_dir: Path, fleet: Any, half_life_s: float, now: Any = None) -> dict:
-    """{(pool, model_key): decayed count of recent runs}, finished or still in flight.
-
-    Finished runs come from the wrapper ledger (every route, dispatched or not); runs still
-    in flight from dispatch receipts, which exist from launch, so a parallel burst sees its own
-    earlier picks. One dispatch counts once. Weight halves every `half_life_s`.
-    """
-    now = now or fleet.utc_now()
-    horizon = 8 * half_life_s
-    counts: dict = {}
-    seen: set = set()
-
-    def add(pool: Any, model: Any, started: Any, dispatch: Any) -> None:
-        if not pool or not model or not started:
-            return
-        if dispatch:
-            if dispatch in seen:
-                return
-            seen.add(dispatch)
-        try:
-            age = (now - fleet.parse_iso(str(started))).total_seconds()
-        except (TypeError, ValueError):
-            return
-        if 0 <= age <= horizon:
-            key = (str(pool), str(model))
-            counts[key] = counts.get(key, 0.0) + 0.5 ** (age / half_life_s)
-
-    dispatches = Path(state_dir) / "dispatches"
-    try:
-        entries = list(os.scandir(dispatches))
-    except OSError:
-        entries = []
-    cutoff = now.timestamp() - horizon
-    for entry in entries:
-        try:
-            if not entry.is_dir() or entry.stat().st_mtime < cutoff:
-                continue
-            record = json.loads((Path(entry.path) / "dispatch.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(record, dict):
-            add(record.get("pool"), record.get("selected_model"), record.get("started_at"),
-                record.get("dispatch_id"))
-    path = Path(state_dir) / "runs.jsonl"
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - RECENT_RUNS_TAIL_BYTES))
-            lines = handle.read().splitlines()
-        if size > RECENT_RUNS_TAIL_BYTES:
-            lines = lines[1:]   # the first line of a tail is usually cut
-    except OSError:
-        lines = []
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(record, dict) and record.get("schema") == "crossfeed-model-run/v1":
-            add(record.get("quota_pool"), record.get("selected_model"), record.get("started_at"),
-                record.get("dispatch_id"))
-    return counts
-
-
-def _variety_policy(policy: dict, fleet: Any) -> dict:
-    raw = policy.get("variety", {})
-    if raw is False:
-        raw = {"quality_band": 0.0}
-    if not isinstance(raw, dict):
-        raise fleet.FleetError("selector variety must be an object or false")
-    merged = dict(VARIETY, **{key: value for key, value in raw.items() if key != "quality_band"})
-    band = raw.get("quality_band", VARIETY["quality_band"])
-    band = {stakes: band for stakes in VARIETY["quality_band"]} if _number(band) is not None else (
-        dict(VARIETY["quality_band"], **band) if isinstance(band, dict) else None)
-    if band is None or any(_number(value) is None or not 0 <= value <= 1 for value in band.values()):
-        raise fleet.FleetError("selector variety quality_band must be in [0, 1]")
-    merged["quality_band"] = band
-    for key in ("pace_weight", "recency_half_life_s", "temperature"):
-        value = _number(merged.get(key))
-        if value is None or value < 0 or (key != "pace_weight" and value == 0):
-            raise fleet.FleetError(f"selector variety {key} must be positive")
-        merged[key] = value
-    return merged
-
-
-# BR-SELECT-002
-def _vary(scored: list, greedy: dict, stakes: str, weights: dict, variety: dict,
-          pace_of: Any, recency_of: Any) -> tuple[list, list]:
-    """(candidates, probabilities): the lanes a varied choice may take, and how likely each is.
-
-    Candidates are measured options within the quality band of the option plain scoring picked,
-    on both estimated quality and score, so quota price and latency still count. Hard gates ran
-    before scoring, so nothing here can admit an option. One option per lane, its best-scored
-    level. Preference is pace (surplus favoured, deficit avoided) minus decayed recent use, minus
-    how far behind the scored pick the option is (0 to 1 across the band); the draw is a softmax
-    over preference, so every candidate keeps a chance and none is certain.
-    """
-    band = variety["quality_band"].get(stakes, 0.0)
-    candidates = [greedy]
-    if band > 0 and not greedy["q"]["unknown"]:
-        lanes = {(greedy["pool"], greedy["model_key"])}
-        for item in scored:
-            lane = (item["pool"], item["model_key"])
-            if (lane in lanes or item["q"]["unknown"] or item.get("pro_fallback")
-                    or item["quality"] < greedy["quality"] - band
-                    or item["score"] < greedy["score"] - weights.get(stakes, 1.0) * band):
-                continue
-            lanes.add(lane)
-            candidates.append(item)
-    if len(candidates) == 1:
-        return candidates, [1.0]
-    preferences = []
-    recency = recency_of()
-    width = weights.get(stakes, 1.0) * band
-    for item in candidates:
-        pace = pace_of(item["pool"], item["model_key"])
-        used = recency.get((item["pool"], item["model_key"]), 0.0)
-        # Scoring's own verdict stays a tilt: 0 for its pick, -1 at the edge of the band.
-        behind = (item["score"] - greedy["score"]) / width
-        preference = variety["pace_weight"] * pace["value"] - used + behind
-        item["variety"] = {"pace": pace, "recent_use": round(used, 4), "score_behind": round(behind, 4),
-                           "preference": round(preference, 4)}
-        preferences.append(preference)
-    top = max(preferences)
-    raw = [math.exp((value - top) / variety["temperature"]) for value in preferences]
-    probabilities = [value / sum(raw) for value in raw]
-    for item, probability in zip(candidates, probabilities):
-        item["variety"]["probability"] = round(probability, 6)
-    return candidates, probabilities
-
-
-# BR-CASH-004
-def _cash_band(scored, greedy, stakes, weights, variety, pace_of):
-    """Compare cash only among measured peers without replacing the quota/latency score."""
-    if stakes == "irreversible" or greedy["q"]["unknown"] or not any(map(funding.requires_reservation, scored)):
-        return scored, None
-    band = variety["quality_band"].get(stakes, 0)
-    peers = [item for item in scored if not item["q"]["unknown"] and not item.get("pro_fallback")
-             and item["quality"] >= greedy["quality"] - band
-             and item["score"] >= greedy["score"] - weights[stakes] * band]
-    if not any(map(funding.requires_reservation, peers)):
-        return scored, None  # Leave today's nonmetered variety and tie-breaks alone.
-    expiring = [item for item in peers if item["funding"] == "included"
-                and pace_of(item["pool"], item["model_key"])["value"] > 0]
-    if expiring:
-        return expiring, "expiring-included-quota"
-
-    def marginal(item):
-        cash = item["cash"]
-        estimate = cash["estimate_usd"]
-        return estimate if estimate is not None else cash["worst_case_usd"]
-
-    known = [(marginal(item), item) for item in peers if marginal(item) is not None]
-    if not known:
-        return scored, None
-    cheapest = min(value for value, _ in known)
-    preferred = [item for value, item in known if value == cheapest]
-    return preferred, "lower-marginal-cash" if len(preferred) < len(peers) else None
 
 
 def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
@@ -928,45 +672,6 @@ def parse_allow(value: str | Path | None, fleet: Any) -> list[str] | None:
     return entries
 
 
-# BR-SELECT-003
-EFFORT_MARGIN = .05
-
-
-def _efficient_efforts(scored):
-    """Choose one effort per route before comparing quota/latency across routes."""
-    groups = {}
-    for item in scored:
-        if item["funding"] in {"included", "verified-free"} and item["cost"].get("effort_units"):
-            key = item["pool"], item["harness"], item["model_key"]
-            groups.setdefault(key, []).append(item)
-    dropped, decisions = set(), []
-    for (pool, harness, model), options in groups.items():
-        if len(options) < 2:
-            continue
-        measured = [o for o in options if not o["q"]["unknown"]]
-        eligible = measured or options
-        usd = all((o["cost"].get("estimated_usd") or 0) > 0 and
-                  ((o["cost"]["effort_estimate"].get("price_1m") or {}).get("out") or 0) > 0 for o in options)
-        key = "estimated_usd" if usd else "effort_units"
-
-        def cost(item):
-            return item["cost"][key]
-
-        cheapest = min(eligible, key=lambda o: (cost(o), -o["quality"], o["level"]))
-        base_grade, base_cost = cheapest["quality"], cost(cheapest)
-        hurdle = (base_grade + EFFORT_MARGIN) / base_cost
-        qualified = [o for o in eligible if o is cheapest or (
-            measured and cost(o) > base_cost and o["quality"] - base_grade >= hurdle * (cost(o) - base_cost))]
-        chosen = max(qualified, key=lambda o: (o["quality"] / cost(o), -cost(o)))
-        decisions.append({"pool": pool, "harness": harness, "model_key": model, "chosen": chosen["level"],
-                          "cost_basis": key, "baseline": cheapest["level"], "marginal_hurdle": hurdle,
-                          "levels": [{"level": o["level"], "grade": None if o["q"]["unknown"] else o["quality"],
-                                      "cost": cost(o), "qualifies": o in qualified}
-                                     for o in sorted(options, key=cost)]})
-        dropped.update(id(o) for o in options if o is not chosen)
-    return [o for o in scored if id(o) not in dropped], decisions
-
-
 # BR-SELECT-002, BR-SELECT-003, BR-SELECT-004
 def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   stakes: str = "normal", family: str | None = None,
@@ -975,7 +680,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   lead: str | None = None, fleet: Any = None,
                   target: tuple[str, str] | None = None, data_class: str | None = None,
                   prompt: str | None = None, value_mode: str = "best-value",
-                  persist_receipts: bool = True, collect_eligible: bool = False) -> dict:
+                  persist_receipts: bool = True, collect_eligible: bool = False,
+                  rating_stakes: str | None = None) -> dict:
     """Rank eligible options; read-only previews do not refresh or emit receipts."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -984,7 +690,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     policy = roster.get("policy", {}).get("selector", {})
     if value_mode not in {"best-value", "absolute-best"}:
         raise fleet.FleetError(f"unknown value mode: {value_mode}")
-    absolute = value_mode == "absolute-best"
+    rating_stakes = rating_stakes or ("critical" if value_mode == "absolute-best" else
+                                     "important" if role in IMPORTANT_ROLES else "routine")
+    if rating_stakes not in rating.STAKES:
+        raise fleet.FleetError(f"unknown rating stakes: {rating_stakes}")
     floors = policy.get("quality_floors_by_role", {})
     if not isinstance(floors, dict):
         raise fleet.FleetError("quality_floors_by_role must be a role-to-grade map")
@@ -1005,7 +714,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     prefer_opus = policy.get("prefer_opus_hard_reasoning", False)
     if not isinstance(prefer_opus, bool):
         raise fleet.FleetError("prefer_opus_hard_reasoning must be a boolean")
-    hard_preference = prefer_opus and not absolute and role == "hard-reasoning"
+    hard_preference = prefer_opus and role == "hard-reasoning"
     prefer_opus = hard_preference and family == "reasoning" and stakes != "irreversible"
     opus_refusal = _opus_quota_refusal(roster, runtime, fleet) if prefer_opus else None
     allow_list = parse_allow(allow, fleet)
@@ -1013,7 +722,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     options, rejected = enumerate_options(roster, runtime, role, mode=mode, modality=modality,
                                           exclude_lineage=exclude_lineage, fleet=fleet, explicit_pools=explicit_pools,
                                           data_class=data_class, prompt=prompt)
-    if absolute or entitled_only:
+    if entitled_only:
         for option in options:
             if option["funding"] not in {"included", "verified-free"}:
                 rejected.append(f"{option['model_key']}/{option['level']}: value policy permits entitlement only")
@@ -1061,7 +770,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         retained = []
         for option in options:
             model = option["model_identity"]
-            reason = ("Sonnet excluded from best-value hard reasoning" if model.startswith("claude-sonnet-") else
+            reason = ("Sonnet excluded from hard reasoning" if model.startswith("claude-sonnet-") else
                       opus_refusal if option["pool"] == "claude" and model == OPUS_HARD_REASONING else None)
             if reason:
                 rejected.append(f"{option['model_key']}/{option['level']}: {reason}")
@@ -1098,12 +807,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         return row
     pool_cash = fleet.cash_by_pool(roster, state_dir)
     scored = []
-    weights = dict(DEFAULTS["stakes_weights"], **policy.get("stakes_weights", {}))
     uncertainty_weight = max(1e-9, float(policy.get("uncertainty_weight", DEFAULTS["uncertainty_weight"])))
-    mu = float(policy.get("mu", DEFAULTS["mu"])) * (0 if stakes == "irreversible" else .5 if stakes == "high" else 1)
-    high_cost_cap = _number(policy.get("high_cost_cap", DEFAULTS["high_cost_cap"]))
-    if high_cost_cap is None or high_cost_cap < 0:
-        raise fleet.FleetError("high_cost_cap must be finite and nonnegative")
     pool_costs = {}
     for option in options:
         usd, _ = _cost(_planning_row(evidence_for(option)), None)
@@ -1143,9 +847,6 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             rejected.append(f"{option['model_key']}/{option['level']}: {family} grade {grade} "
                             f"does not clear {role} floor {role_floor:.3f}")
             continue
-        if absolute and unknown:
-            rejected.append(f"{option['model_key']}/{option['level']}: quality unknown; absolute-best needs a grade")
-            continue
         # BR-CASH-004: an owner floor applies to the exact task family and effort.
         if funding.requires_reservation(option):
             floors = option.get("cash_quality_floors")
@@ -1164,24 +865,17 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         pool_price = _pool_price(roster, runtime, option["pool"], policy, fleet,
                                  model_key=option["model_key"])
         cost, cost_flags = _task_cost(roster, option, row, pool_price, medians.get(option["pool"]))
-        price = pool_price["lambda"]
         latency = _number(row.get("latency_by_stakes", {}).get(
             stakes, row.get("effort_estimate", {}).get("latency_s", row.get("latency_s"))))
         telemetry = row.get("source_telemetry", {})
         source = telemetry.get(option["pool"] + "/" + option["harness"], telemetry.get(option["pool"], {}))
         if _number(source.get("latency_s")) is not None:
             latency = _number(source["latency_s"])
-        penalty = price * cost["penalty_percent"]
         capacity_key = option["pool"], option["model_key"]
         if capacity_key not in capacities:
             capacities[capacity_key] = (_capacity_headroom(roster, runtime, *capacity_key, capacity_reference, fleet)
                                         if option["funding"] == "included" else None)
         capacity = capacities[capacity_key]
-        if capacity is not None:
-            penalty += capacity["scarcity_penalty"]
-        if stakes == "high":
-            penalty = min(penalty, high_cost_cap)
-        score = quality if absolute or stakes == "irreversible" else weights[stakes] * quality - penalty - mu * (latency or 0)
         cash = option.get("cash") or funding.quote(option["funding"])
         if funding.legacy_gemini(option["pool"], option["harness"]):
             cash = pool_cash[option["pool"]]
@@ -1196,14 +890,14 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         scored.append(dict(option, cash=cash, quality=quality, quality_basis=q.get("basis"),
                            **({"hard_reasoning_opus": True, "floor_exception": below_floor} if opus else {}),
                            q={"mean": mean, "sd": sd, "unknown": unknown},
-                           score=score, cost=cost, latency_s=latency, mu=mu, pool_price=pool_price,
+                           cost=cost, latency_s=latency, pool_price=pool_price,
                            **({"capacity": capacity} if capacity is not None else {}),
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
     if any(o.get("hard_reasoning_opus") and not o["floor_exception"] for o in scored):
         scored = [o for o in scored if not o.get("floor_exception")]
     # Apply the lowest enabled spend dial after admission and quality, not as
-    # a score tiebreak. A low lane is not eligible for variety or dispatch retry
+    # a score tiebreak. A low lane is not eligible for exploration or dispatch retry
     # while any normal subscription candidate still clears the floor.
     ordinary_subscription = any(item["funding"] == "included" and item.get("spend_level") != "low"
                                 for item in scored)
@@ -1214,11 +908,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             reason = "no configured role floor" if role_floor is None else "another subscription clears the role floor"
             rejected.append(f"{item['model_key']}/{item['level']}: low spend fallback withheld; {reason}")
             scored.remove(item)
-    # Keep routes after live admission/floor gates, before ranking-only effort pruning.
     eligible = list(scored) if collect_eligible else None
-    effort_decisions = []
-    if not absolute and stakes != "irreversible":
-        scored, effort_decisions = _efficient_efforts(scored)
     # Missing cells are not a cheaper substitute for measured equal-mean cells.
     # This dominance rule matters even when their price difference exceeds one
     # uncertainty penalty; the raw formula alone cannot enforce that promise.
@@ -1230,16 +920,30 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             rejected.append(f"{item['model_key']}/{item['level']}: unknown cell dominated by measured equal-mean option")
     scored = [item for item in scored if not (item["q"]["unknown"] and item["q"]["mean"] in measured_means
                                              and not (item.get("pro_fallback") or item.get("hard_reasoning_opus")))]
-    scored.sort(key=lambda item: (-item["score"], -item["quality"], item["q"]["unknown"], item["q"]["sd"],
-                                  (item['cost']['estimated_usd'] if not absolute and stakes != 'irreversible'
-                                   and 'source_price_1m' in item and item['cost']['estimated_usd'] is not None else math.inf),
-                                  item["pool"], item["model_key"], item["level"]))
     if not scored:
         raise fleet.FleetError("no eligible selector option: " + "; ".join(rejected))
-    explore = float(policy.get("explore", DEFAULTS["explore"])) if stakes == "low" and unknown_options else 0.0
-    if not math.isfinite(explore) or not 0 <= explore <= 1:
-        raise fleet.FleetError("explore must be in [0, 1]")
-    claude_preference = False
+    for item in scored:
+        item["estimated_price"] = routing_price(item)
+        item["p_success"] = item["quality"]  # Current grade is a proxy, not a calibrated pass rate.
+    typical = None
+    try:
+        typical = rating_log.typical_price(state_dir)
+    except OSError:
+        pass  # A history read failure should not block dispatch.
+    typical_basis = "prior_dispatch_median"
+    if typical is None or typical <= 0:
+        positive = [item["estimated_price"] for item in scored if (item["estimated_price"] or 0) > 0]
+        typical = statistics.median(positive) if positive else None
+        typical_basis = "eligible_price_median" if typical is not None else "unavailable"
+    failure_price = rating.STAKES[rating_stakes] * (typical or 0)
+    for item in scored:
+        expected = rating.expected_cost(item["estimated_price"], item["p_success"], failure_price)
+        item["expected_cost"] = expected
+        # Historical receipts sort score descending; expected cost itself sorts ascending.
+        item["score"] = -expected if expected is not None else item["p_success"]
+    scored.sort(key=lambda item: (item["expected_cost"] is None, -item["score"], -item["p_success"],
+                                  item["q"]["unknown"], item["q"]["sd"],
+                                  item["pool"], item["model_key"], item["level"]))
     hard_reasoning_preference = None
     preferred = []
     if prefer_opus:
@@ -1254,77 +958,22 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         if preferred:
             ids = {id(o) for o in preferred}
             scored = preferred + [o for o in scored if id(o) not in ids]
-            explore = 0.0
-    if not prefer_opus and not absolute and role_floor is not None and target is None:
-        preferred = []
-        for option in scored:
-            projection = _claude_weekly_projection(roster, runtime, option, fleet)
-            if projection is not None:
-                option["claude_weekly_projected_percent"] = projection
-                if projection < 80:
-                    preferred.append(option)
-        if preferred:
-            claude_preference = True
-            preferred_ids = {id(option) for option in preferred}
-            scored = preferred + [option for option in scored if id(option) not in preferred_ids]
-    greedy = scored[0]
-    if not absolute and target is not None and any(option.get("pro_fallback") for option in scored):
-        scored.sort(key=lambda option: (option.get("worker_level") != "xhigh", -option["score"]))
-        greedy = scored[0]
-        explore = 0.0
-    variety = _variety_policy(policy, fleet)
-    cash_preference = None
-    if target is not None or absolute:
-        candidates, probabilities = [greedy], [1.0]
-    else:
-        paces: dict = {}
-        recent: list = []
-
-        def pace_of(pool, model_key):
-            if (pool, model_key) not in paces:
-                paces[(pool, model_key)] = pool_pace(roster, runtime, pool, fleet, model_key=model_key)
-            return paces[(pool, model_key)]
-
-        def recency_of():
-            if not recent:
-                recent.append(recent_use(state_dir, fleet, variety["recency_half_life_s"]))
-            return recent[0]
-
-        if not claude_preference and not preferred:
-            preferred, cash_preference = _cash_band(scored, greedy, stakes, weights, variety, pace_of)
-        candidates, probabilities = _vary(preferred, preferred[0], stakes, weights, variety, pace_of, recency_of)
-    exploring = bool(explore and random.random() < explore)
-    if exploring:
-        choice = random.choice(unknown_options)
-    elif len(candidates) == 1:
-        choice = candidates[0]
-    else:
-        draw, choice = random.random(), candidates[-1]
-        for item, probability in zip(candidates, probabilities):
-            draw -= probability
-            if draw < 0:
-                choice = item
-                break
-    varied = {id(item): probability for item, probability in zip(candidates, probabilities)}
-    for item in scored + unknown_options:
-        item["selection_probability"] = (1 - explore) * varied.get(id(item), 0.0) + (
-            explore / len(unknown_options) if item["q"]["unknown"] and unknown_options else 0)
+    if target is not None and any(option.get("pro_fallback") for option in scored):
+        # An exact ChatGPT Pro request follows its established effort fallback.
+        scored.sort(key=lambda option: option.get("worker_level") != "xhigh")
+    choice = scored[0]
+    exploring = False
+    for item in scored:
+        item["selection_probability"] = float(item is choice)
     receipt = state_dir / "selections" / (str(uuid.uuid4()) + ".json") if persist_receipts else None
     top3 = scored[:3]
     result = {"schema": "fleet-selection/v1", "choice": choice, "top3": top3,
               "selection_probability": choice["selection_probability"], "exploration": exploring,
-              "explore": explore, "unknown_options": len(unknown_options),
+              "unknown_options": len(unknown_options),
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
-              "cash_preference": cash_preference, "value_mode": value_mode,
-              "quality_floor": role_floor, "claude_preference": claude_preference,
-              "effort_decisions": effort_decisions, "hard_reasoning_preference": hard_reasoning_preference,
-              "variety": {"quality_band": variety["quality_band"].get(stakes, 0.0),
-                          "pace_weight": variety["pace_weight"],
-                          "recency_half_life_s": variety["recency_half_life_s"],
-                          "temperature": variety["temperature"],
-                          "candidates": [{"pool": item["pool"], "model_key": item["model_key"],
-                                          "level": item["level"], **item.get("variety", {})}
-                                         for item in candidates]},
+              "value_mode": value_mode, "rating_stakes": rating_stakes,
+              "typical_price": typical, "typical_price_basis": typical_basis, "failure_price": failure_price,
+              "quality_floor": role_floor, "hard_reasoning_preference": hard_reasoning_preference,
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
               "pool_prices": prices, "pool_cash": pool_cash, "role": role, "family": family, "stakes": stakes,
               "rejected": rejected, "allow": allow_list, "selection_file": str(receipt) if receipt else None,

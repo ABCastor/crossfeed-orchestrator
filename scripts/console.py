@@ -1420,16 +1420,15 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
                 if not selection_failure(exc):
                     raise
                 memo[key] = None
-    if result.get('claude_preference') and pick and pick.get('claude_weekly_projected_percent') is not None:
-        why = 'Claude-first applies: projected weekly use is below 80%.'
-    elif value == 'absolute-best':
-        why = 'Highest eligible grade on an included or verified-free route.'
-    elif pick and pick.get('selection_probability', 1) < 1:
-        why = 'The selector may vary near-ties by quota pace and recent use.'
-    elif result.get('cash_preference'):
-        why = 'The selector favors an included route within the quality band.'
+    if pick and pick.get('expected_cost') is not None:
+        why = (f'Expected cost {pick["expected_cost"]:.3f} at '
+               f'{result.get("rating_stakes", "routine")} stakes; grade is a success proxy.')
     else:
-        why = 'Ranks first after quota and latency costs.'
+        why = 'No comparable price; falls back to available grades.'
+    if (result.get('hard_reasoning_preference') or {}).get('route') == 'opus':
+        why = 'Opus hard-reasoning preference. ' + why
+    elif (result.get('hard_reasoning_preference') or {}).get('route') == 'gpt-fallback':
+        why = 'Astra fallback when Opus is unavailable. ' + why
     if pick and runner and not pick['q']['unknown'] and not runner['q']['unknown']:
         why += f' Grade {pick["q"]["mean"]:.3f} vs {runner["q"]["mean"]:.3f}.'
     prioritized = sorted(set(refusals), key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))

@@ -3285,6 +3285,7 @@ def select_option(
     target: tuple[str, str] | None = None,
     data_class: str | None = None, prompt: str | None = None,
     value_mode: str = "best-value", collect_eligible: bool = True,
+    rating_stakes: str | None = None,
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -3295,7 +3296,7 @@ def select_option(
         exclude_lineage=exclude_lineage, mode=mode, modality=modality, allow=allow, lead=lead,
         fleet=types.SimpleNamespace(**globals()),
         target=target, data_class=data_class, prompt=prompt, value_mode=value_mode,
-        collect_eligible=collect_eligible,
+        collect_eligible=collect_eligible, rating_stakes=rating_stakes,
     )
 
 
@@ -3456,8 +3457,6 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
         notice = (f"fleetctl: selected pool={option['pool']} model={option['model_key']} "
                   f"level={option['level']} selection={option['selection_file']} receipt={receipt} "
                   f"model_receipt={identity} diagnostics={attempt_dir / 'stderr.log'}")
-        if index == 0 and selection.get("cash_preference"):
-            notice += f" preference={selection['cash_preference']}"
         cash = option.get("cash") or funding.quote("unknown")
         print(f"{notice} | cash {funding.summary(cash)}", file=sys.stderr, flush=True)
         if args.dry_run:
@@ -5959,7 +5958,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--work-kind", choices=["coding", "review", "research", "writing"])
         command.add_argument("--difficulty", choices=["easy", "ordinary", "hard"])
         command.add_argument("--rating-stakes", choices=["routine", "important", "critical"],
-                             help="shadow rating label; does not change live --stakes")
+                             help="failure stakes for expected-cost ranking; does not change --stakes admission")
 
     accept = sub.add_parser("accept", help="attach a checked verdict to a dispatch run")
     accept.add_argument("run_id", type=_trial_task_id)
@@ -6543,6 +6542,7 @@ def main() -> int:
                 mode=args.mode, modality=getattr(args, "modality", "text"), allow=args.allow,
                 lead=resolve_lead_pool(roster, args.lead), data_class=args.data_class,
                 prompt=prompt if args.command == "dispatch" else None, value_mode=args.value_mode,
+                rating_stakes=args.rating_stakes,
             )
             if args.command == "dispatch":
                 return dispatch_selection(selection, args, state_dir, prompt, roster=roster)
