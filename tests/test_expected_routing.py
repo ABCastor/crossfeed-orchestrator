@@ -42,6 +42,18 @@ class ExpectedRouting(unittest.TestCase):
         self.assertAlmostEqual(critical['choice']['expected_cost'], .250 + (1-p) * 20 * .230769)
         self.assertEqual(self.pick(rating_stakes='routine')['choice']['level'], 'low')
 
+    # BR-SELECT-004
+    def test_hard_reasoning_uses_dedicated_grades_without_an_admission_floor(self):
+        rows = []
+        for level, grade in [('low', .383), ('high', .596), ('xhigh', .809)]:
+            row = fixtures.quality_row(self.opus, level, .99 if level == 'low' else grade, family='reasoning')
+            row['q_by_stakes'] = {'high': {'reasoning': dict(row['q']['reasoning'], mean=grade)}}
+            rows.append(row)
+        self.evidence(rows)
+        result = self.pick()
+        self.assertEqual(result['choice']['level'], 'xhigh')
+        self.assertEqual(next(o for o in result['top3'] if o['level'] == 'low')['q']['mean'], .383)
+
     def test_absolute_best_is_only_a_stakes_alias(self):
         alias = self.pick(value_mode='absolute-best')
         explicit = self.pick(rating_stakes='critical')

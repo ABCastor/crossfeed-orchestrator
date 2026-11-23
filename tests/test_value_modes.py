@@ -37,7 +37,7 @@ class ValueModes(unittest.TestCase):
         self.assertGreater(weak_option["expected_cost"], result["choice"]["expected_cost"])
         self.assertEqual(self.select(allow=self.codex, value_mode="absolute-best",
                                      stakes="high")["choice"]["pool"], "codex")
-        self.assertEqual(self.select(allow=self.codex, stakes="low")["choice"]["q"]["mean"], .99)
+        self.assertEqual(self.select(allow=self.codex, stakes="low")["choice"]["q"]["mean"], .59)
         self.assertTrue(self.select(allow=self.codex, family="reasoning")["choice"]["q"]["unknown"])
 
     # BR-SELECT-003

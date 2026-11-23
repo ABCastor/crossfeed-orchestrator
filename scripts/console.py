@@ -1584,7 +1584,8 @@ def _compare_cells(option, scored, pool, roster):
 def _comparison_grade(data, item, scored, role, policy):
     family = policy.get('families_by_role', {}).get(role) or selector.FAMILY_BY_ROLE.get(role, 'coding-agent')
     row = data['evidence'].get((item['model_identity'], item['level']), {})
-    scoped = row.get('q_by_stakes', {}).get('normal', {}).get(family)
+    stratum = 'high' if role in selector.IMPORTANT_ROLES else 'normal'
+    scoped = row.get('q_by_stakes', {}).get(stratum, {}).get(family)
     replayed = (scored or {}).get('q') if role == data['role'] else None
     q = replayed or (scoped if scoped is not None else row.get('q', {}).get(family) or {})
     mean = _number(q.get('mean'))

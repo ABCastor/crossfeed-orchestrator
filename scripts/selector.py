@@ -1045,7 +1045,11 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         scoped = strata.get(stakes, {}).get(family)
         if scoped is None and stakes == "irreversible":
             scoped = strata.get("high", {}).get(family)
-        if (stakes == "high" and not have_hard_grade and scoped is not None and scoped.get("unknown")
+        if role in IMPORTANT_ROLES:
+            # These task families use their hard-task benchmark when present,
+            # regardless of the rerun budget. A low grade still competes.
+            scoped = strata.get("high", {}).get(family)
+        elif (stakes == "high" and not have_hard_grade and scoped is not None and scoped.get("unknown")
                 and family in strata.get("low", {})):
             # Preserve legacy high-value routing without mislabeling the fit
             # as a hard grade. Irreversible selection still fails closed.
