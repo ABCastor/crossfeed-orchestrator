@@ -699,14 +699,20 @@ def _level_meaning(level: str) -> str:
     return LEVEL_PLAIN[level] + " Ignore estimates still obeys actual limits."
 
 
+WALLET_LEVEL_MEANING = {"off": "Routing skips this plan.", "low": "Conserve allowance.",
+                        "normal": "Follow quota estimates.", "high": "Use allowance more freely.",
+                        "forced": "Actual caps and refusals still apply."}
+
+
 def _slider(pool: dict[str, Any], form_token: str, return_fields: str = '') -> str:
+    meaning_for = WALLET_LEVEL_MEANING.__getitem__ if return_fields else _level_meaning
     current = pool["level"]
     at = LEVELS.index(current)
     label = html.escape(pool["label"])
     stops = []
     for level in LEVELS:
         word = LEVEL_WORDS[level]
-        meaning = html.escape(_level_meaning(level))
+        meaning = html.escape(meaning_for(level))
         if level == current:
             stops.append(
                 f'<button type="submit" name="level" value="{level}" class="stop on {level}" role="radio" aria-checked="true" '
@@ -724,7 +730,7 @@ def _slider(pool: dict[str, Any], form_token: str, return_fields: str = '') -> s
         f'aria-label="How much of {label} to use" aria-describedby="means-{pool_id}">'
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
         f'{return_fields}<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
-        f'<p class="means" id="means-{pool_id}">{html.escape(_level_meaning(current))}</p>'
+        f'<p class="means" id="means-{pool_id}">{html.escape(meaning_for(current))}</p>'
         f'<span class="control-actor level-actor">{html.escape(_control_text(pool.get("control")))}</span>'
     )
 
@@ -1063,9 +1069,13 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
                    'No retention evidence' if older and not option.get('retention_reason') and not option['on'] else '')
         control = _work_switch('switch', option['on'] is True, f'Use {name}',
                                f'{key}={"off" if option["on"] else "on"}', disabled=blocked, hint_id=target)
+        identity = html.escape(f'{pool["pool"]}:{key}')
         return (f'<li class="opt wb-model" id="{target}" data-model="{html.escape(key)}" '
                 f'data-search-label="{html.escape(name)}" tabindex="-1"><div class="wb-model-name">'
-                f'{_page_link(model, name)}</div><div class="wb-model-control">{control}'
+                f'{_page_link(model, name)}' + ('<small>Older model</small>' if older and option['run_as'] else '') +
+                '</div><div class="wb-model-control">'
+                f'<button type="button" class="wb-add" data-route="{identity}" aria-label="Compare {html.escape(name)}" '
+                'aria-pressed="false" hidden>Compare</button>' + control +
                 '<span class="wb-error" role="status"></span></div></li>')
     line = _older_reason(model, option, by_key) if older else _best_for(model, pool["pool"])
     if any(lane.get("catalog_state") == "sleeping" for lane in model.get("lanes", [])):
@@ -1113,7 +1123,7 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
 
 
 def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token: str,
-            order: dict[str, Any] | None = None, *, return_fields: str = '') -> str:
+            order: dict[str, Any] | None = None, *, return_fields: str = '', policy: str = '') -> str:
     pool_id = html.escape(pool["pool"])
     label = html.escape(pool["label"])
     options = pool.get("options") or []
@@ -1125,7 +1135,7 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
         listing = ''.join(_option(by_key[o['model']], pool, o, compact=True) for o in options)
         count = len(options)
         return (f'<details class="pick" id="pick-{pool_id}" data-pool="{pool_id}"><summary class="wb-inventory">'
-                f'{count} {"model" if count == 1 else "models"}</summary>'
+                f'{count} model {"entry" if count == 1 else "entries"}</summary>{policy}'
                 + f'<form class="wb-models" method="post" action="/model">{return_fields}'
                 f'<input type="hidden" name="pool" value="{pool_id}">'
                 f'<input type="hidden" name="t" value="{html.escape(form_token)}">'
@@ -1192,7 +1202,7 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
                       "control_actor": _control_text(p.get("control")),
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
                       "gauge": _provider_gauge(p, overview) + _pro_usage(p),
-                      "wallet_gauge": _work_gauge(p, overview) + _pro_usage(p),
+                      "wallet_gauge": _work_gauge(p) + _pro_usage(p),
                       "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
     return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
@@ -1350,7 +1360,7 @@ def _archived_keys(roster: dict[str, Any]) -> set[str]:
     keys = {entry.stem for entry in archive.iterdir()} if archive.is_dir() else set()
     for records in (fleetctl.model_cards(roster), roster.get('model_evidence', {})):
         for key, record in records.items():
-            if record.get('status') in {'archived', 'retired'} or record.get('archived') is True:
+            if isinstance(record, dict) and (record.get('status') in {'archived', 'retired'} or record.get('archived') is True):
                 keys.add(key)
     return keys
 
@@ -1478,9 +1488,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
     elif result.get('cash_preference'):
         why = 'The selector favors an included route within the quality band.'
     else:
-        why = 'Ranks first after quota and latency costs.'
-    if pick and runner and not pick['q']['unknown'] and not runner['q']['unknown']:
-        why += f' Grade {pick["q"]["mean"]:.3f} vs {runner["q"]["mean"]:.3f}.'
+        why = 'Leads after quota and latency costs.'
     hidden_names = archived | {key for (pool, key) in lanes if not _visible_model(roster, archived, pool, key, lanes)}
     prioritized = sorted({text for text in refusals if text and not any(key in text for key in hidden_names)},
                          key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))
@@ -1491,7 +1499,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
             'as_of': fleetctl.utc_now().astimezone().strftime('%H:%M'), 'count': count}
 
 
-def _work_gauge(pool, overview):
+def _work_gauge(pool):
     esc = html.escape
     limits = pool.get('limits') or []
     age = (pool.get('quota') or {}).get('age_s')
@@ -1504,24 +1512,29 @@ def _work_gauge(pool, overview):
         note = ''
     rows = []
     windows = [limit for limit in limits if limit['kind'] == 'window']
-    prominent = [limit for limit in windows if 'weekly' in limit['title'].lower()] or windows[:1]
+    weekly = [limit for limit in windows if 'weekly' in limit['title'].lower()]
+    prominent = ((weekly + [limit for limit in windows if limit not in weekly]) if pool['pool'] == 'opencode-go'
+                 else weekly or windows[:1])
     extra = []
     for limit in [*prominent, *(limit for limit in limits if limit not in prominent)]:
         if limit['kind'] != 'window':
             rows.append(_limit_row(limit, pool['pool']))
             continue
         scope = _scope_words(limit.get('scope'), pool['pool'])
-        title = limit['title'] + (f' · {scope}' if scope else '')
+        title = ('Fable weekly' if scope == 'Fable only' and limit['title'] == 'Weekly'
+                 else limit['title'] + (f' · {scope}' if scope else ''))
         used = limit['used_percent']
         reset = 'Resets ' + limit['resets'] if limit['reset_at'] else 'No active reset'
         count = f'{100 - used}%' if limit['reset_at'] or used else ''
+        if count and note:
+            count = 'Last ' + count
         if limit not in prominent:
             value = (' · ' + count + ' left') if count else ''
             extra.append(f'<li class="wb-extra-limit"><span>{esc(title + value)}</span><small>{esc(reset)}</small></li>')
             continue
-        visual = _meter(100 - used, used >= 75) if count else ''
+        visual = _meter(100 - used, used >= 75) if count and not note else ''
         rows.append(f'<li class="wb-limit"><span>{esc(title)}</span>'
-                    + (f'<b aria-label="{count} left">{count}<span class="vh"> left</span></b>' if count else '') + visual
+                    + (f'<b aria-label="{count} left">{count}<span class="vh"> left</span></b>' if count else '<b class="wb-idle">Idle</b>') + visual
                     + f'<small>{esc(reset)}</small></li>')
     rows.extend(extra)
     if not rows and not note:
@@ -1567,11 +1580,11 @@ def _comparison_grade(data, item, scored, role, policy):
     floor = policy.get('quality_floors_by_role', {}).get(role)
     strata = row.get('q_by_stakes', {})
     scoped = strata.get('high' if floor else 'normal', {}).get(family)
-    q = (scored or {}).get('q') if role == data['role'] else None
-    q = q or (scoped if scoped is not None else row.get('q', {}).get(family) or {})
+    replayed = (scored or {}).get('q') if role == data['role'] else None
+    q = replayed or (scoped if scoped is not None else row.get('q', {}).get(family) or {})
     mean = _number(q.get('mean'))
-    if (mean is None or q.get('unknown') or 'unknown' in (row.get('flags') or [])
-            or not (q.get('n_sources') or row.get('own', {}).get(family, {}).get('trials'))):
+    sourced = q.get('n_sources') or row.get('own', {}).get(family, {}).get('trials')
+    if mean is None or q.get('unknown') or (not replayed and ('unknown' in (row.get('flags') or []) or not sourced)):
         return '—'
     pick = role == data['role'] and data['pick'] and _compare_key(data['pick']) == _compare_key(item)
     below = data['value'] == 'best-value' and floor is not None and mean < floor
@@ -1604,6 +1617,11 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
 
     headers, columns = [], []
     choices = sorted(grouped.items(), key=lambda pair: (pool_name(pair[0][0]), name(next(iter(pair[1].values())))))
+    grade_roles = ['implementation', 'review', 'debug', 'hard-reasoning', 'default']
+    if data['role'] not in grade_roles:
+        grade_roles.append(data['role'])
+    fields = [(WORKBENCH_ROLES[role], role == data['role']) for role in grade_roles]
+    fields += [('Quota / job', False), ('Cash / job', False), ('Context', False), ('Allowance left', False)]
     for index, key in enumerate(data['keys'], 1):
         item = data['menu'][key]
         scored = data['scores'][key]
@@ -1622,12 +1640,9 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
                        f'<select class="wb-effort-picker" name="compare" aria-label="Effort for {esc(name(item))}" '
                        f'data-col="{index}">{select(effort_options, key)}</select>'
                        + ('<small>Not eligible in this mode</small>' if not scored else '') + '</th>')
-        grade_roles = ['implementation', 'review', 'debug', 'hard-reasoning', 'default']
-        if data['role'] not in grade_roles:
-            grade_roles.append(data['role'])
         cells = _compare_cells(scored or item, scored, pools.get(item['pool'], {}), roster)
         quota, cash, context, headroom = (esc(cells[i]) for i in (1, 2, 3, 5))
-        tariff = {'included': 'Included', 'verified-free': 'No charge · free route'}
+        tariff = {'included': 'Included · no extra charge', 'verified-free': 'No charge · free route'}
         if quota != '—':
             quota = f'<span class="wb-number">{quota}</span>' + ('<small>Estimate</small>' if quota.startswith('≈') else '')
         if cash != '—':
@@ -1638,9 +1653,8 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
             context = f'<span class="wb-number">{context}</span>'
         if '% left' in headroom:
             percent, _, detail = headroom.partition(' · ')
-            headroom = f'<span class="wb-number">{percent}</span>' + (f'<small>{detail}</small>' if detail else '')
-        fields = [(WORKBENCH_ROLES[role], role == data['role']) for role in grade_roles]
-        fields += [('Quota / job', False), ('Cash / job', False), ('Context', False), ('Allowance left', False)]
+            headroom = (f'<span class="wb-number" aria-label="{percent}">{percent.removesuffix(" left")}</span>'
+                        + (f'<small>{detail}</small>' if detail else ''))
         columns.append([*[_comparison_grade(data, item, scored, role, policy) for role in grade_roles],
                         quota, cash, context, headroom])
     if columns:
@@ -1767,15 +1781,17 @@ def _wallet(overview, token, workbench, order):
                        f'<input type="hidden" name="pool" value="{pool_id}">'
                        + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal') + '</form>')
         plan = '' if allowance else _wallet_plan(pool)
+        flag = ('<div class="wb-explicit">Explicit only '
+                + _work_switch('explicit-only', explicit, 'Explicit-only pool flag',
+                               disabled='Set in roster.', hint_id=pool_id) + '</div>')
         return (f'<article class="pool wb-pool-control {"wb-allowance" if allowance else "wb-ticket"} lvl-{pool["level"]}" '
                 f'id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{esc(pool["label"])}" tabindex="-1">'
                 f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}'
                 '<p class="wb-error" role="status"></p>'
-                f'<div class="gauge">{_work_gauge(pool, overview) + _pro_usage(pool)}</div>{summary}'
+                f'<div class="gauge">{_work_gauge(pool) + _pro_usage(pool)}</div>{summary}'
                 f'<details class="wb-advanced" open><summary>Spend policy <small class="wb-level">{LEVEL_WORDS[pool["level"]]}</small></summary>'
                 + _slider(pool, esc(token), return_fields)
-                + f'<div class="wb-explicit">Explicit only {_work_switch("explicit-only", explicit, "Explicit-only pool flag", disabled="Set in roster.", hint_id=pool_id)}</div>'
-                + '</details>' + _picker(pool, by_key, token, order, return_fields=return_fields) + '</article>')
+                + '</details>' + _picker(pool, by_key, token, order, return_fields=return_fields, policy=flag) + '</article>')
 
     def antigravity(group):
         members = esc(json.dumps([p['pool'] for p in group]))
@@ -1791,8 +1807,7 @@ def _wallet(overview, token, workbench, order):
     agy = [by_pool[key] for key in AGY_ALLOWANCES if key in by_pool]
     ranking = order['ranks']['pools'][order['sort']['pools']]
     primary, other = [], []
-    if order['sort']['pools'] == 'your' and order['pools'] == list(display_order(overview)['pools']):
-        ranking = [*WALLET_PRIMARY, *(key for key in ranking if key not in WALLET_PRIMARY)]
+    ranking = [*WALLET_PRIMARY, *(key for key in ranking if key not in WALLET_PRIMARY)]
     grouped = False
     for key in ranking:
         pool = by_pool.get(key)
@@ -1814,6 +1829,7 @@ def _wallet(overview, token, workbench, order):
         '<h2 id="wallet-heading">Allowance by subscription</h2>'
         f'<div class="quota-reading"><p class="stamp">{esc(stamp)}</p>{_refresh_form(token, return_fields)}</div></div>'
         + f'<section class="pools wb-tickets" aria-label="Subscriptions">{"".join(primary)}</section>'
+        + '<p class="wb-footnote">Allowance left, not used. Stale readings are not current capacity.</p>'
         + (f'<details class="wb-other"><summary>Other subscriptions &amp; routes <small>{len(other)} groups</small></summary>'
            f'<section class="pools wb-tickets" aria-label="Other subscriptions and routes">{"".join(other)}</section></details>'
            if other else '') + '</section>'

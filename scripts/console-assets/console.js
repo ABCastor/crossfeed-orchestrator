@@ -223,6 +223,21 @@ function setupComparison(section) {
   const form = section.querySelector('.wb-query');
   let request = 0;
   let desired = params();
+  const routeOf = key => key.slice(0, key.lastIndexOf(':'));
+  function updateAddButtons() {
+    const menu = new Set([...form.querySelectorAll('.wb-model-picker option')].map(option => routeOf(option.value)));
+    const selected = new Set(params().getAll('compare').map(routeOf));
+    for (const button of document.querySelectorAll('.wb-add')) {
+      const route = button.dataset.route;
+      const on = selected.has(route);
+      const capped = on ? selected.size <= 2 : selected.size >= 4;
+      button.hidden = !menu.has(route);
+      button.setAttribute('aria-pressed', String(on));
+      button.setAttribute('aria-disabled', String(capped));
+      button.title = capped ? 'Compare two to four models.' : '';
+      button.textContent = on ? 'Comparing' : 'Compare';
+    }
+  }
   function params(preview) {
     const query = new URLSearchParams();
     query.set('role', form.elements.role.value);
@@ -283,6 +298,7 @@ function setupComparison(section) {
         explanation.replaceChildren(...newExplanation.childNodes);
         if (open && explanation.querySelector('details')) explanation.querySelector('details').open = true;
       }
+      updateAddButtons();
       const updated = params(desired.get('preview-value'));
       if (change || desired.get('preview-value')) {
         window.history.replaceState(null, '', '/?' + updated + window.location.hash);
@@ -307,6 +323,23 @@ function setupComparison(section) {
     if (preview) previewMode(preview);
     refresh(params(preview));
   });
+  document.addEventListener('click', event => {
+    const add = event.target.closest('.wb-add');
+    if (!add || add.getAttribute('aria-disabled') === 'true') return;
+    const select = form.querySelector('.wb-model-picker');
+    const choice = [...(select?.options || [])].find(option => routeOf(option.value) === add.dataset.route);
+    if (!choice) return;
+    const query = params();
+    let keys = query.getAll('compare');
+    const at = keys.findIndex(key => routeOf(key) === add.dataset.route);
+    if (at === -1) keys = [...keys, choice.value];
+    else keys.splice(at, 1);
+    query.delete('compare');
+    for (const key of keys) query.append('compare', key);
+    query.set('count', String(keys.length));
+    refresh(query);
+  });
+  updateAddButtons();
   return refresh;
 }
 
@@ -565,7 +598,7 @@ function boot(document, window) {
     if (panel && !panel.hidden && !event.target.closest('.find-panel, .find-lens')) closeSearch(false);
   });
   const workbench = document.querySelector('.wb');
-  const compare = workbench && setupComparison(workbench);
+  const compare = workbench?.querySelector('.wb-query') ? setupComparison(workbench) : null;
   if (window.location.hash) {
     const target = document.getElementById(window.location.hash.slice(1));
     if (workbench && target?.matches('details.pick')) {
@@ -697,7 +730,7 @@ function boot(document, window) {
     const stops = [...form.querySelectorAll('.stop')];
     row.className = row.className.replace(/\blvl-\S+/g, `lvl-${level}`);
     form.className = `lv at-${stops.findIndex(b => b.value === level)} is-${level}`;
-    let meaning = means;
+    let meaning = workbench ? undefined : means;
     for (const button of stops) {
       const selected = button.value === level;
       button.classList.toggle('on', selected);
@@ -1045,6 +1078,7 @@ function boot(document, window) {
       const output = form.querySelector('.wb-error');
       const revision = saver.revision;
       form.setAttribute('aria-busy', 'true');
+      output.dataset.error = 'false';
       output.textContent = 'Saving…';
       try {
         const data = await post(form.action, body);
@@ -1055,6 +1089,7 @@ function boot(document, window) {
         output.textContent = 'Saved.';
       } catch (_) {
         if (input.value === body.get('allowance')) input.value = input.defaultValue;
+        output.dataset.error = 'true';
         output.textContent = 'Not saved. Try again.';
       } finally {
         form.removeAttribute('aria-busy');

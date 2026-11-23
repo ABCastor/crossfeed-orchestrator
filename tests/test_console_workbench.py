@@ -165,6 +165,54 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(self.runtime.read_bytes(), before)
         self.assertEqual(self.overlay.read_bytes(), self.original_overlay)
 
+    def test_spend_policy_defaults_open_and_inventory_remains_a_drawer(self):
+        page = self.page()
+        policies = [node for node in page.nodes if node['tag'] == 'details'
+                    and node['attrs'].get('class') == 'wb-advanced']
+        self.assertGreater(len(policies), 1)
+        self.assertTrue(all('open' in policy['attrs'] for policy in policies))
+        self.assertNotIn('open', page.ident('pick-claude')['attrs'])
+        compare = page.ident('compare')
+        wallet = page.ident('wallet-heading')
+        self.assertLess(page.nodes.index(compare), page.nodes.index(wallet))
+
+    def test_archived_and_retired_models_do_not_enter_workbench_inventory_or_menu(self):
+        # A direct or active lane may still be present; the archival filter does not mutate the roster.
+        home = self.state / 'fixture-home'
+        archive = home / '.claude' / 'roster' / 'models' / '_archive'
+        archive.mkdir(parents=True)
+        (archive / self.model).mkdir()
+        roster = json.loads(self.overlay.read_text())
+        retired = 'gpt-6.1-sol'
+        roster['model_cards'][retired]['status'] = 'retired'
+        self.overlay.write_text(json.dumps(roster))
+        before = self.overlay.read_bytes()
+        with patch.object(console.Path, 'home', return_value=home):
+            query = urllib.parse.urlencode({'fragment': 'compare', 'role': 'implementation',
+                                            'compare': f'{self.pool}:{self.model}:high'})
+            status, body = self.get('/?' + query)
+            self.assertEqual(status.status, 200)
+            self.assertNotIn(b'<main>', body)
+            self.assertIn(b'id="compare"', body)
+            self.assertNotIn(self.model.encode(), body)
+            self.assertNotIn(retired.encode(), body)
+            page = self.page()
+            for key in (self.model, retired):
+                self.assertFalse(any(node['attrs'].get('data-model') == key for node in page.nodes))
+        self.assertEqual(self.overlay.read_bytes(), before)
+        self.assertFalse((self.state / 'selections').exists())
+
+    def test_fetch_write_returns_snapshot_without_redirecting(self):
+        headers = {**self.headers(), 'Accept': 'application/json'}
+        body = urllib.parse.urlencode({'t': self.app.form_token, 'pool': self.pool,
+                                       'switch': f'{self.model}=off'})
+        response, payload = self.request('POST', '/model', headers, body)
+        self.assertEqual(response.status, 200)
+        self.assertIsNone(response.getheader('Location'))
+        pool = next(p for p in json.loads(payload)['pools'] if p['pool'] == self.pool)
+        self.assertNotIn(self.model, pool['on'])
+        self.assertIn('wallet_gauge', pool)
+
     def test_cash_is_route_specific_and_failed_readings_are_not_current_headroom(self):
         option = {'pool': 'example', 'model_key': 'example', 'funding': 'included'}
         score = {'q': {'mean': .8, 'unknown': False}, 'cost': {'percent': .32, 'estimated': True},

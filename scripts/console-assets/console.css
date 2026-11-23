@@ -720,7 +720,8 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-switch.sw[aria-checked="true"] .track{background:var(--wb-accent);border-color:var(--wb-accent)}
 .wb-switch.sw[aria-checked="true"] .track i{transform:translateX(12px);background:#1a1a1a}
 .wb-switch.sw:hover:not(:disabled),.dashboard main summary:hover{background:color-mix(in srgb,var(--ink) 6%,var(--paper))}
-.wb-error{font-size:12px;color:var(--wb-danger);margin:4px 0}
+.wb-error{font-size:12px;color:var(--wb-danger,var(--human-text));margin:4px 0}
+.wb-error[data-error="false"]{color:var(--quiet)}
 .wb-error:empty{display:none}
 .wb-value,.wb-model-control,.wb-pool-switch,.wb-explicit{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap}
 .wb-model-control{justify-content:flex-end}
@@ -728,6 +729,8 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-pool-switch{margin:0}
 
 .wb-wallet-head{border-bottom:1px solid var(--rule);padding-bottom:4px}
+.wb-wallet-head h2{font:650 14px/1.4 system-ui,sans-serif}
+.wb-footnote{font-size:12px;color:var(--quiet);margin:8px 0}
 .wb-wallet-head .quota-reading{margin:0}
 .wb-wallet-head .stamp{font:400 12px/1.4 system-ui,sans-serif}
 .wb-wallet-head button{min-width:32px;min-height:32px;width:auto;height:auto}
@@ -749,6 +752,7 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-limits{padding:0;margin:0;list-style:none}
 .wb-limit{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:0 8px;padding:3px 0;font-size:12px}
 .wb-limit b{font:650 17px/1.25 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wb-limit .wb-idle{color:var(--wb-warn);font-size:14px}
 .wb-limit :is(svg,small){grid-column:1/-1}
 .wb-limit .bar{width:100%;height:5px;margin:4px 0}
 .wb-limit .bar .track{fill:var(--rule)}
@@ -757,14 +761,21 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-extra-limit{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 8px;font-size:12px;color:var(--quiet);margin:3px 0}
 .wb-pool-control .lvh,.wb-pool-control .level-actor{display:none}
 .wb-pool-control .means{margin:2px 0 0;text-align:start;font-size:12px;min-height:0}
-.wb-pool-control .stop{font:500 12px/1.1 system-ui,sans-serif;letter-spacing:0;min-width:0;gap:4px}
-.wb-pool-control .stop.on{font-weight:650}
+.wb-pool-control .lv{border:1px solid var(--rule);border-radius:6px;background:var(--paper)}
+.wb-pool-control .lv :is(.rail,.stop i){display:none}
+.wb-pool-control .stop{font:500 12px/1.1 system-ui,sans-serif;letter-spacing:0;min-width:0;min-height:29px;justify-content:center;padding:2px}
+.wb-pool-control .stop + .stop{border-inline-start:1px solid var(--rule)}
+.wb-pool-control .stop.on{font-weight:650;background:var(--wb-select)}
 .wb-pool-control .stop span{overflow-wrap:normal}
-.wb-explicit{font-size:12px;color:var(--quiet);margin-top:2px}
+.wb-explicit{font-size:12px;color:var(--quiet);margin:2px 2px 4px}
 .wb-explicit .wb-switch{min-height:24px}
 .wb-models .opts{margin:0;border-top:0}
 .wb-models .wb-model{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:4px 8px;padding:3px 2px;margin:0;min-height:34px;border-top:1px solid var(--rule);border-bottom:0}
 .wb-model .nm{font:650 14px/1.25 system-ui,sans-serif}
+.wb-model small{display:block}
+.wb-add{cursor:pointer;min-height:28px;font:400 12px system-ui,sans-serif;color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:6px;padding:2px 6px}
+.wb-add[aria-pressed="true"]{border-color:var(--wb-accent)}
+.wb-add[aria-disabled="true"]{cursor:not-allowed;color:var(--quiet)}
 .wb-model-control:has(button:disabled){max-width:104px;gap:2px 4px}
 .wb-other,.wb-more{margin-top:8px}
 .wb-more > :not(summary){margin-inline:4px}
@@ -779,7 +790,7 @@ h1{margin-top:calc(17px + var(--line-w))}
   .dashboard .wrap{padding-inline:8px}
   .dashboard .mast .nav{order:2;flex-basis:100%;margin:4px 0 8px}
   .dashboard .mast .bar-tools{margin-left:auto}
-  .wb-switch.sw,.wb-query select{min-height:44px}
+  .wb-switch.sw,.wb-query select,.wb-pool-control .stop,.wb-add{min-height:44px}
   .wb-matrix[data-count="2"]{--wb-columns:2}
   .wb-matrix[data-count="3"]{--wb-columns:3}
   .wb-matrix[data-count="4"]{--wb-columns:4}
