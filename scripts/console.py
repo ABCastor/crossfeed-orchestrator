@@ -1433,7 +1433,8 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
         why += f' Grade {pick["q"]["mean"]:.3f} vs {runner["q"]["mean"]:.3f}.'
     prioritized = sorted(set(refusals), key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))
     return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
-            'runner': runner, 'why': why, 'refusals': [text for text in prioritized if text][:16]}
+            'runner': runner, 'exploring': result.get('exploration', False),
+            'why': why, 'refusals': [text for text in prioritized if text][:16]}
 
 
 def _work_gauge(pool, overview):
@@ -1548,7 +1549,8 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         + '<button type="submit">Compare</button></form>' + matrix
         + '<p class="wb-muted">≈ estimate · — no comparable reading</p>'
         '<section class="wb-pick" aria-label="Pick for this role">'
-        f'<p><b>Pick</b> {route(data["pick"])}</p><p><b>Runner-up</b> {route(data["runner"])}</p>'
+        f'<p><b>Pick</b> {route(data["pick"])}{" (exploring)" if data["exploring"] else ""}</p>'
+        f'<p><b>Runner-up</b> {route(data["runner"])}</p>'
         f'<p class="wb-muted">{esc(data["why"]) if data["pick"] else "No route clears the selector gates."}</p>'
         + (f'<details><summary>Why other routes are out</summary><ul>{notices}</ul></details>' if notices else '')
         + '<p class="wb-value">Save absolute best ' + _work_switch('role-value', False, 'Save absolute best',

@@ -50,16 +50,10 @@
           "opencode-go"
         ]
       },
-      "stakes_weights": {
-        "low": 1,
-        "normal": 2,
-        "high": 4
-      },
-      "mu": 0.001,
       "target": 90,
       "lambda0": 1,
       "lambda_unknown": 0.5,
-      "explore": 0.1,
+      "exploration_cap": 0.15,
       "mode_by_role": {
         "design": "write",
         "visual": "write",

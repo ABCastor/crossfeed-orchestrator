@@ -25,11 +25,11 @@ python3 scripts/fleetctl.py dispatch --role review --prompt-file /project/brief.
 
 `dispatch` selects pool/model/level, streams final text, passes through wrapper exit, names receipt on stderr. Inspect with `select --role R [--stakes S] --json`; `--family F` selects task/evidence family. `brief`, `select` and `dispatch` detect the lead's pool from the harness environment; pass `--lead POOL` when needed. A pressured lead pool is excluded except for irreversible stakes, which still respect off switches and hard quota gates. Writes: `--mode write` in a fresh worktree; `--dry-run` makes no model call. Selection may lack policy: load `references/routing-by-hand.md` for exceptions and explain overrides.
 
-Stakes: `low` = cheap and reversible; `normal`; `high` = costly to redo; `irreversible` = cannot undo, no price term. Save through routing, never downgrading judgment; reduce parallelism before quality.
+Admission stakes: `low` = cheap and reversible; `normal`; `high` = costly to redo; `irreversible` = cannot undo. Save through routing, never downgrading judgment; reduce parallelism before quality.
 
-For `dispatch` and `select`, label the task before viewing picks: pass `--work-kind coding|review|research|writing`, `--difficulty easy|ordinary|hard` and `--rating-stakes routine|important|critical`. These shadow labels default to `unknown` and do not change routing or `--stakes`.
-Reuse an opaque `--task-id ID` across paired attempts; otherwise dispatch assigns one. Inspect the shadow forecast with `select --json`.
-After an independent check, record `fleetctl.py accept RUN_ID --verdict pass|fail --check "what was checked"` with the dispatch receipt ID or linked worker run ID. Exit zero is not acceptance.
+Before viewing picks, label `--work-kind coding|review|research|writing` and `--difficulty easy|ordinary|hard`. Override routing failure stakes with `--rating-stakes routine|important|critical` (1×/5×/20× typical job price). Use `select --no-explore --json` to inspect the mean pick, and reuse an opaque `--task-id ID` across attempts of the same task.
+After checking a worker's result, record `fleetctl.py accept RUN_ID --verdict pass|fail --check "what was checked"` with the dispatch or linked worker run ID.
+An exit code alone does not count; record the verdict only after an independent test or review.
 
 Brief, one row per pool:
 

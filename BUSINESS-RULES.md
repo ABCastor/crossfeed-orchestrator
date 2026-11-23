@@ -76,30 +76,23 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `examples/haiku-judgment-policy.json:effort.*.refuse_roles`, consumed by the existing `scripts/selector.py:enumerate_options` refusal check.
 - tested-by: `tests/test_selector_judgment_policy.py:JudgmentPolicyTests.test_judgment_roles_exclude_haiku_at_every_stakes_and_in_receipts`, `test_allow_and_target_cannot_readmit_haiku_for_review`, `test_unknown_quality_exploration_cannot_choose_refused_model`, `test_legacy_haiku_is_refused_but_can_still_probe`; controls `test_missing_policy_reproduces_haiku_review` and `test_nonjudgment_reads_keep_haiku_available` observe real selection and receipts.
 
-## BR-SELECT-002 — Spend surplus before it resets, avoid deficits, vary near-equal picks [DIRECTION DECIDED · NUMBERS PROPOSED]
+## BR-SELECT-002 — Show quota pace and learn from checked outcomes [OPERATOR-DIRECTED]
 
-- RULE: Every limit with a known length and reset shows its pace, CodexBar-style: elapsed share minus used share, said as "X% surplus" or "X% in deficit", with a projected run-out time for a deficit. After plain scoring, the selector draws among admitted, measured options within a quality band of scoring's pick (on quality and on score), favouring pools whose surplus the next reset would destroy, avoiding pools in deficit, and penalising lanes used recently with a decaying weight. Hard gates (switches, refusals, allow lists, effort evidence, data policy, caps, lead pressure) run first and are never relaxed. Irreversible stakes and explicit targets are never varied.
-- Proposed numbers (agent defaults, pending operator approval): quality band low 0.05, normal 0.03, high 0.01, irreversible 0; pace weight 2; recency half-life 1 hour; draw temperature 0.5; a deficit under 5 points does not outweigh another window's surplus; stated variety share: over 50 equal-quality dispatches among three lanes, no lane takes more than 50% (observed at most 36% across 20 seeds). `policy.selector.variety` overrides each number; `false` restores the fixed tie-break.
-- Authority: Operator policy requires CodexBar-style surplus and deficit readings at renewal and varied model choice. A decaying recency penalty varies picks inside the quality band without lowering the floor or relaxing hard gates. Numerical defaults are subject to operator approval.
-- implemented-by: `scripts/fleetctl.py:window_pace`, `scripts/fleetctl.py:pool_limits`, `scripts/menubar.py:pace_words`, `scripts/selector.py:pool_pace`, `scripts/selector.py:recent_use`, `scripts/selector.py:_vary`, `scripts/selector.py:select_option`.
-- tested-by: `tests/test_business_pace_variety.py:VarietyTests.test_surplus_pool_about_to_reset_is_preferred_over_equal_quality_deficit_pool`, `test_fifty_equal_quality_dispatches_are_spread_across_lanes`, `test_in_flight_dispatches_count_as_recent_use`; prohibitions `test_a_lane_below_the_quality_band_is_never_chosen_however_much_surplus` (with its equal-quality control), `test_hard_gates_hold_for_a_surplus_lane`, `test_irreversible_and_explicit_targets_are_never_varied`; `PaceReadingTests` for the glance, brief and stale-reading control.
-- Review when: the operator sets the numbers, a provider changes window semantics (rolling versus fixed resets), or the variety share is seen exceeded in live runs.
+- RULE: Show surplus or deficit and projected run-out for known windows. After admission, sample checked-outcome ratings only on safe routes within 25% of the best mean expected cost. Cap non-greedy dispatch starts at 15% by default. No paid, Kimi, low-dial, quota-constrained, exact-target or irreversible exploration. Never add an extra run to learn.
+- Evidence: Four pseudo-observations centre an exact route on its grade. Only an independent `accept` verdict counts; deduplicate tasks on each route. Record mean, sample and actual pick. Prefer the mean if a draw cannot be safely recorded.
+- implemented-by: `scripts/fleetctl.py:window_pace`, `scripts/fleetctl.py:_book_rating_trial`, `scripts/rating_explore.py`, `scripts/selector.py:select_option`.
 
-## BR-SELECT-003 — Best value requires a return on extra effort [DIRECTION DECIDED 2026-11-19 · TUNING DELEGATED]
+## BR-SELECT-003 — Rank efforts by expected cost [OPERATOR-DIRECTED]
 
-- RULE: Best value compares grade per planning cost among the eligible efforts of each subscription or free route. A higher effort needs enough marginal grade improvement; absolute best ranks on known grade instead. Neither rule grants admission.
-- Authority: Operator: “Max is almost always sub-efficient. Even extra high, it's almost always sub-efficient in terms of cost.” The implementation sets and states the marginal threshold; it does not ban any named effort.
-- Tuning: Using the cheapest graded step as baseline, a step-up must earn at least `(baseline grade + 0.05) / baseline cost` grade per extra unit of cost. Among qualifying steps and the baseline, choose the highest grade/cost. If no step has a known grade, keep the cheapest step for the existing unknown-quality policy.
-- implemented-by: `scripts/selector.py:_efficient_efforts`, `scripts/selector.py:select_option`.
-- tested-by: `tests/test_selector.py:SelectorTests.test_best_value_requires_a_marginal_effort_gain_and_absolute_best_does_not`.
+- RULE: Compare all eligible efforts by price plus chance of failure times the typical job price at 1× routine, 5× important or 20× critical. Grade is a proxy until checked outcomes exist. Absolute-best aliases critical; no pricing option grants admission.
+- implemented-by: `scripts/rating.py:expected_cost`, `scripts/selector.py:select_option`.
 
-## BR-SELECT-004 — Opus handles best-value hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
+## BR-SELECT-004 — Opus handles hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
 
-- RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, best-value hard reasoning excludes Sonnet. Prefer Claude Opus 5.5 at its most efficient floor-clearing effort, or at its most efficient eligible effort with a recorded floor exception if none clears. No other role or model gets the exception. Absolute best and irreversible quality ranking do not use the efficiency preference or floor exception.
+- RULE: When `policy.selector.prefer_opus_hard_reasoning` is enabled, exclude Sonnet. Prefer Opus 5.5 at its lowest expected-cost effort, with a floor exception only if no admitted Opus effort clears the floor. The legacy irreversible setting still bypasses the preference and floor exception.
 - Authority: Operator: “Most of the time, I'm going to use Opus or Fable to orchestrate, and then around it anything you want. But I certainly don't want Sonnet on high to do hard reasoning. Probably Opus should do that.”
-- Fallback (agent's delegated tuning): Ignore the general 80% projected Claude-first guard for this preference. At 90% actual use of an active applicable Claude weekly window, an exhausted five-hour window, or when Opus is otherwise unavailable, prefer eligible GPT-6.2 Astra, then other eligible Codex models. Existing switches, lead reservation, quota circuits, and data policy still apply. A Claude lead reserves a pressured shared window for the lead; an identified Fable lead also reserves its pressured scoped window without excluding unrelated Claude lanes.
-- implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:detect_lead_pool`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
-- tested-by: `tests/test_selector.py:SelectorTests.test_opus_hard_reasoning_priority_and_real_quota_fallback` (including positive Sonnet control in absolute-best), `tests/test_lead_profiles.py:LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
+- Fallback: At 90% use of an applicable Claude weekly window, an exhausted five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex lanes. Existing switches, lead reserve, quota circuits and data policy still apply.
+- implemented-by: `scripts/selector.py:_opus_quota_refusal`, `scripts/selector.py:select_option`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`.
 
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 
