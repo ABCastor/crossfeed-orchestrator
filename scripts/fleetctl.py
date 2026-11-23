@@ -6152,6 +6152,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+CONSOLE_OPEN_REQUEST = "console-open-request"
+CONSOLE_OPEN_REQUEST_MAX_AGE_S = 120
+
+
+def consume_console_open_request(state_dir: Path, now: float | None = None) -> bool:
+    """True once for a request file a launcher wrote shortly before this start; the file is removed."""
+    marker = state_dir / CONSOLE_OPEN_REQUEST
+    try:
+        age = (time.time() if now is None else now) - marker.stat().st_mtime
+        marker.unlink()
+    except OSError:
+        return False
+    return 0 <= age <= CONSOLE_OPEN_REQUEST_MAX_AGE_S
+
+
 def run_console(overlay_path: Path, state_dir: Path, port: int, open_browser: bool) -> int:
     """Start the console page; it lives beside this file so an install carries both."""
     spec = importlib.util.spec_from_file_location("orchestrator_console", Path(__file__).with_name("console.py"))
@@ -6450,9 +6465,11 @@ def main() -> int:
             print(json.dumps(read_cards(state_dir, roster, fleet=sys.modules[__name__]), separators=(",", ":"), allow_nan=False))
             return 0
         if args.command == "console":
-            # An unattended service restart must not open a browser.
+            # An unattended service restart must not open a browser; a terminal or a fresh
+            # one-shot request from a launcher the operator clicked does.
+            wanted = sys.stdin.isatty() or consume_console_open_request(state_dir)
             return run_console(args.overlay.expanduser(), state_dir, args.port,
-                               not args.no_open and sys.stdin.isatty())
+                               not args.no_open and wanted)
         if args.command == "dashboard":
             print("https://opencode.ai/auth")
             return 0
