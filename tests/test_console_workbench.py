@@ -98,6 +98,31 @@ class WorkbenchTests(unittest.TestCase):
         self.assertFalse((self.state / 'selections').exists())
         self.assertEqual(self.overlay.read_bytes(), self.original_overlay)
 
+    def test_default_does_not_repeat_implementation_grade_row(self):
+        response, payload = self.get('/?role=default')
+        self.assertEqual(response.status, 200)
+        self.assertIn(b'<th scope="row">Implementation</th>', payload)
+        self.assertNotIn(b'<th scope="row">Default</th>', payload)
+        self.assertIn(b'The selector converts grades to a success estimate.', payload)
+
+    def test_floor_badge_uses_refusal_instead_of_grade_comparison(self):
+        item = {'pool': 'claude', 'model_key': 'claude-opus-5-5',
+                'model_identity': 'claude-opus-5-5', 'level': 'xhigh'}
+        q = {'mean': .809, 'n_sources': 1, 'unknown': False}
+        scored = dict(item, q=q, floor_exception=True)
+        data = {'role': 'hard-reasoning', 'value': 'best-value', 'pick': scored,
+                'evidence': {('claude-opus-5-5', 'xhigh'): {'q_by_stakes': {'high': {'reasoning': q}}}},
+                'floor_rejections': set()}
+        policy = {'quality_floors_by_role': {'hard-reasoning': .85}}
+        pick = console._comparison_grade(data, item, scored, 'hard-reasoning', policy)
+        self.assertIn('0.809', pick)
+        self.assertIn('Pick', pick)
+        self.assertNotIn('Below floor', pick)
+        data['pick'] = None
+        self.assertNotIn('Below floor', console._comparison_grade(data, item, None, 'hard-reasoning', policy))
+        data['floor_rejections'].add(('claude', 'claude-opus-5-5', 'xhigh'))
+        self.assertIn('Below floor', console._comparison_grade(data, item, None, 'hard-reasoning', policy))
+
     def test_preview_rejects_invalid_query_and_does_not_write(self):
         before = self.runtime.read_bytes()
         for path in ('/?role=bogus', '/?value=bogus', '/?preview-value=bogus', '/?compare=x' + '&compare=y' * 4):

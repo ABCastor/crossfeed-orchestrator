@@ -1484,7 +1484,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
                 memo[key] = None
     if pick and pick.get('expected_cost') is not None:
         why = (f'Expected cost {pick["expected_cost"]:.3f} at '
-               f'{result.get("rating_stakes", "routine")} stakes; grade is a success proxy.')
+               f'{result.get("rating_stakes", "routine")} stakes.')
     else:
         why = 'No comparable price; falls back to available grades.'
     if (result.get('hard_reasoning_preference') or {}).get('route') == 'opus':
@@ -1497,6 +1497,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
     evidence = fleetctl.load_json(state_dir / 'evidence' / 'levels.json', {}) or {}
     return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
             'runner': runner, 'exploring': result.get('exploration', False), 'why': why, 'refusals': prioritized[:16], 'hidden_pick': hidden_pick,
+            'floor_rejections': {tuple(route) for route in result.get('floor_rejections', [])},
             'evidence': selector.evidence_index(roster, evidence.get('rows', [])),
             'as_of': fleetctl.utc_now().astimezone().strftime('%H:%M'), 'count': count}
 
@@ -1591,7 +1592,8 @@ def _comparison_grade(data, item, scored, role, policy):
     if mean is None or q.get('unknown') or (not replayed and ('unknown' in (row.get('flags') or []) or not sourced)):
         return '—'
     pick = role == data['role'] and data['pick'] and _compare_key(data['pick']) == _compare_key(item)
-    below = data['value'] == 'best-value' and floor is not None and mean < floor
+    identity = item['pool'], item['model_key'], item['level']
+    below = role == data['role'] and not scored and identity in data['floor_rejections']
     cls = ' pick-grade' if pick else ' below-grade' if below else ''
     note = '<small>Pick</small>' if pick else '<small>Below floor</small>' if below else ''
     return f'<span class="wb-grade{cls}">{mean:.3f}</span>{note}'
@@ -1621,8 +1623,13 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
 
     headers, columns = [], []
     choices = sorted(grouped.items(), key=lambda pair: (pool_name(pair[0][0]), name(next(iter(pair[1].values())))))
-    grade_roles = ['implementation', 'review', 'debug', 'hard-reasoning', 'default']
-    if data['role'] not in grade_roles:
+    grade_roles = ['implementation', 'review', 'debug', 'hard-reasoning']
+    families = policy.get('families_by_role', {})
+    default_family = families.get('default') or selector.FAMILY_BY_ROLE.get('default', 'coding-agent')
+    implementation_family = families.get('implementation') or selector.FAMILY_BY_ROLE['implementation']
+    if default_family != implementation_family:
+        grade_roles.append('default')
+    if data['role'] != 'default' and data['role'] not in grade_roles:
         grade_roles.append(data['role'])
     fields = [(WORKBENCH_ROLES[role], role == data['role']) for role in grade_roles]
     fields += [('Quota / job', False), ('Cash / job', False), ('Context', False), ('Allowance left', False)]
@@ -1690,7 +1697,7 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         f'<small>As of {esc(data["as_of"])}.</small></p>' + matrix
         + '<noscript><button type="submit">Compare</button></noscript></form>'
         '<details class="wb-numbers"><summary>What the numbers mean</summary><div class="wb-muted">'
-        '<p>Grades transfer evidence; they are not success rates. Quota estimates are not measured use. A dash means no comparable reading.</p>'
+        '<p>The selector converts grades to a success estimate. Quota estimates are not measured use. A dash means no comparable reading.</p>'
         + (f'<details><summary>Why other routes are out</summary><ul>{notices}</ul></details>' if notices else '')
         + '<p class="wb-value">Save absolute best ' + _work_switch('role-value', False, 'Save absolute best',
                                                   disabled='Per-run preview only.') + '</p></div></details></section>'

@@ -955,6 +955,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         return row
     pool_cash = fleet.cash_by_pool(roster, state_dir)
     scored = []
+    floor_rejections = []
     uncertainty_weight = max(1e-9, float(policy.get("uncertainty_weight", DEFAULTS["uncertainty_weight"])))
     pool_costs = {}
     for option in options:
@@ -991,6 +992,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                 and option["model_identity"] == OPUS_HARD_REASONING)
         below_floor = role_floor is not None and (unknown or not role_floor <= mean <= 1)
         if below_floor and not opus:
+            floor_rejections.append((option['pool'], option['model_key'], option['level']))
             grade = "unknown" if unknown else f"{mean:.3f}"
             rejected.append(f"{option['model_key']}/{option['level']}: {family} grade {grade} "
                             f"does not clear {role} floor {role_floor:.3f}")
@@ -1193,7 +1195,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "typical_price": typical, "typical_price_basis": typical_basis, "failure_price": failure_price,
               "calibration_difficulty": difficulty, "cash_preference": cash_preference,
               "quota_fallback": "measured-pi-coding-relay" if relay is not None else None,
-              "quality_floor": role_floor, "hard_reasoning_preference": hard_reasoning_preference,
+              "quality_floor": role_floor, "floor_rejections": floor_rejections,
+              "hard_reasoning_preference": hard_reasoning_preference,
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
               "pool_prices": prices, "pool_cash": pool_cash, "role": role, "family": family, "stakes": stakes,
               "rejected": rejected, "allow": allow_list, "selection_file": str(receipt) if receipt else None,
