@@ -83,6 +83,31 @@ def quota_price(percent, weekly_capacity, pace, *, window_minutes=10080):
     return number(percent / 100 * weekly_capacity * (window_minutes / 10080) * (1 + pace))
 
 
+# Provisional planning anchor, not an observed acceptance rate. The operator's
+# brief calls for 80–85% on a typical routine job; use its midpoint and reuse
+# the replay's weak benchmark prior and difficulty offsets.
+TYPICAL_SUCCESS = .825
+
+
+def success_prior(grade, difficulty="ordinary"):
+    gap = log(TYPICAL_SUCCESS / (1 - TYPICAL_SUCCESS)) + seed(grade) - DIFFICULTY[difficulty]
+    return 1 / (1 + exp(-gap))
+
+
+def subscription_price(percent, weekly_capacity, pace, *, window_minutes, scarcity=0):
+    """Price the same quota share higher in a smaller subscription.
+
+    Normalize opportunity cost to a roughly $200/month reference subscription,
+    rather than multiplying by the plan's own list value (which reverses the
+    incentive). Pace and observed remaining capacity add nonnegative premiums.
+    """
+    reference = 200 * 12 / 52
+    if not weekly_capacity or weekly_capacity <= 0:
+        return None
+    return quota_price(percent, reference * reference / weekly_capacity,
+                       pace + scarcity, window_minutes=window_minutes)
+
+
 def expected_cost(price, probability, failure_price):
     """Cost to run the route plus the expected cost of checked failure."""
     return None if price is None else price + (1 - probability) * failure_price

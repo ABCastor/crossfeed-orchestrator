@@ -79,13 +79,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 ## BR-SELECT-002 — Show quota pace and learn from checked outcomes [OPERATOR-DIRECTED]
 
 - RULE: Show surplus or deficit and projected run-out for known windows. After admission, sample checked-outcome ratings only on safe routes within 25% of the best mean expected cost. Cap non-greedy dispatch starts at 15% by default. No paid, Kimi, low-dial, quota-constrained, exact-target or irreversible exploration. Never add an extra run to learn.
-- Evidence: Four pseudo-observations centre an exact route on its grade. Only an independent `accept` verdict counts; deduplicate tasks on each route. Record mean, sample and actual pick. Prefer the mean if a draw cannot be safely recorded.
+- Evidence: Four pseudo-observations centre an exact route on the calibrated success prior, not its relative grade. Only an independent `accept` verdict counts; deduplicate tasks on each route. Record mean, sample and actual pick. Prefer the mean if a draw cannot be safely recorded.
 - implemented-by: `scripts/fleetctl.py:window_pace`, `scripts/fleetctl.py:_book_rating_trial`, `scripts/rating_explore.py`, `scripts/selector.py:select_option`.
 
 ## BR-SELECT-003 — Rank efforts by expected cost [OPERATOR-DIRECTED]
 
-- RULE: Compare all eligible efforts by price plus chance of failure times the typical job price at 1× routine, 5× important or 20× critical. Grade is a proxy until checked outcomes exist. Absolute-best aliases critical; no pricing option grants admission.
-- implemented-by: `scripts/rating.py:expected_cost`, `scripts/selector.py:select_option`.
+- RULE: Compare all eligible efforts by price plus chance of failure times the typical job price at 1× routine, 5× important or 20× critical. A weak grade prior is calibrated separately from checked outcomes. Absolute-best aliases critical; no pricing option grants admission. Unknown price does not win as cheapest; explicit or policy fallbacks stay unpriced.
+- implemented-by: `scripts/rating.py:expected_cost`, `scripts/rating.py:success_prior`, `scripts/selector.py:select_option`.
+- tested-by: `tests/test_rating_calibration.py`, `tests/test_selector.py`.
 
 ## BR-SELECT-004 — Opus handles hard reasoning [OPERATOR-DECIDED 2026-11-19 · FALLBACK DELEGATED]
 

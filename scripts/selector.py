@@ -27,13 +27,11 @@ try:
     import rating
     import rating_log
     import rating_explore
-    from rating_replay import price as routing_price
     from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
     from scripts import funding, go_quota_tariffs, rating, rating_explore, rating_log
-    from scripts.rating_replay import price as routing_price
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
@@ -232,6 +230,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "mode": mode, "band": band, "pool_state": state,
                   "provider": lane.get("provider"), "funding": cash_class,
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
+        if lane.get("chatgpt_pi"):
+            option["chatgpt_pi"] = True
         if lane_level != "normal":
             option["spend_level"] = lane_level
         if "price_1m" in lane:
@@ -416,6 +416,148 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
             "projection_unknown": value is None and not pace_surplus,
             "projection_basis": ("observed_pace" if pace_surplus else
                                  "snapshot_or_window_pace" if value is not None else "unknown")}
+
+
+def window_routing_pace(window: dict, fleet: Any) -> dict | None:
+    """The CodexBar pace of one window plus the signed value routing uses for it.
+
+    Without an oracle projection the value is the pace itself, (elapsed% - used%) / 100. With
+    one (a projected total at reset, or an ETA to exhaustion), the value is the same quantity
+    computed from that better estimate: elapsed fraction * (1 - projected / 100). Both are the
+    allowance the reset destroys at the expected rate (+) or the shortfall before it (-),
+    weighted by how much of the window the estimate has seen.
+    """
+    pace = fleet.window_pace(window)
+    if not pace:
+        return None
+    elapsed = pace["elapsed_percent"] / 100
+    used = pace["used_percent"]
+    projected = _number(window.get("projected_used_percent_at_reset"))
+    if projected is None:
+        eta, left = _number(window.get("eta_seconds")), _number(window.get("seconds_to_reset"))
+        if eta is not None and eta > 0 and left is not None:
+            projected = used + (100 - used) * left / eta
+    if projected is None:
+        value, projected_basis = pace["delta_percent"] / 100, False
+    else:
+        value, projected_basis = elapsed * (1 - max(projected, used) / 100), True
+    return dict(pace, value=max(-1.0, min(1.0, value)), projected=projected_basis)
+
+
+# BR-SELECT-002
+def pool_pace(roster: dict, runtime: dict, pool: str, fleet: Any, *,
+              model_key: str | None = None) -> dict:
+    """One signed pace for a pool, in allowance fractions: + surplus, - deficit.
+
+    A task spends from every applicable window at once, so any window running out before its
+    reset makes the pool one to avoid: the worst deficit is the pool's pace. Otherwise the
+    largest surplus is, since that is the allowance the next reset destroys. Deficits under 5% count as on pace. Unknown, stale or unlimited pools are neutral (0).
+    """
+    if fleet.pool_has_no_known_limit(roster, pool):
+        return {"value": 0.0, "basis": "none-known", "window": None}
+    state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
+                                               roster=roster, model_key=model_key)
+    if state in {"GAUGE_ERROR", "UNKNOWN"} or evidence.get("gauge_error"):
+        return {"value": 0.0, "basis": "unknown", "window": None}
+    windows = evidence.get("windows") or {}
+    applicable = evidence.get("applicable_windows", windows)
+    readings = [(name, window_routing_pace(window, fleet)) for name, window in windows.items()
+                if name in applicable]
+    readings = [(name, pace) for name, pace in readings if pace]
+    if not readings:
+        return {"value": 0.0, "basis": "unknown", "window": None}
+    deficits = [(name, pace) for name, pace in readings if pace["value"] <= -0.05]
+    if deficits:
+        name, pace = min(deficits, key=lambda row: row[1]["value"])
+        value = pace["value"]
+    else:
+        name, pace = max(readings, key=lambda row: row[1]["value"])
+        value = max(0.0, pace["value"])
+    return {"value": round(value, 4), "basis": "projection" if pace["projected"] else "window_pace",
+            "window": name, "status": pace["status"], "words": pace["words"]}
+
+
+# BR-CASH-004
+def _cash_band(scored, stakes, policy):
+    """Compare cash only among measured peers without replacing the quota/latency score."""
+    if stakes == "irreversible" or not any(map(funding.requires_reservation, scored)):
+        return scored, None
+    # Retain the comparable-quality and score envelope for bounded cash only.
+    weight = policy.get("stakes_weights", {}).get(stakes, {"low": 1, "normal": 2, "high": 40}[stakes])
+    band = {"low": .05, "normal": .03, "high": .01}[stakes]
+    mu = policy.get("mu", .001) * (.5 if stakes == "high" else 1)
+
+    def comparable_score(item):
+        penalty = item["pool_price"]["lambda"] * item["cost"]["penalty_percent"]
+        penalty += item.get("capacity", {}).get("scarcity_penalty", 0)
+        if stakes == "high":
+            penalty = min(penalty, policy.get("high_cost_cap", 1.0))
+        return weight * item["quality"] - penalty - mu * (item["latency_s"] or 0)
+
+    greedy = max(scored, key=comparable_score)
+    if greedy["q"]["unknown"]:
+        return scored, None
+    peers = [item for item in scored if not item["q"]["unknown"] and not item.get("pro_fallback")
+             and item["quality"] >= greedy["quality"] - band
+             and comparable_score(item) >= comparable_score(greedy) - weight * band]
+    if not any(map(funding.requires_reservation, peers)):
+        return scored, None  # Leave today's nonmetered variety and tie-breaks alone.
+    expiring = [item for item in peers if item["funding"] == "included"
+                and item["quota_pace"]["value"] > 0]
+    if expiring:
+        return expiring, "expiring-included-quota"
+
+    def marginal(item):
+        cash = item["cash"]
+        estimate = cash["estimate_usd"]
+        return estimate if estimate is not None else cash["worst_case_usd"]
+
+    known = [(marginal(item), item) for item in peers if marginal(item) is not None]
+    if not known:
+        return scored, None
+    cheapest = min(value for value, _ in known)
+    preferred = [item for value, item in known if value == cheapest]
+    return preferred, "lower-marginal-cash" if len(preferred) < len(peers) else None
+
+
+# BR-SELECT-003
+def _routing_price(item):
+    """Use only a debit and sourced capacity, or an actual incremental quote."""
+    cash = item["cash"]
+    if cash["funding"] == "metered":
+        return _number(cash.get("estimate_usd"))
+    if cash["funding"] not in {"included", "verified-free"}:
+        return None
+    cost, binding = item["cost"], item["pool_price"]
+    capacity = item.get("capacity") or {}
+    # Relative API-weighted debits lack a specific window. Treat them as
+    # weekly planning proxies instead of shrinking them on a 5-hour gauge.
+    minutes = 10080 if cost["basis"] == "relative_proxy" else binding["window_minutes"]
+    if not minutes and cost["basis"] == "measured":
+        minutes = 10080  # weekly planning proxy when the gauge has no window
+    pace = max(binding["lambda"], -item["quota_pace"]["value"])
+    return rating.subscription_price(cost["percent"], capacity.get("weekly_usd_equivalent"),
+                                     pace, window_minutes=minutes,
+                                     scarcity=capacity.get("scarcity_penalty", 0))
+
+
+def _unpriced_rank(item):
+    """An unpriced fallback's grade/pressure ordering is not a price quote."""
+    pressure = max(item["pool_price"]["lambda"], -item["quota_pace"]["value"])
+    return item["quality"] - pressure * item["cost"]["penalty_percent"] / 2
+
+
+def _relay_fallback(scored, stakes):
+    """A measured Pi coding relay is a fallback, never the cheapest route."""
+    native = next((item for item in scored if not item.get("chatgpt_pi")), scored[0])
+    if stakes not in {"low", "normal"} or native["pool"] != "codex":
+        return None
+    projected = native["pool_price"]["pressure_percent"]
+    if projected is None or projected < 100:
+        return None
+    relays = [item for item in scored if item.get("chatgpt_pi") and not item["q"]["unknown"]
+              and item["estimated_price"] is None and _unpriced_rank(item) > _unpriced_rank(native)]
+    return max(relays, key=_unpriced_rank, default=None)
 
 
 def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
@@ -684,7 +826,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   prompt: str | None = None, value_mode: str = "best-value",
                   persist_receipts: bool = True, collect_eligible: bool = False,
                   rating_stakes: str | None = None, no_explore: bool = False,
-                  explore_seed: int | None = None) -> dict:
+                  explore_seed: int | None = None, difficulty: str | None = None) -> dict:
     """Rank eligible options; read-only previews do not refresh or emit receipts."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -712,6 +854,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if role_floor is not None and family is not None and family != role_family:
         raise fleet.FleetError(f"{role} quality floor requires task family {role_family}")
     family = family or role_family
+    difficulty = difficulty or ("hard" if role == "hard-reasoning" else "ordinary")
+    if difficulty not in rating.DIFFICULTY:
+        raise fleet.FleetError(f"unknown task difficulty: {difficulty}")
     if family not in FAMILIES:
         raise fleet.FleetError(f"unknown task family: {family}")
     prefer_opus = policy.get("prefer_opus_hard_reasoning", False)
@@ -823,7 +968,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     capacity_reference = _number(policy.get("capacity_reference_usd_equivalent", 2.30))
     if capacity_reference is None or capacity_reference <= 0:
         raise fleet.FleetError("capacity_reference_usd_equivalent must be positive")
-    capacities = {}
+    capacities, paces = {}, {}
     for option in options:
         row = evidence_for(option)
         strata = row.get("q_by_stakes", {})
@@ -879,6 +1024,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             capacities[capacity_key] = (_capacity_headroom(roster, runtime, *capacity_key, capacity_reference, fleet)
                                         if option["funding"] == "included" else None)
         capacity = capacities[capacity_key]
+        if capacity_key not in paces:
+            paces[capacity_key] = pool_pace(roster, runtime, option['pool'], fleet, model_key=option['model_key'])
         cash = option.get("cash") or funding.quote(option["funding"])
         if funding.legacy_gemini(option["pool"], option["harness"]):
             cash = pool_cash[option["pool"]]
@@ -893,7 +1040,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         scored.append(dict(option, cash=cash, quality=quality, quality_basis=q.get("basis"),
                            **({"hard_reasoning_opus": True, "floor_exception": below_floor} if opus else {}),
                            q={"mean": mean, "sd": sd, "unknown": unknown},
-                           cost=cost, latency_s=latency, pool_price=pool_price,
+                           cost=cost, latency_s=latency, pool_price=pool_price, quota_pace=paces[capacity_key],
                            **({"capacity": capacity} if capacity is not None else {}),
                            flags=list(row.get("flags") or []) + cost_flags + (["quality_unknown"] if unknown else []) +
                                  (["quota_projection_unknown"] if pool_price["projection_unknown"] else [])))
@@ -933,15 +1080,30 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     except OSError:
         counts = {}
         no_explore = True
+    # A missing level cannot borrow measured-fit status or earn an upward
+    # extrapolation. Borrow the weakest admitted sibling grade halfway toward
+    # neutral (never above the sibling), consistently for every model.
+    sibling_grades = {}
     for item in scored:
-        item["estimated_price"] = routing_price(item)
+        if not item["q"]["unknown"]:
+            key = item["model_identity"]
+            sibling_grades[key] = min(item["quality"], sibling_grades.get(key, 1.0))
+    for item in scored:
+        item["estimated_price"] = _routing_price(item)
+        grade = item["quality"]
+        sibling = sibling_grades.get(item["model_identity"])
+        basis = "grade" if not item["q"]["unknown"] else "unknown_grade"
+        if item["q"]["unknown"] and sibling is not None:
+            grade = min(sibling, (sibling + .5) / 2)
+            basis = "conservative_sibling_grade"
+        prior = rating.success_prior(grade, difficulty)
+        item.update(p_success_prior=prior, prior_basis=basis)
         key = rating_explore.route_key(item)
         passed, failed = (counts.get((key, verdict), 0) for verdict in ("pass", "fail"))
-        alpha, beta = rating_explore.posterior(item["quality"], passed, failed)
+        alpha, beta = rating_explore.posterior(prior, passed, failed)
         item["posterior"] = (alpha, beta)
         item["checked_passes"], item["checked_failures"] = passed, failed
-        # Before any checked outcomes, the grade is a proxy, not a measured pass rate.
-        item["p_success"] = alpha / (alpha + beta) if passed or failed else item["quality"]
+        item["p_success"] = alpha / (alpha + beta)
     typical = None
     try:
         typical = rating_log.typical_price(state_dir)
@@ -957,10 +1119,20 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         expected = rating.expected_cost(item["estimated_price"], item["p_success"], failure_price)
         item["expected_cost"] = expected
         # Historical receipts sort score descending; expected cost itself sorts ascending.
-        item["score"] = -expected if expected is not None else item["p_success"]
-    scored.sort(key=lambda item: (item["expected_cost"] is None, -item["score"], -item["p_success"],
-                                  item["q"]["unknown"], item["q"]["sd"],
-                                  item["pool"], item["model_key"], item["level"]))
+        item["score"] = (-expected if expected is not None else _unpriced_rank(item))
+    if stakes == "irreversible":
+        # BR-CASH-004: do not trade known quality for price or a sampled probability.
+        for item in scored:
+            item["score"] = item["quality"]
+        scored.sort(key=lambda item: (-item["quality"], item["q"]["sd"],
+                                      item["pool"], item["model_key"], item["level"]))
+    else:
+        scored.sort(key=lambda item: (item["expected_cost"] is None, -item["score"], -item["p_success"],
+                                      item["q"]["unknown"], item["q"]["sd"],
+                                      item["cost"]["estimated_usd"]
+                                      if ("source_price_1m" in item and item["cost"]["estimated_usd"] is not None)
+                                      else math.inf,
+                                      item["pool"], item["model_key"], item["level"]))
     hard_reasoning_preference = None
     preferred = []
     if prefer_opus:
@@ -978,9 +1150,25 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if target is not None and any(option.get("pro_fallback") for option in scored):
         # An exact ChatGPT Pro request follows its established effort fallback.
         scored.sort(key=lambda option: option.get("worker_level") != "xhigh")
+    cash_preference = None
+    relay = None
+    if target is None and not preferred:
+        cash_peers, cash_preference = _cash_band(scored, stakes, policy)
+        if cash_preference:
+            ids = {id(item) for item in cash_peers}
+            scored = cash_peers + [item for item in scored if id(item) not in ids]
+        elif not any(map(funding.requires_reservation, scored)):
+            relay = _relay_fallback(scored, stakes)
+            if relay is not None:
+                scored = [relay, *(item for item in scored if item is not relay)]
+            elif stakes != "irreversible":
+                # Without the pressure exception an unpriced relay is a fallback,
+                # even if every eligible route lacks a complete price.
+                scored.sort(key=lambda item: bool(item.get("chatgpt_pi") and item["estimated_price"] is None))
     mean_pick = choice = scored[0]
     sample_p = sample_cost = None
-    if not no_explore and target is None and stakes != "irreversible" and exploration_cap:
+    if (not no_explore and target is None and stakes != "irreversible" and exploration_cap
+            and not cash_preference and relay is None):
         try:
             allowed = rating_explore.budget_allows(rating_explore.read_totals(state_dir), exploration_cap)
         except (OSError, ValueError):
@@ -1003,6 +1191,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "graded_options": sum(not item["q"]["unknown"] for item in scored),
               "value_mode": value_mode, "rating_stakes": rating_stakes, "rating_sampling": sampling,
               "typical_price": typical, "typical_price_basis": typical_basis, "failure_price": failure_price,
+              "calibration_difficulty": difficulty, "cash_preference": cash_preference,
+              "quota_fallback": "measured-pi-coding-relay" if relay is not None else None,
               "quality_floor": role_floor, "hard_reasoning_preference": hard_reasoning_preference,
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},
               "pool_prices": prices, "pool_cash": pool_cash, "role": role, "family": family, "stakes": stakes,

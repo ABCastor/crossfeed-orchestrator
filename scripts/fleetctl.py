@@ -3286,6 +3286,7 @@ def select_option(
     data_class: str | None = None, prompt: str | None = None,
     value_mode: str = "best-value", collect_eligible: bool = True,
     rating_stakes: str | None = None, no_explore: bool = False, explore_seed: int | None = None,
+    difficulty: str | None = None,
 ) -> dict[str, Any]:
     """Keep additive selection separate while sharing the existing fleet gates."""
     spec = importlib.util.spec_from_file_location("fleet_selector", Path(__file__).with_name("selector.py"))
@@ -3297,7 +3298,7 @@ def select_option(
         fleet=types.SimpleNamespace(**globals()),
         target=target, data_class=data_class, prompt=prompt, value_mode=value_mode,
         collect_eligible=collect_eligible, rating_stakes=rating_stakes,
-        no_explore=no_explore, explore_seed=explore_seed,
+        no_explore=no_explore, explore_seed=explore_seed, difficulty=difficulty,
     )
 
 
@@ -6580,6 +6581,7 @@ def main() -> int:
                 lead=resolve_lead_pool(roster, args.lead), data_class=args.data_class,
                 prompt=prompt if args.command == "dispatch" else None, value_mode=args.value_mode,
                 rating_stakes=args.rating_stakes, no_explore=args.no_explore, explore_seed=args.explore_seed,
+                difficulty=args.difficulty,
             )
             if args.command == "dispatch":
                 return dispatch_selection(selection, args, state_dir, prompt, roster=roster)
