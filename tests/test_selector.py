@@ -198,6 +198,9 @@ class SelectorTests(unittest.TestCase):
             self.assertEqual(incomplete["capacity"]["estimated_remaining_usd_equivalent"], 2.3)
             self.assertEqual(incomplete["capacity"]["headroom_basis"], "neutral_recent_work")
             self.assertEqual(incomplete["capacity"]["scarcity_penalty"], .5)
+            # A read that has gone stale is not a never-read pool.
+            runtime["quota_snapshots"][pool]["observed_at"] = fleetctl.iso(now - dt.timedelta(hours=2))
+            self.assertEqual(self.select(runtime, **opts)["choice"]["capacity"]["scarcity_penalty"], .5)
             runtime["quota_refresh_errors"] = {pool: {"attempted_at": fleetctl.iso(now),
                                                      "reason": "oracle failed"}}
             failure = self.select(runtime, **opts)["choice"]

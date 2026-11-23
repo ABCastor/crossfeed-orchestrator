@@ -560,9 +560,11 @@ def _relay_fallback(scored, stakes):
     return max(relays, key=_unpriced_rank, default=None)
 
 
-def _recent_working_pools(roster: dict, state_dir: Path, pools: set[str], fleet: Any) -> set[str]:
+def _recent_working_pools(roster: dict, state_dir: Path,
+                          included: set[tuple[str, str]], fleet: Any) -> set[str]:
     """Look for a successful operational receipt within one weekly refill period."""
     now = fleet.utc_now()
+    pools = {pool for pool, _ in included}
 
     def recent(stamp):
         try:
@@ -573,7 +575,7 @@ def _recent_working_pools(roster: dict, state_dir: Path, pools: set[str], fleet:
     lanes = [lane for lane in roster.get("lanes", [])
              if lane.get("quota_pool") in pools and lane.get("model_key")
              and lane.get("access_status") == "verified" and lane.get("admission_status") == "active"]
-    active = {(lane["quota_pool"], lane["model_key"]) for lane in lanes}
+    active = included | {(lane["quota_pool"], lane["model_key"]) for lane in lanes}
     working = set()
     for lane in lanes:
         pool, model = lane["quota_pool"], lane["model_key"]
@@ -644,10 +646,9 @@ def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
         windows = snapshot.get("windows", {})
         applies = lambda rows: any(fleet.quota_window_applies(roster, pool, name, row, model)
                                    for name, row in rows.items())
-        incomplete = state == "UNKNOWN" and evidence.get("confidence") == "direct" and applies(
-            {name: row for name, row in idle.items() if row.get("reset_unknown")})
-        failed_after_read = state == "GAUGE_ERROR" and (applies(windows) or applies(idle))
-        if (incomplete or failed_after_read) and recently_worked(pool):
+        known_reader = state == "GAUGE_ERROR" or pool in fleet.quota_sources(roster)
+        unusable = state in {"UNKNOWN", "GAUGE_ERROR"} and (applies(windows) or applies(idle))
+        if unusable and known_reader and recently_worked(pool):
             # The midpoint neither presumes a just-refilled week nor prices a
             # missing clock as a fully consumed week. It is for pricing only.
             estimate = capacity / 2
@@ -1035,7 +1036,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     def recently_worked(pool):
         nonlocal working_pools
         if working_pools is None:
-            included = {o["pool"] for o in options if o["funding"] == "included"}
+            included = {(o["pool"], o["model_identity"]) for o in options if o["funding"] == "included"}
             working_pools = _recent_working_pools(roster, state_dir, included, fleet)
         return pool in working_pools
 
