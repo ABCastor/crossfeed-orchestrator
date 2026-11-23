@@ -27,6 +27,7 @@ try:
     import go_quota_tariffs
     import rating
     import rating_explore
+    from success_evidence import SuccessEvidence
     from data_policy import paid_refusal
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
@@ -35,6 +36,7 @@ except ModuleNotFoundError:
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
+    from scripts.success_evidence import SuccessEvidence
 
 
 DEFAULTS = {"target": 90.0, "lambda0": 1.0, "uncertainty_weight": 1.0}
@@ -1144,24 +1146,12 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     except OSError:
         counts = {}
         no_explore = True
-    # A missing level cannot borrow measured-fit status or earn an upward
-    # extrapolation. Borrow the weakest admitted sibling grade halfway toward
-    # neutral (never above the sibling), consistently for every model.
-    sibling_grades = {}
-    for item in scored:
-        if not item["q"]["unknown"]:
-            key = item["model_identity"]
-            sibling_grades[key] = min(item["quality"], sibling_grades.get(key, 1.0))
+    calibration = SuccessEvidence(rows)
     for item in scored:
         item.update(estimated_price=routing_price(item), pricing_basis=rating.LIVE_PRICE_BASIS)
-        grade = item["quality"]
-        sibling = sibling_grades.get(item["model_identity"])
-        basis = "grade" if not item["q"]["unknown"] else "unknown_grade"
-        if item["q"]["unknown"] and sibling is not None:
-            grade = min(sibling, (sibling + .5) / 2)
-            basis = "conservative_sibling_grade"
-        prior = rating.success_prior(grade, difficulty)
-        item.update(p_success_prior=prior, prior_basis=basis)
+        rate, basis, source = calibration.rate(item["model_identity"], item["level"], family)
+        prior = rating.success_prior(rate, difficulty)
+        item.update(p_success_prior=prior, prior_basis=basis, prior_source=source)
         key = rating_explore.route_key(item)
         passed, failed = (counts.get((key, verdict), 0) for verdict in ("pass", "fail"))
         alpha, beta = rating_explore.posterior(prior, passed, failed)

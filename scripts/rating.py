@@ -91,19 +91,13 @@ NOMINAL_TASK_PERCENT = .5
 COMPETENT_RERUN_PRICE = NOMINAL_TASK_PERCENT / 100 * REFERENCE_WEEKLY_CAPACITY
 LIVE_PRICE_BASIS = "subscription-opportunity/v1"
 
-# Provisional planning anchor, not an observed acceptance rate. The operator's
-# 80–85% range centers a neutral-grade route on 82.5% for ordinary work.
-TYPICAL_SUCCESS = .825
-
-
-def success_prior(grade, difficulty="ordinary"):
-    # Hard grades discriminate the routes on work that needs the skill:
-    # transfer their relative odds at unit slope, rather than raising their
-    # odds ratio to the one-quarter power as for easier work. The slope
-    # pivots at grade .5 so the common anchor and difficulty offset still hold.
-    weight = 1.0 if difficulty == "hard" else .25
-    gap = log(TYPICAL_SUCCESS / (1 - TYPICAL_SUCCESS)) + seed(grade, weight=weight) - DIFFICULTY[difficulty]
-    return 1 / (1 + exp(-gap))
+# BR-SELECT-003
+def success_prior(pass_rate, difficulty="ordinary"):
+    """Transfer a benchmark pass rate, shifting odds for task difficulty."""
+    rate = _probability(pass_rate)
+    rate = .5 if rate is None else rate
+    odds_multiplier = exp(-DIFFICULTY[difficulty])
+    return rate * odds_multiplier / (1 - rate + rate * odds_multiplier)
 
 
 def subscription_price(percent, weekly_capacity, pace, *, window_minutes, scarcity=0):
