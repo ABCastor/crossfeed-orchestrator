@@ -217,6 +217,132 @@ const Crossfeed = (() => {
   return {searchShortcut, isTyping, isMac, keyHint, createSaver, switchView, splitChange, copyText, wireOrderHandle, createOrderMotion};
 })();
 
+function setupComparison(section) {
+  const document = section.ownerDocument;
+  const window = document.defaultView;
+  const form = section.querySelector('.wb-query');
+  let request = 0;
+  let desired = params();
+  const routeOf = key => key.slice(0, key.lastIndexOf(':'));
+  function updateAddButtons() {
+    const menu = new Set([...form.querySelectorAll('.wb-model-picker option')].map(option => routeOf(option.value)));
+    const selected = new Set(params().getAll('compare').map(routeOf));
+    for (const button of document.querySelectorAll('.wb-add')) {
+      const route = button.dataset.route;
+      const on = selected.has(route);
+      const capped = on ? selected.size <= 2 : selected.size >= 4;
+      button.hidden = !menu.has(route);
+      button.setAttribute('aria-pressed', String(on));
+      button.setAttribute('aria-disabled', String(capped));
+      button.title = capped ? 'Compare two to four models.' : '';
+      button.textContent = on ? 'Comparing' : 'Compare';
+    }
+  }
+  function params(preview) {
+    const query = new URLSearchParams();
+    query.set('role', form.elements.role.value);
+    query.set('count', form.elements.count.value);
+    const mode = form.elements.value.value;
+    query.set(preview ? 'preview-value' : 'value', preview || mode);
+    for (const effort of form.querySelectorAll('.wb-effort-picker')) {
+      const model = form.querySelector(`.wb-model-picker[data-col="${effort.dataset.col}"]`);
+      const previous = [...model.options].find(option => option.defaultSelected)?.value;
+      query.append('compare', model.value !== previous ? model.value : effort.value);
+    }
+    return query;
+  }
+  function reset() {
+    for (const select of form.querySelectorAll('select')) {
+      const previous = [...select.options].find(option => option.defaultSelected);
+      if (previous) select.value = previous.value;
+    }
+    form.elements.value.value = form.elements.value.defaultValue;
+  }
+  function previewMode(mode) {
+    const button = form.elements['preview-value'];
+    const absolute = mode === 'absolute-best';
+    button.setAttribute('aria-checked', String(absolute));
+    button.querySelector('.st').textContent = absolute ? 'Absolute best' : 'Best value';
+    button.value = absolute ? 'best-value' : 'absolute-best';
+    form.elements.value.value = mode;
+  }
+  async function refresh(change) {
+    if (change) desired = change;
+    const query = new URLSearchParams(desired);
+    query.set('fragment', 'compare');
+    const mine = ++request;
+    const error = form.querySelector('.wb-error');
+    error.textContent = '';
+    section.setAttribute('aria-busy', 'true');
+    try {
+      const response = await window.fetch('/?' + query);
+      if (!response.ok) throw new Error('Comparison refused');
+      const doc = new window.DOMParser().parseFromString(await response.text(), 'text/html');
+      if (mine !== request) return;
+      const next = doc.querySelector('.wb-query');
+      if (!next) throw new Error('Comparison missing');
+      const focused = document.activeElement;
+      const inForm = form.contains(focused);
+      let focusSelector = '';
+      if (inForm && focused.dataset.col) {
+        const cls = focused.matches('.wb-model-picker') ? 'wb-model-picker' : 'wb-effort-picker';
+        focusSelector = `.${cls}[data-col="${focused.dataset.col}"]`;
+      } else if (inForm && focused.name) focusSelector = `[name="${focused.name}"]`;
+      form.replaceChildren(...next.childNodes);
+      if (focusSelector) (form.querySelector(focusSelector) || form.elements.count).focus({preventScroll: true});
+      const details = section.querySelector('.wb-numbers');
+      const explanation = details.querySelector('.wb-muted');
+      const newExplanation = doc.querySelector('.wb-numbers .wb-muted');
+      if (explanation.innerHTML !== newExplanation.innerHTML && !explanation.contains(focused)) {
+        const open = explanation.querySelector('details')?.open;
+        explanation.replaceChildren(...newExplanation.childNodes);
+        if (open && explanation.querySelector('details')) explanation.querySelector('details').open = true;
+      }
+      updateAddButtons();
+      const updated = params(desired.get('preview-value'));
+      if (change || desired.get('preview-value')) {
+        window.history.replaceState(null, '', '/?' + updated + window.location.hash);
+      }
+      desired = updated;
+    } catch (_) {
+      if (mine !== request) return;
+      reset();
+      previewMode(form.elements.value.defaultValue);
+      desired = params();
+      error.textContent = change ? 'Comparison not updated. Try again.' : 'Comparison may be out of date.';
+    } finally {
+      if (mine === request) section.removeAttribute('aria-busy');
+    }
+  }
+  form.addEventListener('change', event => {
+    if (event.target.matches('select')) refresh(params());
+  });
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const preview = event.submitter?.name === 'preview-value' ? event.submitter.value : '';
+    if (preview) previewMode(preview);
+    refresh(params(preview));
+  });
+  document.addEventListener('click', event => {
+    const add = event.target.closest('.wb-add');
+    if (!add || add.getAttribute('aria-disabled') === 'true') return;
+    const select = form.querySelector('.wb-model-picker');
+    const choice = [...(select?.options || [])].find(option => routeOf(option.value) === add.dataset.route);
+    if (!choice) return;
+    const query = params();
+    let keys = query.getAll('compare');
+    const at = keys.findIndex(key => routeOf(key) === add.dataset.route);
+    if (at === -1) keys = [...keys, choice.value];
+    else keys.splice(at, 1);
+    query.delete('compare');
+    for (const key of keys) query.append('compare', key);
+    query.set('count', String(keys.length));
+    refresh(query);
+  });
+  updateAddButtons();
+  return refresh;
+}
+
 function boot(document, window) {
   const root = document.documentElement;
   root.classList.add('js');
@@ -365,7 +491,6 @@ function boot(document, window) {
   const searchStatus = document.querySelector('.search-status');
   const hint = document.querySelector('.key-hint');
   if (hint) hint.textContent = Crossfeed.keyHint(window.navigator);
-  const searchable = [...document.querySelectorAll('[data-search-label]')];
   let returnFocus = null;
   function reveal(target) {
     for (let parent = target.parentElement; parent; parent = parent.parentElement) {
@@ -382,7 +507,8 @@ function boot(document, window) {
   function search() {
     results.replaceChildren();
     const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const matches = words.length ? searchable.filter(el => words.every(word => haystack(el).includes(word))) : [];
+    const matches = words.length ? [...document.querySelectorAll('[data-search-label]')]
+      .filter(el => words.every(word => haystack(el).includes(word))) : [];
     for (const target of matches) {
       const li = document.createElement('li');
       const link = document.createElement('a');
@@ -472,6 +598,7 @@ function boot(document, window) {
     if (panel && !panel.hidden && !event.target.closest('.find-panel, .find-lens')) closeSearch(false);
   });
   const workbench = document.querySelector('.wb');
+  const compare = workbench?.querySelector('.wb-query') ? setupComparison(workbench) : null;
   if (window.location.hash) {
     const target = document.getElementById(window.location.hash.slice(1));
     if (workbench && target?.matches('details.pick')) {
@@ -493,8 +620,8 @@ function boot(document, window) {
     try { id = decodeURIComponent(hash.slice(1)); } catch (_) { return; }
     const target = document.getElementById(id);
     const drawer = target?.querySelector('details.model-disclosure');
-    if (!drawer) return;
-    drawer.open = true;
+    if (!drawer && !(workbench && target?.matches('.wb-model'))) return;
+    if (drawer) drawer.open = true;
     for (let parent = target.parentElement; parent; parent = parent.parentElement) {
       if (parent.matches('details')) parent.open = true;
     }
@@ -577,20 +704,34 @@ function boot(document, window) {
   }
   const picks = new Map([...document.querySelectorAll('.pick')].map(pick => [pick.dataset.pool, pick]));
   const switchesOf = pick => [...pick.querySelectorAll('.sw')];
-  const onOf = pick => switchesOf(pick).filter(sw => sw.getAttribute('aria-checked') === 'true').map(sw => sw.dataset.key);
+  const onOf = pick => switchesOf(pick).filter(sw => sw.getAttribute('aria-checked') === 'true')
+    .map(sw => sw.dataset.key || Crossfeed.splitChange(sw.value)[0]);
   for (const [pool, pick] of picks) confirmed.set(`model:${pool}`, onOf(pick));
   for (const form of document.querySelectorAll('.lv')) {
     confirmed.set(`level:${form.querySelector('[name=pool]').value}`, form.querySelector('.stop.on')?.value);
   }
 
+  function showSwitch(button, on, next) {
+    button.setAttribute('aria-checked', String(on));
+    button.setAttribute('value', next);
+    button.querySelector('.st').textContent = on ? 'On' : 'Off';
+  }
   function showLevel(pool, level, means) {
     const row = document.getElementById(`pool-${pool}`);
-    const form = row?.querySelector('.lv');
-    if (!form) return;
+    const policy = workbench ? document.getElementById(`policy-${pool}`) || row : row;
+    const form = policy?.querySelector('.lv');
+    if (!row || !form) return;
+    const toggle = row.querySelector('.wb-pool-switch button');
+    if (toggle) {
+      const on = level !== 'off';
+      showSwitch(toggle, on, on ? 'off' : 'normal');
+      const caption = policy.querySelector('.wb-level');
+      if (caption) caption.textContent = form.querySelector(`[value="${level}"]`).getAttribute('aria-label');
+    }
     const stops = [...form.querySelectorAll('.stop')];
     row.className = row.className.replace(/\blvl-\S+/g, `lvl-${level}`);
     form.className = `lv at-${stops.findIndex(b => b.value === level)} is-${level}`;
-    let meaning = means;
+    let meaning = workbench ? undefined : means;
     for (const button of stops) {
       const selected = button.value === level;
       button.classList.toggle('on', selected);
@@ -598,11 +739,19 @@ function boot(document, window) {
       button.tabIndex = selected ? 0 : -1;   // one stop in the tab order; arrows move between them
       if (selected && meaning === undefined && button.title) meaning = button.title;
     }
-    if (meaning !== undefined) row.querySelector('.means').textContent = meaning;
+    if (meaning !== undefined) policy.querySelector('.means').textContent = meaning;
   }
   function showModels(pool, on, told) {
     const pick = picks.get(pool);
-    if (!pick || workbench) return;
+    if (!pick) return;
+    if (workbench) {
+      for (const sw of pick.querySelectorAll('button[name="switch"]:not(:disabled)')) {
+        const [model] = Crossfeed.splitChange(sw.value);
+        const isOn = on.includes(model);
+        showSwitch(sw, isOn, `${model}=${isOn ? 'off' : 'on'}`);
+      }
+      return;
+    }
     const models = [];
     const every = [];
     for (const sw of switchesOf(pick)) {
@@ -647,7 +796,16 @@ function boot(document, window) {
       confirmed.set(`level:${pool.pool}`, pool.level);
       if (!skip(`level:${pool.pool}`)) showLevel(pool.pool, pool.level, pool.means);
       const row = document.getElementById(`pool-${pool.pool}`);
-      if (row && !workbench && pool.gauge !== undefined) row.querySelector('.gauge').innerHTML = pool.gauge;
+      const gauge = row?.querySelector('.gauge');
+      const markup = workbench ? pool.wallet_gauge : pool.gauge;
+      if (gauge && markup !== undefined && (!workbench || gauge.dataset.markup !== markup)) {
+        if (workbench) {
+          const open = gauge.querySelector('.pro-note')?.open;
+          gauge.dataset.markup = markup;
+          gauge.innerHTML = markup;
+          if (open && gauge.querySelector('.pro-note')) gauge.querySelector('.pro-note').open = true;
+        } else gauge.innerHTML = markup;
+      }
       if (row && !skip(`level:${pool.pool}`) && pool.control_actor !== undefined) {
         const actor = row.querySelector('.level-actor');
         if (actor) actor.textContent = pool.control_actor;
@@ -667,11 +825,12 @@ function boot(document, window) {
     if (data.brief !== undefined) briefCompact = data.brief;
     if (data.brief_full !== undefined) briefFull = data.brief_full;
     if (briefText && data.brief !== undefined) briefText.textContent = fullShown ? briefFull : briefCompact;
-    if (data.console_order !== undefined) {
+    if (!workbench && data.console_order !== undefined) {
       confirmedOrder = clone(data.console_order);
       if (!orderDraft && !skip('order')) { order = clone(confirmedOrder); applyOrder(); }
     }
-    if (data.stamp !== undefined) document.querySelector('.stamp').textContent = data.stamp;
+    const stamp = document.querySelector('.stamp');
+    if (stamp && data.stamp !== undefined) stamp.textContent = workbench ? (data.wallet_stamp ?? data.stamp) : data.stamp;
   }
 
   async function post(url, body) {
@@ -683,7 +842,8 @@ function boot(document, window) {
     send: ({url, body}) => post(url, body),
     onConfirmed: (data, key) => {
       update(data, other => saver.pending(other));
-      if (!saver.busy()) say(key === 'order' ? 'Saved this page’s order.' : key.startsWith('model:') ? 'Saved. The next task uses these models.' : 'Saved. Routing uses this setting now.');
+      if (!saver.busy()) compare?.();
+      if (!saver.busy() && (!workbench || key === 'order')) say(key === 'order' ? 'Saved this page’s order.' : key.startsWith('model:') ? 'Saved. The next task uses these models.' : 'Saved. Routing uses this setting now.');
     },
     onFailed: (key, newer) => {
       if (!newer) {
@@ -692,7 +852,7 @@ function boot(document, window) {
         else if (kind === 'level') showLevel(pool, confirmed.get(key));
         else showModels(pool, confirmed.get(key));
       }
-      say('Could not save that change, so the page shows the setting that is still in force. Try again.');
+      if (!workbench || key === 'order') say('Could not save that change, so the page shows the setting that is still in force. Try again.');
     },
   });
 
@@ -874,9 +1034,29 @@ function boot(document, window) {
       if (action.endsWith('/probe')) {
         if (result.models?.length) showProviderModels(result.models);
         else output.textContent += ' Enter the model IDs you want to add.';
+      } else if (action.endsWith('/remove')) {
+        form.closest('li').remove();
+        if (workbench && result.snapshot) {
+          const pools = new Map(result.snapshot.pools.map(pool => [pool.pool, pool]));
+          for (const row of document.querySelectorAll('.wb-pool-control')) {
+            const pool = pools.get(row.dataset.pool);
+            if (!pool) row.remove();
+            else {
+              for (const item of row.querySelectorAll('.wb-model')) {
+                if (!Object.hasOwn(pool.model_actors, item.dataset.model)) item.remove();
+              }
+              const count = row.querySelectorAll('.wb-model').length;
+              const inventory = row.querySelector('.wb-inventory');
+              if (inventory) inventory.textContent = `${count} model ${count === 1 ? 'entry' : 'entries'}`;
+            }
+          }
+          update(result.snapshot, key => saver.pending(key));
+          compare?.();
+        }
+        say(result.message);
       } else {
         if (form.elements.key) form.elements.key.value = '';
-        window.location.reload();
+        window.location.reload(); // An added provider can introduce new cards, models and settings.
       }
     } catch (error) {
       output.dataset.error = 'true';
@@ -888,18 +1068,50 @@ function boot(document, window) {
 
   document.addEventListener('submit', async event => {
     const form = event.target;
-    if (workbench || !form.matches('.lv, .choose, .quota-refresh')) return;
+    if (!form.matches('.lv, .choose, .quota-refresh, .wb-pool-switch, .wb-models, [action="/settings/pro"]')) return;
     event.preventDefault();
     const body = new URLSearchParams(new FormData(form));
-    if (event.submitter?.name) body.set(event.submitter.name, event.submitter.value);
-    if (form.matches('.lv')) {
+    const {submitter} = event;
+    if (submitter?.name) body.set(submitter.name, submitter.value);
+    if (form.matches('[action="/settings/pro"]')) {
+      if (form.getAttribute('aria-busy') === 'true') return;
+      const input = form.querySelector('input[name="allowance"]');
+      const output = form.querySelector('.wb-error');
+      const revision = saver.revision;
+      form.setAttribute('aria-busy', 'true');
+      output.dataset.error = 'false';
+      output.textContent = 'Saving…';
+      try {
+        const data = await post(form.action, body);
+        input.defaultValue = String(data.allowance);
+        if (input.value === body.get('allowance')) input.value = input.defaultValue;
+        if (workbench && revision === saver.revision && !saver.busy()) update(data);
+        compare?.();
+        output.textContent = 'Saved.';
+      } catch (_) {
+        if (input.value === body.get('allowance')) input.value = input.defaultValue;
+        output.dataset.error = 'true';
+        output.textContent = 'Not saved. Try again.';
+      } finally {
+        form.removeAttribute('aria-busy');
+      }
+      return;
+    }
+    const output = (submitter?.closest('.wb-model') || form.closest('.wb-pool-control, .wb-agy-policy'))?.querySelector('.wb-error');
+    const save = async key => {
+      if (output) output.textContent = '';
+      if (!await saver.save(key, {url: form.action, body}) && output && !saver.pending(key)) {
+        output.textContent = 'Not saved. Try again.';
+      }
+    };
+    if (form.matches('.lv, .wb-pool-switch')) {
       const pool = body.get('pool'), level = body.get('level');
       showLevel(pool, level);   // at once; the server's answer brings the matching words
       say('');
-      saver.save(`level:${pool}`, {url: form.action, body});
+      await save(`level:${pool}`);
       return;
     }
-    if (form.matches('.choose')) {
+    if (form.matches('.choose, .wb-models')) {
       const pool = body.get('pool');
       const pick = picks.get(pool);
       const on = new Set(onOf(pick));
@@ -912,7 +1124,7 @@ function boot(document, window) {
       }
       showModels(pool, [...on]);
       say('');
-      saver.save(`model:${pool}`, {url: form.action, body});
+      await save(`model:${pool}`);
       return;
     }
     const button = form.querySelector('button');
@@ -925,6 +1137,7 @@ function boot(document, window) {
     try {
       const data = await post(form.action, body);
       update(data, key => saver.pending(key));
+      compare?.();
       const failed = Object.entries(data.refresh || {})
         .filter(([, value]) => value !== 'refreshed' && value !== 'kept newer stored snapshot')
         .map(([pool]) => document.getElementById(`pool-${pool}`)?.dataset.searchLabel || pool);
@@ -1014,7 +1227,7 @@ function boot(document, window) {
       }
     } catch (_) { /* Stored readings remain visible with their age. */ }
   }
-  if (status && !workbench) { window.setTimeout(refresh, 1000); window.setInterval(refresh, 30000); }
+  if (status) { window.setTimeout(refresh, 1000); window.setInterval(refresh, 30000); }
   return {update, showModels, showLevel, saver, openSearch, closeSearch};
 }
 

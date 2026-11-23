@@ -452,6 +452,87 @@ test('a failed switch save puts back what is still in force and says so', async 
   assert.match(f.document.querySelector('.save-status').textContent, /still in force/);
 });
 
+test('wallet model saves prevent navigation and preserve the switch, focus, and open disclosures', async () => {
+  let navigations = 0;
+  const env = start({
+    prepare({document, astra, pick}) {
+      const marker = h('section', {class: 'wb'});
+      document.querySelector('main').append(marker);
+      const policy = h('details', {class: 'wb-advanced', open: ''});
+      document.querySelector('#pool-codex').append(policy);
+      pick.open = true;
+      pick.querySelector('form').className = 'wb-models';
+      astra.classList.add('wb-model');
+      astra.append(h('span', {class: 'wb-error', role: 'status'}));
+    },
+    configureWindow(window) { window.location.reload = () => navigations++; window.scrollY = 400; },
+  });
+  const {document, window, requests, astra, pick} = env;
+  const switcher = astra.querySelector('.sw');
+  const policy = document.querySelector('.wb-advanced');
+  const error = astra.querySelector('.wb-error');
+  switcher.focus();
+  function click() {
+    let prevented = false;
+    document.dispatch('submit', {
+      target: switcher.closest('form'), submitter: switcher,
+      preventDefault() { prevented = true; },
+    });
+    assert(prevented, 'submit does not navigate');
+  }
+  click();
+  assert.equal(switcher.getAttribute('aria-checked'), 'false');
+  await flush();
+  assert.equal(requests[0].url, '/model');
+  assert.equal(requests[0].options.body.get('switch'), 'gpt-6-astra=off');
+  reply(requests[0], {pools: [{pool: 'codex', level: 'normal', on: ['gpt-6.1-sol', 'gpt-6-luna']}]});
+  await flush();
+  assert.equal(switcher.getAttribute('aria-checked'), 'false');
+  assert.equal(policy.open, true);
+  policy.open = false;
+  click();
+  assert.equal(switcher.getAttribute('aria-checked'), 'true');
+  await flush();
+  requests[1].resolve({ok: false, status: 403});
+  await flush();
+  assert.equal(switcher.getAttribute('aria-checked'), 'false');
+  assert.equal(switcher.value, 'gpt-6-astra=on');
+  assert.equal(error.textContent, 'Not saved. Try again.');
+  assert.equal(policy.open, false);
+  assert.equal(pick.open, true);
+  assert.equal(document.activeElement, switcher);
+  assert.equal(window.scrollY, 400);
+  assert.equal(navigations, 0);
+});
+
+test('Pro allowance saves and refusals stay inside the settings form', async () => {
+  const env = start({
+    prepare({document}) {
+      const input = h('input', {name: 'allowance', value: '200'});
+      input.defaultValue = '200';
+      const form = h('form', {action: '/settings/pro'}, input,
+        h('input', {name: 't', value: 'tok'}), h('p', {class: 'wb-error', role: 'status'}));
+      document.querySelector('main').append(form);
+    },
+  });
+  const form = env.document.querySelector('[action="/settings/pro"]');
+  const input = form.querySelector('input[name="allowance"]');
+  const status = form.querySelector('.wb-error');
+  input.value = '123';
+  form.submit();
+  assert.equal(env.requests[0].options.body.get('allowance'), '123');
+  reply(env.requests[0], {allowance: 123});
+  await flush();
+  assert.equal(input.defaultValue, '123');
+  assert.equal(status.textContent, 'Saved.');
+  input.value = '124';
+  form.submit();
+  env.requests[1].resolve({ok: false, status: 403});
+  await flush();
+  assert.equal(input.value, '123');
+  assert.equal(status.textContent, 'Not saved. Try again.');
+});
+
 test('a level click moves the slider at once', async () => {
   const f = start();
   f.stops[3].click();
