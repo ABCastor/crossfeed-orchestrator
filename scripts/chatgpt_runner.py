@@ -185,11 +185,24 @@ def cancel_gateway(base, key, idempotency_key):
     return status
 
 
-def wake_trouble(status, label):
+def failed_wakes(status, label):
+    """Failed wake rows per worker identity (label, session, replica) for this saved label."""
+    counts = {}
+    for row in (status.get("wakes") or []) if isinstance(status, dict) else []:
+        if isinstance(row, dict) and row.get("state") == "failed" and isinstance(row.get("label"), str) \
+                and row["label"].split("~", 1)[0] == label:
+            counts[row["label"]] = counts.get(row["label"], 0) + 1
+    return counts
+
+
+def wake_trouble(status, label, before=None):
     """Why a queued job for this saved label cannot get a worker right now, else None.
 
     Returns (reason, claimed). `claimed` means a worker has taken a job for the label,
-    so the wait is no longer a wake problem.
+    so the wait is no longer a wake problem. `before` holds failed_wakes() from before
+    this job was submitted: those rows belong to other jobs, cancelled ones included,
+    and the gateway retries after them, so only failures beyond them count. The status
+    lists rows oldest first and does not say which job a row served.
     """
     if not isinstance(status, dict):
         return None, False
@@ -202,7 +215,13 @@ def wake_trouble(status, label):
              if isinstance(row, dict) and str(row.get("label", "")).split("~", 1)[0] == label]
     if any(row.get("state") in {"issued", "claimed", "confirmed"} for row in wakes):
         return None, False
-    failed = [row for row in wakes if row.get("state") == "failed"]
+    seen, failed = {}, []
+    for row in wakes:
+        if row.get("state") == "failed":
+            identity = str(row.get("label"))
+            seen[identity] = seen.get(identity, 0) + 1
+            if before is None or seen[identity] > before.get(identity, 0):
+                failed.append(row)
     if failed:
         code = failed[-1].get("failure_code")
         stage = failed[-1].get("failure_stage")
@@ -214,14 +233,29 @@ def wake_trouble(status, label):
     return None, False
 
 
-def watch_wake(base, key, label, state, now):
-    """One bounded status read; raises Rejected(75) once a wake has been stuck long enough."""
+def gateway_status(base, key):
+    """One bounded status read, or None."""
     try:
         with preflight_budget(time.monotonic() + 4):
-            status = request(base, key, "/gateway/status", timeout=3)
+            return request(base, key, "/gateway/status", timeout=3)
     except Rejected:
+        return None
+
+
+def watch_wake(base, key, label, state, now):
+    """One bounded status read; raises Rejected(75) once a wake has been stuck long enough.
+
+    state["before"] is the failed-wake baseline from before submission; without one,
+    the first successful read sets it. It drops as the gateway forgets old rows.
+    """
+    status = gateway_status(base, key)
+    if status is None:
         return
-    reason, claimed = wake_trouble(status, label)
+    current = failed_wakes(status, label)
+    before = state.setdefault("before", current)
+    reason, claimed = wake_trouble(status, label, before)
+    state["before"] = {identity: min(count, current.get(identity, 0))
+                       for identity, count in before.items() if current.get(identity)}
     if claimed:
         state["claimed"] = True
     if reason is None or state.get("claimed"):
@@ -251,6 +285,13 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
     deadline = getattr(args, "wall_deadline", None)
     if deadline is not None and time.monotonic() >= deadline:
         raise Rejected(124, "wall timeout during preflight")
+    label = lane.get("worker_label") if lane else None
+    watch = {"claimed": False}
+    if label:
+        # Wake failures already listed belong to other jobs; only later ones are this job's.
+        before = gateway_status(base, key)
+        if before is not None:
+            watch["before"] = failed_wakes(before, label)
     context = multiprocessing.get_context("fork")
     receiver, sender = context.Pipe(duplex=False)
     child = context.Process(target=http_child, args=(sender, base, key, payload, idempotency_key))
@@ -262,8 +303,6 @@ def supervise(args, base, key, payload, events, interrupted, idempotency_key, la
     reported_silence = 0
     silence_interval = max(1, int(os.environ.get("CROSSFEED_TEST_SILENCE_INTERVAL_S", "600")))
     group_ready = False
-    label = lane.get("worker_label") if lane else None
-    watch = {"claimed": False}
     next_watch = started + WATCH_EVERY_S
     try:
         while True:

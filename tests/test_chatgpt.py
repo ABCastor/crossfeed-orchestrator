@@ -67,6 +67,8 @@ class Gateway(BaseHTTPRequestHandler):
         if mode == "health-429":
             return self.reply(429, {"error": KEY})
         extra = getattr(self.server, 'status_extra', {})
+        if self.server.payloads and hasattr(self.server, 'status_after_submit'):
+            extra = self.server.status_after_submit
         self.reply(200, extra | {'workers': [{'label': selector.removeprefix('chatgpt:'),
             'contact': 'never' if mode == 'sleep' else 'stale' if mode == 'stale-active' else 'recent',
             'polling': mode not in {'sleep', 'stale-active'},
@@ -287,14 +289,87 @@ subprocess.Popen=popen
         self.env.update(CROSSFEED_TEST_WAKE_STUCK_S="1", CROSSFEED_TEST_WATCH_EVERY_S="1")
 
     def test_stuck_wake_fails_fast_with_the_gateway_reason_and_cancels_the_job(self):
-        self.stuck_wake(jobs=[{"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}],
-                        wakes=[{"label": "fixture-medium~session-abc", "state": "failed",
-                                "failure_code": "composer_not_empty", "failure_stage": "ready"}])
+        job = {"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}
+        self.stuck_wake(jobs=[job])
+        self.gateway.status_after_submit = {"jobs": [job], "wakes": [
+            {"label": "fixture-medium~session-abc", "state": "failed",
+             "failure_code": "composer_not_empty", "failure_stage": "ready"}]}
         result = self.run_adapter("hang")
         self.assertEqual(result.returncode, 75, result.stderr)
         self.assertIn("no ChatGPT worker could start: wake failed (composer_not_empty at ready)", result.stderr)
         self.assertEqual(len(self.gateway.cancel_calls), 1)
         self.assertEqual(result.stdout, "")
+
+    def test_a_cancelled_foreign_jobs_failed_wake_does_not_give_up_on_this_job(self):
+        # The failed row was left by another session's job, since cancelled, before this job existed.
+        foreign = {"id": "f" * 32, "label": "fixture-medium", "state": "failed", "error": "caller_cancelled"}
+        ours = {"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}
+        left = {"label": "fixture-medium~session-other", "state": "failed",
+                "failure_code": "level_unconfirmed", "failure_stage": "prefillModel"}
+        self.stuck_wake(jobs=[foreign], wakes=[left])
+        self.gateway.status_after_submit = {"jobs": [foreign, ours], "wakes": [left]}
+        result = self.run_adapter("hang")
+        self.assertEqual((result.returncode, result.stdout), (0, "PONG\n"), result.stderr)
+        self.assertNotIn("no ChatGPT worker could start", result.stderr)
+        self.assertEqual(self.gateway.cancel_calls, [])
+
+    def test_another_lanes_wake_failure_does_not_block_this_lane(self):
+        ours = {"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}
+        other = {"label": "fixture-high~session-other", "state": "failed",
+                 "failure_code": "level_unconfirmed", "failure_stage": "prefillModel"}
+        self.stuck_wake(jobs=[ours])
+        self.gateway.status_after_submit = {"jobs": [ours], "wakes": [other]}
+        result = self.run_adapter("hang")
+        self.assertEqual((result.returncode, result.stdout), (0, "PONG\n"), result.stderr)
+        self.assertEqual(self.gateway.cancel_calls, [])
+
+    def test_this_lanes_new_wake_failure_still_gives_up_beside_an_older_one(self):
+        ours = {"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}
+        old = {"label": "fixture-medium~session-other", "state": "failed",
+               "failure_code": "composer_not_empty", "failure_stage": "ready"}
+        new = {"label": "fixture-medium~session-abc", "state": "failed",
+               "failure_code": "level_unconfirmed", "failure_stage": "prefillModel"}
+        self.stuck_wake(jobs=[ours], wakes=[old])
+        self.gateway.status_after_submit = {"jobs": [ours], "wakes": [old, new]}
+        result = self.run_adapter("hang")
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("no ChatGPT worker could start: wake failed (level_unconfirmed at prefillModel)", result.stderr)
+        self.assertEqual(len(self.gateway.cancel_calls), 1)
+
+    def test_wake_trouble_counts_only_failures_newer_than_the_jobs_baseline(self):
+        queued = {"jobs": [{"label": "fixture-medium", "state": "queued"}]}
+        def row(identity, code):
+            return {"label": identity, "state": "failed", "failure_code": code, "failure_stage": "ready"}
+        older = row("fixture-medium~session-a", "page_not_ready")
+        status = queued | {"wakes": [older]}
+        before = runner.failed_wakes(status, "fixture-medium")
+        self.assertEqual(before, {"fixture-medium~session-a": 1})
+        self.assertEqual(runner.wake_trouble(status, "fixture-medium", before), (None, False))
+        # A retried job keeps its session, so a second failure of the same identity is new.
+        again = queued | {"wakes": [older, row("fixture-medium~session-a", "level_unconfirmed")]}
+        self.assertEqual(runner.wake_trouble(again, "fixture-medium", before),
+                         ("wake failed (level_unconfirmed at ready)", False))
+        # Without a baseline every failed row counts, as before.
+        self.assertEqual(runner.wake_trouble(status, "fixture-medium"), ("wake failed (page_not_ready at ready)", False))
+        # Another label's failure never counts.
+        self.assertEqual(runner.wake_trouble(queued | {"wakes": [row("fixture-high", "page_changed")]}, "fixture-medium", {}),
+                         (None, False))
+
+    def test_watch_lowers_the_baseline_when_old_rows_expire(self):
+        queued = [{"label": "fixture-medium", "state": "queued"}]
+        def row(code):
+            return {"label": "fixture-medium~session-a", "state": "failed", "failure_code": code, "failure_stage": "ready"}
+        replies = iter([{"jobs": queued, "wakes": [row("page_not_ready"), row("page_changed")]},
+                        {"jobs": queued, "wakes": [row("page_changed")]},
+                        {"jobs": queued, "wakes": [row("page_changed"), row("send_unconfirmed")]}])
+        state = {"claimed": False, "before": {"fixture-medium~session-a": 2}}
+        with patch.object(runner, "request", lambda *a, **k: next(replies)), patch.object(runner, "WAKE_STUCK_S", 0):
+            runner.watch_wake("base", "key", "fixture-medium", state, 0)
+            runner.watch_wake("base", "key", "fixture-medium", state, 1)
+            self.assertEqual(state["before"], {"fixture-medium~session-a": 1})
+            with self.assertRaises(runner.Rejected) as raised:
+                runner.watch_wake("base", "key", "fixture-medium", state, 2)
+        self.assertIn("wake failed (send_unconfirmed at ready)", raised.exception.message)
 
     def test_spent_wake_cap_also_fails_fast_but_a_wake_in_progress_does_not(self):
         job = {"id": "j" * 32, "label": "fixture-medium", "state": "queued", "error": None}
