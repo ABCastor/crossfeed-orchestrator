@@ -16,7 +16,7 @@ class ReadOnlyAgyTests(Sandbox):
         lane = next(lane for lane in self.roster['lanes'] if lane['harness'] == 'agy'
                     and lane['quota_pool'] == 'antigravity-gemini'
                     and lane['admission_status'] == 'active')
-        lane.update(agy_read_only_copy=True, data_policy='code-ok')
+        lane.update(agy_read_only_copy=True, agy_read_only_roles=['review'], data_policy='code-ok')
         self.lane = lane['lane_id']
         self.roster['policy']['selector'] = {'allowed_pools_by_role': {'default': ['antigravity-gemini']}}
         self.write_roster(self.roster)
@@ -88,6 +88,12 @@ printf 'fake result\\n'
                 self.assert_copy_was_granted_and_removed()
                 if before is not None:
                     path.write_text(before)
+
+    def test_one_copy_role_does_not_admit_another(self):
+        # BR-AGY-001 — the lane's review grant does not allow read-only implementation.
+        rows, _ = selector.enumerate_options(self.roster, {}, 'implementation', mode='read-only',
+                                             data_class='code', fleet=fleetctl)
+        self.assertFalse(any(row['lane_id'] == self.lane for row in rows))
 
     def test_external_symlink_is_refused_before_launch(self):
         # BR-AGY-001 — a link out of the snapshot cannot write through to the source.

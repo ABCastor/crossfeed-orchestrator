@@ -297,8 +297,9 @@ for index, task in enumerate(raw):
         if modality not in lane.get("capabilities", {}).get("input", ["text"]):
             raise SystemExit(f"fanout preflight: {task_id}: {modality} input is not allowed for {lane_id}")
         # BR-AGY-001
-        if mode == "read-only" and lane.get("agy_read_only_copy") is not True:
-            raise SystemExit(f"fanout preflight: {task_id}: AGY lane has no admitted read-only copy path")
+        if mode == "read-only" and (lane.get("agy_read_only_copy") is not True
+                                    or role not in lane.get("agy_read_only_roles", ())):
+            raise SystemExit(f"fanout preflight: {task_id}: AGY lane has no admitted read-only copy path for {role}")
         # AGY has no wall clock of its own any more; its lane budget must not be smuggled back in
         # as a hidden default. OpenCode keeps its lane value deliberately (lease has no renewal).
         timeout = task.get("timeout", default_timeout)

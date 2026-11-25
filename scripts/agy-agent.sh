@@ -230,8 +230,9 @@ esac
 # BR-AGY-001: effort remapping must not borrow another effort's copy admission.
 if [ "$MODE" = read-only ]; then
   copy_lane="$("$HERE/roster.sh" lane-json "$LANE")" || _usage_error "unknown AGY lane $LANE"
-  jq -e --arg model "$MODEL" '.agy_read_only_copy == true and .selector == $model' <<<"$copy_lane" >/dev/null ||
-    _usage_error "AGY lane $LANE has no admitted read-only copy path for $MODEL"
+  jq -e --arg model "$MODEL" --arg role "${ROLE:-default}" \
+    '.agy_read_only_copy == true and .selector == $model and ((.agy_read_only_roles // []) | index($role) != null)' \
+    <<<"$copy_lane" >/dev/null || _usage_error "AGY lane $LANE has no admitted read-only copy path for $MODEL/${ROLE:-default}"
 fi
 echo "agy-agent: effort $EFFORT: $_effort_why" >&2
 

@@ -173,8 +173,10 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
         elif mode not in lane.get("allowed_modes", []):
             why = f"mode {mode}"
         # BR-AGY-001
-        elif harness == "agy" and mode == "read-only" and lane.get("agy_read_only_copy") is not True:
-            why = "AGY has no proven read-only boundary"
+        elif harness == "agy" and mode == "read-only" and (
+                lane.get("agy_read_only_copy") is not True
+                or role not in lane.get("agy_read_only_roles", ())):
+            why = "AGY has no proven read-only boundary for this lane and role"
         elif modality not in lane.get("capabilities", {}).get("input", ["text"]):
             why = f"modality {modality}"
         elif lane.get("paid_mimo") and role not in lane.get("roles", []):
