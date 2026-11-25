@@ -61,6 +61,9 @@ class ForcedQuotaTests(unittest.TestCase):
             with self.subTest(runtime=runtime), self.assertRaisesRegex(fleetctl.FleetError, "pool exhausted or switched off"):
                 self.select(runtime, lead=None, constrained=True)
         self.assertEqual(self.select(self.runtime(used=100, expired=True), constrained=True)["choice"]["pool"], "codex")
+        rounded = self.runtime(used=100)
+        rounded["quota_snapshots"]["codex"]["provider_used_percent"] = {"weekly": 99.8}
+        self.assertEqual(self.select(rounded, constrained=True)["choice"]["pool"], "codex")
 
     # BR-SELECT-007: the same selector sees reserve and inflated price under both other levels.
     def test_normal_and_high_still_reserve_and_price_pressure(self):

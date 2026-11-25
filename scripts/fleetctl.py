@@ -578,12 +578,11 @@ def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, A
 
     None means no window is projected to run out before its reset (or none can be read).
     """
-    state, evidence = current_pool_state(_without_levels(runtime), pool, roster=roster, model_key=model_key)
-    if state == "EXHAUSTED":
-        return 0
     if pool_level(runtime, pool) == "forced":
-        return None
-    if state == "CRITICAL":
+        state, _ = current_pool_state(runtime, pool, roster=roster, model_key=model_key)
+        return 0 if state == "EXHAUSTED" else None
+    state, evidence = current_pool_state(_without_levels(runtime), pool, roster=roster, model_key=model_key)
+    if state in {"CRITICAL", "EXHAUSTED"}:
         return 0
     windows = evidence.get("windows") or {}
     times = []
@@ -604,9 +603,9 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
     """Reserve lead quota on observed pressure unless the operator ignores estimates."""
     if pool is None:
         return None
-    observed = _without_levels(runtime)
-    state, evidence = current_pool_state(observed, pool, roster=roster)
     level = pool_level(runtime, pool)
+    observed = runtime if level == "forced" else _without_levels(runtime)
+    state, evidence = current_pool_state(observed, pool, roster=roster)
     if level == "forced" and state != "EXHAUSTED":
         return None
     scoped = False
@@ -895,10 +894,12 @@ def current_pool_state(
     # A console-observed 100% window stays exhausted until its console-stated
     # reset passes, even when the snapshot itself has gone stale: staleness must
     # never fail open into a pool the console last reported as full.
+    # A rounded 100% is not a provider cap if the reader also has the exact value.
+    exact_used = (snapshot.get("provider_used_percent") or {}) if level == "forced" else {}
     exhausted_windows = {
         name: window
         for name, window in applicable_windows.items()
-        if int(window["used_percent"]) >= 100
+        if exact_used.get(name, int(window["used_percent"])) >= 100
     }
     if exhausted_windows:
         until = max(window["reset_at"] for window in exhausted_windows.values())
