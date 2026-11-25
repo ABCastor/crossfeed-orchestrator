@@ -808,7 +808,8 @@ function boot(document, window) {
       // Attribution describes the last confirmed write, even while a newer choice is pending.
       if (row) {
         const actor = row.querySelector('.level-actor');
-        if (actor && pool.control_actor !== undefined) actor.textContent = pool.control_actor;
+        const attribution = workbench ? pool.wallet_control_actor : pool.control_actor;
+        if (actor && attribution !== undefined) actor.textContent = attribution;
         const slider = row.querySelector('.lv');
         if (slider && pool.control_actor_kind !== undefined) slider.dataset.levelActor = pool.control_actor_kind;
       }

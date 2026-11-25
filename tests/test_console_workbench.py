@@ -297,13 +297,13 @@ class WorkbenchTests(unittest.TestCase):
         saved = next(p for p in json.loads(payload)['pools'] if p['pool'] == self.pool)
         self.assertEqual(saved['level'], 'low')
         self.assertEqual(saved['control_actor_kind'], 'owner')
-        self.assertRegex(saved['control_actor'], r'^Set by you · today \d\d:\d\d$')
+        self.assertRegex(saved['wallet_control_actor'], r'^Set by you · today \d\d:\d\d$')
         on_disk = json.loads(self.runtime.read_text())
         self.assertEqual(fleet.control_record(on_disk, f'level:{self.pool}')['actor'], 'owner')
         self.assertEqual(fleet.pool_level(on_disk, 'antigravity-argon'), 'normal')
         _, after = self.get()
         self.assertIn(b'data-level-actor="owner"', after)
-        self.assertIn(saved['control_actor'].encode(), after)
+        self.assertIn(saved['wallet_control_actor'].encode(), after)
         self.assertIn(b'Last change not recorded', after)
 
     def test_refusals_and_scoped_windows_use_the_wallet_rows(self):

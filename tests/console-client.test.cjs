@@ -556,7 +556,8 @@ test('wallet policy saves in place and recolors only from confirmed attribution'
   }});
   const slider = f.document.querySelector('.lv');
   const text = f.document.querySelector('.level-actor');
-  const saved = (level, actor, control_actor) => ({pools: [{pool: 'codex', level, control_actor_kind: actor, control_actor}]});
+  const saved = (level, actor, wallet_control_actor) =>
+    ({pools: [{pool: 'codex', level, control_actor_kind: actor, wallet_control_actor}]});
   f.api.update(saved('normal', 'agent', 'Set by an agent · yesterday'));
   f.stops[3].focus();
   f.stops[3].click();

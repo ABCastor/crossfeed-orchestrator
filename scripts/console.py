@@ -776,7 +776,10 @@ WALLET_LEVEL_MEANING = {"off": "Routing skips this plan.", "low": "Conserve allo
 
 def _slider(pool: dict[str, Any], form_token: str, as_of: str | None = None, return_fields: str = '') -> str:
     meaning_for = WALLET_LEVEL_MEANING.__getitem__ if return_fields else _level_meaning
-    actor, attribution = _level_attribution(pool.get("control"), as_of or fleetctl.iso())
+    record = pool.get("control")
+    actor, attribution = _level_attribution(record, as_of or fleetctl.iso())
+    if not return_fields:
+        attribution = _control_text(record)
     current = pool["level"]
     at = LEVELS.index(current)
     label = html.escape(pool["label"])
@@ -801,7 +804,7 @@ def _slider(pool: dict[str, Any], form_token: str, as_of: str | None = None, ret
         f'aria-label="How much of {label} to use" aria-describedby="actor-{pool_id} means-{pool_id}">'
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
         f'{return_fields}<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
-        f'<p class="control-actor level-actor" id="actor-{pool_id}">{html.escape(attribution)}</p>'
+        f'<p id="actor-{pool_id}" class="control-actor level-actor">{html.escape(attribution)}</p>'
         f'<p class="means" id="means-{pool_id}">{html.escape(meaning_for(current))}</p>'
     )
 
@@ -1272,7 +1275,8 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         state, label, note = models_summary(p, by_key)
         actor, attribution = _level_attribution(p.get("control"), overview["generated_at"])
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
-                      "control_actor": attribution, "control_actor_kind": actor,
+                      "control_actor": _control_text(p.get("control")),
+                      "wallet_control_actor": attribution, "control_actor_kind": actor,
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
                       "gauge": _provider_gauge(p, overview) + _pro_usage(p),
                       "wallet_gauge": _work_gauge(p) + _pro_usage(p),
