@@ -893,7 +893,28 @@ def parse_allow(value: str | Path | None, fleet: Any) -> list[str] | None:
     return entries
 
 
-# BR-SELECT-002, BR-SELECT-003, BR-SELECT-004
+# BR-SELECT-006
+def _reserve_waiver(roster, runtime, state_dir, role, pressure, fleet, kwargs) -> str | None:
+    """Why a projected lead reserve would not help, or None when it does.
+
+    Selects as the reserve would (lead pool blocked) and compares the best alternative's own
+    projected run-out with the lead window's. No alternative at all means nothing to protect
+    by blocking, so the reserve is waived too.
+    """
+    try:
+        alternative = select_option(roster, runtime, state_dir, role, fleet=fleet, persist_receipts=False,
+                                    no_explore=True, _reserve="block", **kwargs)["choice"]
+    except fleet.FleetError:
+        return "no eligible alternative route"
+    runs_out = fleet.pool_run_out_seconds(runtime, alternative["pool"], roster, alternative["model_key"])
+    lead_runs_out = pressure["runs_out_in_s"]
+    if runs_out is not None and runs_out < lead_runs_out:
+        return (f"best alternative {alternative['pool']}/{alternative['model_key']} runs out in "
+                f"{fleet.format_duration(runs_out)}, before the lead window ({fleet.format_duration(lead_runs_out)})")
+    return None
+
+
+# BR-SELECT-002, BR-SELECT-003, BR-SELECT-004, BR-SELECT-006
 def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   stakes: str = "normal", family: str | None = None,
                   exclude_lineage: str | None = None, mode: str | None = None,
@@ -903,7 +924,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   prompt: str | None = None, value_mode: str = "best-value",
                   persist_receipts: bool = True, collect_eligible: bool = False,
                   rating_stakes: str | None = None, no_explore: bool = False,
-                  explore_seed: int | None = None, difficulty: str | None = None) -> dict:
+                  explore_seed: int | None = None, difficulty: str | None = None,
+                  _reserve: str | None = None) -> dict:
     """Rank eligible options; read-only previews do not refresh or emit receipts."""
     fleet = _fleet(fleet)
     state_dir = Path(state_dir).expanduser().resolve()
@@ -962,7 +984,18 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if lead is not None and lead not in roster.get("quota_pools", {}):
         raise fleet.FleetError(f"unknown lead pool {lead}")
     pressure = fleet.lead_pressure(runtime, lead, roster)
-    if pressure and stakes != "irreversible":
+    reserve_waived = None
+    if pressure and pressure.get("reason") == "projected" and stakes != "irreversible" and _reserve is None:
+        # BR-SELECT-006: a paced run-out reserves the lead pool only when the best other route
+        # for this role is not itself projected to run out sooner.
+        reserve_waived = _reserve_waiver(
+            roster, runtime, state_dir, role, pressure, fleet,
+            dict(stakes=stakes, family=family, exclude_lineage=exclude_lineage, mode=mode, modality=modality,
+                 allow=allow, lead=lead, target=target, data_class=data_class, prompt=prompt,
+                 value_mode=value_mode, rating_stakes=rating_stakes, difficulty=difficulty))
+        if reserve_waived:
+            pressure = dict(pressure, reserve="waived", waived_because=reserve_waived)
+    if pressure and not reserve_waived and stakes != "irreversible":
         retained = []
         for option in options:
             if fleet.lead_blocks(runtime, roster, pressure, option):

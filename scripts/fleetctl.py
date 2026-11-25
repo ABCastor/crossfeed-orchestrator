@@ -540,14 +540,49 @@ def resolve_lead_pool(roster: dict[str, Any], explicit: str | None = None) -> st
     return pool
 
 
+# A run-out projected from less than this share of a window is noise, not a reason to reserve.
+LEAD_MIN_PROJECTION_PERCENT = 20.0
+
+
+# BR-SELECT-006
+def lead_window_risk(window: dict[str, Any]) -> str | None:
+    """`tight` at 90% used; `projected` for a deficit running out before reset; else None."""
+    if window["used_percent"] >= 90:
+        return "tight"
+    pace = window_pace(window)
+    if (pace is not None and pace["status"] == "deficit" and pace["runs_out_in_s"] is not None
+            and pace["elapsed_percent"] >= LEAD_MIN_PROJECTION_PERCENT
+            and pace["runs_out_in_s"] < window["seconds_to_reset"]):
+        return "projected"
+    return None
+
+
 # BR-SELECT-006
 def _claude_lead_window_at_risk(window: dict[str, Any]) -> bool:
-    if window["used_percent"] >= 90:
-        return True
-    pace = window_pace(window)
-    return (pace is not None and pace["status"] == "deficit"
-            and pace["runs_out_in_s"] is not None
-            and pace["runs_out_in_s"] < window["seconds_to_reset"])
+    return lead_window_risk(window) is not None
+
+
+# BR-SELECT-006
+def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, Any] | None = None,
+                         model_key: str | None = None) -> int | None:
+    """Soonest projected run-out among a pool's applicable windows; 0 when it is critical or exhausted.
+
+    None means no window is projected to run out before its reset (or none can be read).
+    """
+    state, evidence = current_pool_state(_without_levels(runtime), pool, roster=roster, model_key=model_key)
+    if state in {"CRITICAL", "EXHAUSTED"}:
+        return 0
+    windows = evidence.get("windows") or {}
+    times = []
+    for name, window in windows.items():
+        if name not in evidence.get("applicable_windows", windows):
+            continue
+        if lead_window_risk(window) == "tight":
+            return 0
+        pace = window_pace(window) if lead_window_risk(window) else None
+        if pace is not None and pace["runs_out_in_s"] is not None:
+            times.append(pace["runs_out_in_s"])
+    return min(times) if times else None
 
 
 # BR-SELECT-006
@@ -573,7 +608,7 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
             if state not in {"CONSERVE", "CRITICAL", "EXHAUSTED"}:
                 return None
         else:
-            windows = {name: window for name, window in windows.items() if _claude_lead_window_at_risk(window)}
+            windows = {name: window for name, window in windows.items() if lead_window_risk(window)}
             if not windows and state not in {"CRITICAL", "EXHAUSTED"}:
                 # An exact subscribed lead model can also draw a model-exclusive window.
                 model = (os.environ.get("PI_MODEL") if (os.environ.get("PI_PROVIDER") == "claude-bridge" or
@@ -583,7 +618,7 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
                     return None
                 state, evidence = current_pool_state(observed, pool, roster=roster, model_key=model)
                 windows = {name: window for name, window in applicable_windows(evidence, scoped_only=True).items()
-                           if _claude_lead_window_at_risk(window)}
+                           if lead_window_risk(window)}
                 if not windows:
                     return None
                 scoped = True
@@ -591,10 +626,22 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
                        default=(None, {}))
     if pool == "claude" and name and level not in {"low", "off"} and state != "EXHAUSTED":
         state = _state_for_used(window["used_percent"])
-    return {"pool": pool, "level": level, "state": state,
-            "used_percent": window.get("used_percent"),
-            "window": (_compact_window_label(name, window) if name else None),
-            **({"scoped_window": name} if scoped and name else {})}
+    pressure = {"pool": pool, "level": level, "state": state,
+                "used_percent": window.get("used_percent"),
+                "window": (_compact_window_label(name, window) if name else None),
+                **({"scoped_window": name} if scoped and name else {})}
+    if pool == "claude":
+        # Only a paced run-out can be waived by the selector (BR-SELECT-006); 90%+, critical,
+        # exhausted and operator low/off stay tight.
+        runs_out = [pace["runs_out_in_s"] for item in windows.values()
+                    if lead_window_risk(item) == "projected" and (pace := window_pace(item))]
+        projected_only = (bool(windows) and level not in {"low", "off"}
+                          and state not in {"CRITICAL", "EXHAUSTED"}
+                          and all(lead_window_risk(item) == "projected" for item in windows.values()))
+        pressure["reason"] = "projected" if projected_only else "tight"
+        if projected_only:
+            pressure["runs_out_in_s"] = min(runs_out)
+    return pressure
 
 
 # BR-SELECT-006

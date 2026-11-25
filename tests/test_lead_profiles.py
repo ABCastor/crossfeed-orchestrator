@@ -265,6 +265,65 @@ class LeadSelectionTests(unittest.TestCase):
                     self.assertEqual(result["lead_pressure"]["used_percent"], used)
                     self.assertEqual(preference, {"route": "gpt-fallback", "reason": reason})
 
+    # BR-SELECT-004 / BR-SELECT-006
+    def test_claude_lead_reserve_applies_only_when_it_helps(self):
+        opus, astra = selector.OPUS_HARD_REASONING, selector.ASTRA_HARD_REASONING
+        self.roster["policy"]["selector"]["prefer_opus_hard_reasoning"] = True
+        self.roster["model_cards"][astra] = self.roster["model_cards"]["gpt-6-astra"]
+        self.roster["effort"][astra] = self.roster["effort"]["gpt-6-astra"]
+        allowed = f"claude:{opus}:high,codex:{astra}:high"
+
+        def window(used, left_hours, **extra):
+            return {"used_percent": used, "window_minutes": 10080,
+                    "reset_at": fleetctl.iso(NOW + dt.timedelta(hours=left_hours)), **extra}
+
+        def pick(claude, codex=None):
+            runtime = {"quota_snapshots": {"claude": {"observed_at": fleetctl.iso(NOW), "windows": {"weekly": claude}}}}
+            if codex is not None:
+                runtime["quota_snapshots"]["codex"] = {"observed_at": fleetctl.iso(NOW), "windows": {"weekly": codex}}
+            return selector.select_option(self.roster, runtime, self.state, "hard-reasoning", lead="claude",
+                                          allow=allowed, no_explore=True, persist_receipts=False)
+
+        # The live case: Claude is 14% used one day into its window, the oracle projects a run-out in
+        # 5d 3h, and Codex is at 87% running out in 10 hours. Moving work there only drains the
+        # pool that is nearer to empty, so Opus keeps hard reasoning.
+        live_claude = window(14, 147, eta_seconds=int(5.1 * 86400))
+        live_codex = window(87, 83, eta_seconds=10 * 3600)
+        result = pick(live_claude, live_codex)
+        self.assertEqual(result["choice"]["model_key"], opus)
+        self.assertIsNone(result["lead_pressure"])
+        self.assertEqual(result["hard_reasoning_preference"], {"route": "opus"})
+
+        # Early projections never reserve, whatever the other pool looks like.
+        self.assertIsNone(fleetctl.lead_pressure(
+            {"quota_snapshots": {"claude": {"observed_at": fleetctl.iso(NOW), "windows": {"weekly": live_claude}}}},
+            "claude"))
+
+        # The same run-out later in the window is real. The reserve waives only when the alternative
+        # runs out first: Codex 10 h away beats Claude 5 d away, a healthy Codex does not.
+        late_claude = window(80, 72, eta_seconds=int(2 * 86400))
+        waived = pick(late_claude, live_codex)
+        self.assertEqual(waived["choice"]["model_key"], opus)
+        self.assertEqual(waived["lead_pressure"]["reserve"], "waived")
+        self.assertIn("runs out in", waived["lead_pressure"]["waived_because"])
+        healthy = pick(late_claude, window(30, 83))
+        self.assertEqual(healthy["choice"]["model_key"], astra)
+        self.assertEqual(healthy["hard_reasoning_preference"], {"route": "gpt-fallback", "reason": "Opus not admitted"})
+        self.assertEqual(healthy["lead_pressure"]["reason"], "projected")
+        self.assertNotIn("reserve", healthy["lead_pressure"])
+        # Alternatives with no reading at all are not projected to run out.
+        self.assertEqual(pick(late_claude)["choice"]["model_key"], astra)
+        # A Codex run-out later than Claude's still leaves the reserve in force.
+        self.assertEqual(pick(late_claude, window(60, 83, eta_seconds=int(2.9 * 86400)))["choice"]["model_key"], astra)
+
+        # At 90% used the reserve is unconditional, however bad the alternative looks (BR-SELECT-004 fallback).
+        for codex in (live_codex, window(30, 83)):
+            tight = pick(window(90, 12), codex)
+            self.assertEqual(tight["choice"]["model_key"], astra)
+            self.assertEqual(tight["lead_pressure"]["reason"], "tight")
+            self.assertEqual(tight["hard_reasoning_preference"],
+                             {"route": "gpt-fallback", "reason": "Claude weekly window at least 90% used"})
+
     def test_unknown_normal_lead_stays_eligible(self):
         result = self.select({})
         self.assertIsNone(result["lead_pressure"])

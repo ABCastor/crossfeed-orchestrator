@@ -55,7 +55,7 @@ When a configured included pool's previously read headroom is unavailable, such 
 
 Role grades remain evidence for legacy irreversible selection and the unpriced fallback, not a pass probability or a general admission floor. The selector ignores legacy `quality_floors_by_role` entries. Data class, confinement, access, lead reserve and the separate paid-route quality floor still apply.
 
-With `policy.selector.prefer_opus_hard_reasoning`, exclude Sonnet from hard reasoning and rank eligible Opus 5.5 efforts first. At 90% actual use of an applicable Claude weekly window, a full five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex routes. The legacy `--stakes irreversible` exception to Opus-first still applies; `--rating-stakes critical` does not bypass the preference. Switches, lead reserve, quota circuits and data policy still apply.
+With `policy.selector.prefer_opus_hard_reasoning`, exclude Sonnet from hard reasoning and rank eligible Opus 5.5 efforts first. At 90% actual use of an applicable Claude weekly window, a full five-hour window or other unavailability, prefer eligible Astra, then other eligible Codex routes. The legacy `--stakes irreversible` exception to Opus-first still applies; `--rating-stakes critical` does not bypass the preference. Switches, lead reserve, quota circuits and data policy still apply. A Claude lead's reserve blocks Claude for workers at 90% used, critical or exhausted; for a projected run-out before reset it also needs the projection to come from at least 20% of the window and the best other route for the role not to run out sooner (otherwise the reserve would only move the load onto a scarcer pool).
 
 ## Running a worker
 
