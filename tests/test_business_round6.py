@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from tests.test_selector import ROOT, fleetctl, quality_row, selector
+import chatgpt_catalog
 
 MODEL = "gpt-6.1-sol"
 OTHER = "claude-opus-5-5"
@@ -38,17 +39,6 @@ class Round6PolicyTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-    def runtime(self, level, *, used=91, hours=96, eta=None):
-        def window(used, forecast):
-            return {'observed_at': fleetctl.iso(NOW), 'windows': {'weekly': {
-                'reset_at': fleetctl.iso(NOW + dt.timedelta(hours=hours)), 'used_percent': used,
-                'window_minutes': 10080, 'projected_used_percent_at_reset': forecast,
-                **({'eta_seconds': eta} if eta is not None else {}),
-            }}}
-        runtime = {'quota_snapshots': {'codex': window(used, 1000), 'claude': window(1, 2)}}
-        fleetctl.set_pool_level(runtime, 'codex', level)
-        return runtime
-
     def select(self, runtime, allow=None, persist=False):
         return selector.select_option(self.roster, runtime, self.state, 'review', fleet=fleetctl,
                                       no_explore=True, persist_receipts=persist, allow=allow)
@@ -57,46 +47,13 @@ class Round6PolicyTests(unittest.TestCase):
         return subprocess.run(['python3', str(ROOT / 'scripts/fleetctl.py'), '--overlay', str(self.overlay),
                                '--state-dir', str(self.state), *args], capture_output=True, text=True)
 
-    # BR-SELECT-008
-    def test_max_dial_order_and_real_limits(self):
-        self.assertEqual(fleetctl.LEVELS, ('off', 'low', 'normal', 'high', 'max', 'forced'))
-        lane = {'max_parallel': 4, 'quality_tier': 'frontier'}
-        observed = []
-        for level in fleetctl.LEVELS:
-            runtime = self.runtime(level, used=91)
-            state, evidence = fleetctl.current_pool_state(runtime, 'codex', roster=self.roster)
-            band = fleetctl.level_band(level, fleetctl.task_band(state, evidence))
-            observed.append((state != 'EXHAUSTED', fleetctl.effective_cap(lane, state, evidence, level),
-                             band == 'quality_first'))
-        self.assertEqual(observed, sorted(observed))
-        self.assertGreater(observed[4], observed[3])
-        for used in (100,):
-            with self.assertRaisesRegex(fleetctl.FleetError, 'pool exhausted'):
-                self.select(self.runtime('max', used=used), f'codex:{MODEL}:high')
-        rounded = self.runtime('max', used=100)
-        rounded['quota_snapshots']['codex']['provider_used_percent'] = {'weekly': 99.9}
-        self.assertEqual(self.select(rounded, f'codex:{MODEL}:high')['choice']['model_key'], MODEL)
-
-    # BR-SELECT-008
-    def test_max_yields_to_equal_quality_cheaper_quota(self):
-        allow = f'codex:{MODEL}:high,claude:{OTHER}:high'
-        def choice(level):
-            return self.select(self.runtime(level), allow)['choice']
-        self.assertEqual(choice('max')['model_key'], OTHER)
-        self.assertEqual(choice('forced')['model_key'], MODEL)
-        max_cost = self.select(self.runtime('max'), f'codex:{MODEL}:high')['choice']['quota_cost_usd']
-        normal_cost = self.select(self.runtime('normal'), f'codex:{MODEL}:high')['choice']['quota_cost_usd']
-        neutral = choice('forced')['quota_cost_usd']
-        self.assertGreater(max_cost, 3 * choice('max')['quota_cost_usd'])
-        self.assertAlmostEqual(max_cost, neutral + .1 * (normal_cost - neutral))
-        self.assertEqual(choice('max')['quality'], choice('forced')['quality'])
-
-    # BR-SELECT-008
-    def test_max_reserves_only_in_last_stretch(self):
-        self.assertIsNone(fleetctl.lead_pressure(self.runtime('max', hours=3, eta=120), 'codex', self.roster))
-        self.assertIsNotNone(fleetctl.lead_pressure(self.runtime('max', hours=.5, eta=120), 'codex', self.roster))
-        self.assertIsNone(fleetctl.lead_pressure(self.runtime('max', hours=.5, eta=3600), 'codex', self.roster))
-        self.assertIsNone(fleetctl.lead_pressure(self.runtime('forced', hours=.5, eta=120), 'codex', self.roster))
+    # BR-SELECT-007
+    def test_max_is_the_label_for_forced_not_a_level(self):
+        self.assertEqual(fleetctl.LEVELS, ('off', 'low', 'normal', 'high', 'forced'))
+        self.assertEqual(fleetctl.LEVEL_LABELS['forced'], 'Max')
+        self.assertIn('ignores quota estimates', fleetctl.LEVEL_MEANING['forced'])
+        self.assertNotEqual(self.fleet('level', 'codex', 'max').returncode, 0)
+        self.assertEqual(self.fleet('level', 'codex', 'forced').stdout.strip(), 'forced')
 
     # BR-SWITCH-002
     def test_subscription_dial_is_atomic_audited_and_independent(self):
@@ -105,19 +62,62 @@ class Round6PolicyTests(unittest.TestCase):
         self.overlay.write_text(json.dumps(self.roster))
         runtime = {'model_toggles': {'antigravity-gemini': ['gemini-fixture']}}
         fleetctl.atomic_json(self.state / 'runtime.json', runtime)
-        rejected = self.fleet('level', 'antigravity', 'max')
+        rejected = self.fleet('level', 'antigravity', 'forced')
         self.assertNotEqual(rejected.returncode, 0)
         self.assertEqual(fleetctl.load_json(self.state / 'runtime.json'), runtime)
-        changed = self.fleet('level', 'antigravity', 'max', '--owner', '--reason', 'test instruction')
-        self.assertEqual((changed.returncode, changed.stdout.strip()), (0, 'max'), changed.stderr)
+        changed = self.fleet('level', 'antigravity', 'forced', '--owner', '--reason', 'test instruction')
+        self.assertEqual((changed.returncode, changed.stdout.strip()), (0, 'forced'), changed.stderr)
         actual = fleetctl.load_json(self.state / 'runtime.json')
         self.assertEqual(actual['model_toggles'], runtime['model_toggles'])
-        self.assertEqual({fleetctl.pool_level(actual, pool) for pool in pools}, {'max'})
+        self.assertEqual({fleetctl.pool_level(actual, pool) for pool in pools}, {'forced'})
         record = fleetctl.control_record(actual, 'subscription:antigravity')
-        self.assertEqual((record['actor'], record['reason'], record['value']), ('owner', 'test instruction', 'max'))
+        self.assertEqual((record['actor'], record['reason'], record['value']), ('owner', 'test instruction', 'forced'))
         self.assertEqual(record['before'], dict.fromkeys(pools, 'normal'))
         self.assertEqual(self.fleet('level', pools[0], 'low', '--owner').returncode, 0)
         self.assertEqual(self.fleet('level', 'antigravity').stdout.strip(), 'mixed')
+
+    # BR-SELECT-009
+    def test_efficient_effort_uses_success_per_expected_dollar(self):
+        rows = [dict(quality_row(MODEL, level, pass_rate=accuracy),
+                     own_cost={"codex": {"percent_per_task": percent}})
+                for level, accuracy, percent in (("high", .15, .01), ("xhigh", .85, .02))]
+        (self.state / 'evidence/levels.json').write_text(json.dumps({'rows': rows}))
+        result = self.select({}, f'codex:{MODEL}:high,codex:{MODEL}:xhigh')
+        low, high = sorted(result['top3'], key=lambda option: option['quota_cost_usd'])
+        self.assertEqual(low['level'], 'high')
+        self.assertGreater(high['p_success'] / high['expected_cost'], low['p_success'] / low['expected_cost'])
+        self.assertEqual(result['choice']['efficient_effort']['effort'], 'xhigh')
+        menu = selector.compare_options(self.roster, {}, self.state, 'review', fleet=fleetctl)
+        self.assertEqual(next(row for row in menu if row['model_key'] == MODEL)['efficient_effort']['effort'], 'xhigh')
+
+    # BR-SELECT-010
+    def test_chat_uses_exact_effort_benchmark_and_keeps_route_identity(self):
+        chat = 'chatgpt:latest-high'
+        pool = 'chatgpt-work'
+        self.roster['policy']['selector']['allowed_pools_by_role']['default'] = [pool]
+        self.roster['quota_pools'][pool] = {'plan': {'name': 'Included Chat', 'limit': 'none-known'}}
+        self.roster['lanes'].append({'lane_id': chat, 'model_key': chat, 'selector': chat,
+                                    'harness': 'chatgpt-chat', 'provider': 'chatgpt', 'quota_pool': pool,
+                                    'admission_status': 'active', 'access_status': 'verified', 'roles': ['review'],
+                                    'allowed_modes': ['read-only'], 'max_parallel': 2, 'worker_level': 'high',
+                                    'worker_label': 'fixture', 'benchmark_identity': 'gpt-6-sol',
+                                    'benchmark_effort': 'high'})
+        self.roster['effort'][chat] = {'levels': {'chatgpt-chat': ['high']}, 'default': 'high'}
+        self.roster['benchmark_priors'] = {'gpt-6-sol': {'high': {
+            'slug': 'gpt-6-sol-high', 'release_date': '2026-09-22', 'read_on': '2026-11-25',
+            'evaluations': {'terminal_bench_4': .70}, 'pricing': {'in': 2, 'out': 10}}}}
+        self.assertEqual(chatgpt_catalog.benchmark_cell('GPT-6', 'high'), ('gpt-6-sol', 'high'))
+        self.assertEqual(chatgpt_catalog.benchmark_cell('GPT-6', 'pro'), ('gpt-6-astra', 'pro'))
+        self.assertIsNone(chatgpt_catalog.benchmark_cell('Latest', 'high'))
+        self.assertIsNone(chatgpt_catalog.benchmark_cell('GPT-6.2', 'pro'))
+        item = self.select({}, f'{pool}:{chat}:high')['choice']
+        self.assertEqual((item['model_key'], item['model_identity']), (chat, chat))
+        self.assertEqual(item['prior_source']['benchmark_effort'], 'high')
+        self.assertFalse(item['q']['unknown'])
+        self.assertEqual(item['quota_cost_usd'], 0)
+        self.assertGreater(item['api_cost_usd'], 0)
+        del self.roster['benchmark_priors']
+        self.assertTrue(self.select({}, f'{pool}:{chat}:high')['choice']['q']['unknown'])
 
     def dry_dispatch(self, selection):
         args = argparse.Namespace(dir=self.state, last=None, dry_run=True, overlay=self.overlay)

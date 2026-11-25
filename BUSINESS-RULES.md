@@ -118,16 +118,27 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/fleetctl.py:lead_window_risk`, `scripts/fleetctl.py:_claude_lead_window_at_risk`, `scripts/fleetctl.py:pool_run_out_seconds`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`, `scripts/selector.py:_reserve_waiver`, `scripts/selector.py:select_option`.
 - tested-by: `tests/test_lead_profiles.py:LeadSelectionTests.test_claude_lead_hard_reasoning_reserves_only_a_tight_window`, `LeadSelectionTests.test_claude_lead_reserve_applies_only_when_it_helps`, `LeadDetectionTests.test_claude_lead_uses_the_at_risk_window_not_the_most_used`, `LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
 
-## BR-SELECT-008 — Max uses quota freely but still prices estimated pressure [OPERATOR-DIRECTED 2026-11-25]
+## BR-SELECT-009 — Show which thinking setting returns the most success per dollar [OPERATOR-DIRECTED 2026-11-25]
 
-- RULE: `max` sits between `high` and `forced`; it keeps the quality-first band and declared parallelism, pays ordinary plan-value debit plus 10% of the usual quota pressure premium, and reserves lead quota only when projected to run out in the last tenth of its window, capped at one hour before reset. Provider refusals, applicable full windows, cash safeguards and BR-SELECT-004 still apply.
-- Authority: Operator, 25 Nov: “Maybe before ignore estimates, there should be also a max setting, which is the maximum you want to use it, but still takes a little bit into account the quota.” A tenth distinguishes it from High without erasing the incentive to use materially cheaper equal-quality quota; the reserve horizon reuses the existing last-stretch definition.
-- implemented-by: `scripts/fleetctl.py:lead_pressure`, `level_band`, `effective_cap` · `scripts/selector.py:routing_price`.
-- tested-by: `tests/test_business_round6.py::test_max_dial_order_and_real_limits`, `test_max_yields_to_equal_quality_cheaper_quota`, `test_max_reserves_only_in_last_stretch`.
+- RULE: For a model with graded efforts and known total cost, its most efficient effort maximizes estimated success divided by expected quota and failure cost, using the same role and value setting as the comparison. A missing grade or price does not establish a recommendation.
+- Authority: Operator, 25 Nov: “what's the most efficient thinking setting ... the one that gives the most bang for the buck”.
+- implemented-by: `scripts/selector.py:efficient_efforts`, `select_option`, `compare_options`.
+- tested-by: `tests/test_business_round6.py::test_efficient_effort_uses_success_per_expected_dollar`.
 
-## BR-SELECT-007 — Ignore estimates until a provider limit [OPERATOR-DECIDED 2026-11-25]
+## BR-SELECT-010 — Grade included Crossfeed Chat against documented benchmark identities [OPERATOR-DIRECTED 2026-11-25]
 
-- RULE: A pool at `forced` (Ignore estimates) stays eligible regardless of quota pressure or projected run-out, including for its own lead's workers. Its quota debit is priced at plain plan value without forecast, pace or remaining-headroom premiums. Real provider refusals (including rate-limit circuits), applicable provider-reported 100% windows until reset, cash safeguards and the explicit Opus fallback in BR-SELECT-004 still apply. An `off` pool remains unavailable. Normal and high retain their existing rules.
+- RULE: Use outside grades only for the documented backing model and exact effort of a saved Chat row. Keep the route identity, local checks and caps separate. Charge no incremental dollars for an included Chat route when its allowance has no sourced dollar equivalent; retain its switches, admission, refusal, role and model quota gates.
+- Authority: Operator, 25 Nov: “we don't use Crossfeed chat enough, and it's free ... probably because we don't have the benchmarks, and it just doesn't trust it”.
+- implemented-by: `scripts/chatgpt_catalog.py:benchmark_cell` · `scripts/selector.py:option_evidence`, `routing_price` · `scripts/evidence.py:configured_benchmark_rows`.
+- tested-by: `tests/test_business_round6.py::test_chat_uses_exact_effort_benchmark_and_keeps_route_identity`.
+
+## BR-SELECT-008 — ~~A separate Max setting prices pressure lightly~~ [RETIRED 2026-11-25]
+
+- Superseded by BR-SELECT-007 the same day, before release: operator, “max is the same as ignore limits. It should be just max/ignore limits. Ignore quota, whatever it is.” The separate quota-light level is not a shipping option.
+
+## BR-SELECT-007 — Max ignores estimates until a provider limit [OPERATOR-DECIDED 2026-11-25]
+
+- RULE: A pool at `forced` (Max) stays eligible regardless of quota pressure or projected run-out, including for its own lead's workers. Its quota debit is priced at plain plan value without forecast, pace or remaining-headroom premiums. Real provider refusals (including rate-limit circuits), applicable provider-reported 100% windows until reset, cash safeguards and the explicit Opus fallback in BR-SELECT-004 still apply. An `off` pool remains unavailable. Normal and high retain their existing rules.
 - Authority: Operator: “I told it to ignore estimates for GPT ... IGNORE ESTIMATES MEAN!!!!” This takes precedence over estimate-based lead reserves in BR-SELECT-006 and quota price premiums in BR-SELECT-005 only while the dial is `forced`.
 - implemented-by: `scripts/fleetctl.py:current_pool_state`, `lead_pressure`, `pool_run_out_seconds`; `scripts/selector.py:_pool_price`, `pool_pace`, `_capacity_headroom`.
 - tested-by: `tests/test_business_forced_quota.py:ForcedQuotaTests.test_forced_codex_ignores_estimates_not_hard_stops`; control: `test_normal_and_high_still_reserve_and_price_pressure`.

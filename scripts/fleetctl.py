@@ -434,15 +434,15 @@ def _state_for_used(used_percent: int) -> str:
 # existing files keep their meaning and an older reader keeps working: "off" stays "off",
 # "forced" is written as the old "on", "normal" is the absence of an entry, and the two new
 # values ("low", "high") read as "auto" to anything that predates them.
-LEVELS = ("off", "low", "normal", "high", "max", "forced")
+LEVELS = ("off", "low", "normal", "high", "forced")
+LEVEL_LABELS = dict(zip(LEVELS, ("Off", "Low", "Normal", "High", "Max")))
 # One line each, read by agents in `brief` and by people on the console page.
 LEVEL_MEANING = {
     "off": "never used",
     "low": "cheapest lane first, one call at a time, big model only as a one-shot",
     "normal": "routing follows the quota gauges",
     "high": "strong models freely, full parallel until the pool is critical",
-    "max": "use freely, with a light quota price and a last-stretch lead reserve",
-    "forced": "used even when the quota looks low",
+    "forced": "ignores quota estimates; obeys provider limits",
 }
 # The same meanings, cut to what an agent needs in a line it reads on every plan.
 LEVEL_BRIEF = {
@@ -450,10 +450,9 @@ LEVEL_BRIEF = {
     "low": "cheapest lane, 1 at a time, big model one-shot only",
     "normal": "follow the quota gauges",
     "high": "strong models, full parallel until critical",
-    "max": "use freely, weigh quota lightly",
-    "forced": "use even if quota looks low",
+    "forced": "ignores quota estimates",
 }
-_LEVEL_STORED = {"off": "off", "low": "low", "high": "high", "max": "max", "forced": "on"}
+_LEVEL_STORED = {"off": "off", "low": "low", "high": "high", "forced": "on"}
 _STORED_LEVEL = {**{value: key for key, value in _LEVEL_STORED.items()}, "forced": "forced"}
 _LEGACY_SWITCH_WORD = {"off": "off", "forced": "on"}
 
@@ -636,7 +635,7 @@ def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, A
     return min(times) if times else None
 
 
-# BR-SELECT-006 · BR-SELECT-007 · BR-SELECT-008
+# BR-SELECT-006 · BR-SELECT-007
 def lead_pressure(runtime: dict[str, Any], pool: str | None,
                   roster: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Reserve lead quota on observed pressure unless the operator ignores estimates."""
@@ -656,25 +655,7 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
                 and (not scoped_only or not quota_window_applies(roster, pool, name, window, None))}
 
     windows = applicable_windows(evidence)
-    if level == "max" and state != "EXHAUSTED":
-        if not windows and pool == "claude":
-            model = (os.environ.get("PI_MODEL") if (os.environ.get("PI_PROVIDER") == "claude-bridge" or
-                                                     os.environ.get("PI_QUOTA_POOL") == "claude")
-                     else os.environ.get("ANTHROPIC_MODEL")) or ""
-            if model.startswith("claude-"):
-                state, evidence = current_pool_state(observed, pool, roster=roster, model_key=model)
-                windows = applicable_windows(evidence, scoped_only=True)
-                scoped = True
-        def last_stretch(window):
-            eta = funding.number(window.get("eta_seconds"))
-            if eta is None:
-                eta = (window_pace(window) or {}).get("runs_out_in_s")
-            return eta is not None and 0 <= eta < window["seconds_to_reset"] <= spend_down_horizon_s(window)
-
-        windows = {name: window for name, window in windows.items() if last_stretch(window)}
-        if not windows and state != "EXHAUSTED":
-            return None
-    elif level not in {"low", "off"}:
+    if level not in {"low", "off"}:
         if pool != "claude":
             if state not in {"CONSERVE", "CRITICAL", "EXHAUSTED"}:
                 return None
@@ -701,7 +682,7 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
                 "used_percent": window.get("used_percent"),
                 "window": (_compact_window_label(name, window) if name else None),
                 **({"scoped_window": name} if scoped and name else {})}
-    if pool == "claude" and level != "max":
+    if pool == "claude":
         # Only a paced run-out can be waived by the selector (BR-SELECT-006); 90%+, critical,
         # exhausted and operator low/off stay tight.
         runs_out = [pace["runs_out_in_s"] for item in windows.values()
@@ -952,7 +933,7 @@ def current_pool_state(
     # reset passes, even when the snapshot itself has gone stale: staleness must
     # never fail open into a pool the console last reported as full.
     # A rounded 100% is not a provider cap if the reader also has the exact value.
-    exact_used = (snapshot.get("provider_used_percent") or {}) if level in {"max", "forced"} else {}
+    exact_used = (snapshot.get("provider_used_percent") or {}) if level == "forced" else {}
     exhausted_windows = {
         name: window
         for name, window in applicable_windows.items()
@@ -1941,8 +1922,8 @@ def effective_cap(
     if policy == "off":
         return cap
     state = gating_state(pool_state, evidence, policy)
-    if level in {"high", "max", "forced"}:
-        if level == "high" and state == "CRITICAL" and lane.get("quality_tier") == "frontier":
+    if level in {"high", "forced"}:
+        if state == "CRITICAL" and lane.get("quality_tier") == "frontier":
             cap = min(cap, 1)
         return cap
     # UNKNOWN FAILS OPEN. Missing measurement is not evidence of exhaustion.
@@ -2011,7 +1992,7 @@ def level_band(level: str, band: str) -> str:
     """
     if level == "low" and band == "quality_first":
         return "conserve"
-    if level == "max" or (level == "high" and band == "conserve"):
+    if level == "high" and band == "conserve":
         return "quality_first"
     return band
 
@@ -5390,8 +5371,18 @@ def comparison_evidence(roster, state_dir):
     try:
         evidence = load_json(state_dir / "evidence" / "levels.json", {}) or {}
     except (OSError, ValueError):
-        return {}
-    return evidence_index(roster, evidence.get("rows") or []) if isinstance(evidence, dict) else {}
+        evidence = {}
+    entries = evidence.get("rows") if isinstance(evidence, dict) else None
+    rows = evidence_index(roster, [row for row in entries if isinstance(row, dict)]) if isinstance(entries, list) else {}
+    if roster.get("benchmark_priors"):
+        try:
+            from evidence import configured_benchmark_rows
+        except ImportError:
+            from scripts.evidence import configured_benchmark_rows
+        for key, row in configured_benchmark_rows(roster, iso()[:10]):
+            if not rows.get(key, {}).get("sources"):
+                rows[key] = row
+    return rows
 
 
 def model_typical_cost(roster, key, rows, rates=None):
@@ -5400,7 +5391,9 @@ def model_typical_cost(roster, key, rows, rates=None):
     except ImportError:
         from scripts.selector import api_cost
     identity = canonical_model(key, roster)
-    costs = [cost for (model, _), row in rows.items() if model == identity
+    card = model_cards(roster).get(key, {})
+    external = (card.get("benchmark_identity"), card.get("benchmark_effort"))
+    costs = [cost for cell, row in rows.items() if cell[0] == identity or cell == external
              if (cost := api_cost(row, rates)) is not None]
     return statistics.median(costs) if costs else api_cost({}, rates)
 
@@ -5482,7 +5475,8 @@ def pool_model_options(roster: dict[str, Any], runtime: dict[str, Any], pool: st
                         "retired_on": retired_on(roster, model["model"]),
                         "retention_reason": older_model_reason(roster, pool, model["model"]) if older else None,
                         "_order": card.get("order", model["routing_rank"].get(pool, float("inf")))})
-    options = sort_model_families(options)
+    options = [*sort_model_families([row for row in options if not row["archived"]]),
+               *sort_model_families([row for row in options if row["archived"]])]
     for option in options:
         del option["_order"]
     return options
@@ -6002,7 +5996,7 @@ def show_usage(
     for pool in sorted(runtime.get("switches") or {}):
         level = pool_level(runtime, pool)
         if level != "normal":
-            print(f"level: {pool} is {level.upper()} by hand ({LEVEL_MEANING[level]}) — "
+            print(f"level: {pool} is {LEVEL_LABELS[level]} by hand ({LEVEL_MEANING[level]}) — "
                   f"back with `fleetctl.py level {pool} normal`")
     # Say it out loud when there is no measurement. Routing still runs at full
     # quality (UNKNOWN fails open), but silence would read as "quota is fine"
@@ -6408,7 +6402,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     level = sub.add_parser(
         "level",
-        help="how much of a pool to spend: off | low | normal | high | max | forced; accepts a pool or subscription; no value shows it, no pool lists all",
+        help="how much of a pool to spend: off | low | normal | high | forced (Max); accepts a pool or subscription; no value shows it, no pool lists all",
     )
     level.add_argument("pool", nargs="?")
     level.add_argument("value", nargs="?", choices=LEVELS)
@@ -6535,14 +6529,12 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
         # Glance needs attribution, not free-form reasons, ceilings or history.
         row["level_control"] = {key: record[key] for key in ("actor", "when") if key in record} or None
         row.update(subscription=pool.get("subscription"), **control_attribution(record))
-        row["options"] = [{key: option[key] for key in ("model", "family", "typical_cost_usd", "archived") if key in option}
-                          for option in pool.get("options", [])]
-        row["archived"] = [{key: option[key] for key in ("model", "family", "typical_cost_usd", "archived", "set_by", "set_at")
-                            if key in option} for option in pool.get("archived", [])]
-        row["models"] = list(dict.fromkeys(
-            names.get(option["model"]) or option["model"]
-            for option in pool.get("options", []) if option.get("current")
-        ))
+        row["models"] = [{"name": option.get("name") or names.get(option["model"]) or option["model"],
+                          "family": option.get("family"), "typical_cost_usd": option.get("typical_cost_usd"),
+                          "archived": False} for option in pool.get("options", []) if option.get("current")]
+        row["archived"] = [{key: option[key] for key in ("model", "name", "family", "typical_cost_usd",
+                                                        "archived", "set_by", "set_at") if key in option}
+                           for option in pool.get("archived", [])]
     return payload
 
 
