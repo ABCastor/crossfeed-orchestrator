@@ -1807,6 +1807,8 @@ WALLET_TITLES = {'codex': 'Codex', 'claude': 'Claude Max', 'opencode-go': 'OpenC
 
 def _wallet_title(pool):
     key = pool['pool']
+    if key in AGY_ALLOWANCES:
+        return 'Antigravity'
     return WALLET_TITLES.get(key, pool.get('short_label') or pool['label'])
 
 
@@ -1884,7 +1886,7 @@ def _wallet(overview, token, workbench, order):
                 f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}'
                 '<p class="wb-error" role="status"></p>'
                 f'<div class="gauge">{_work_gauge(pool) + _pro_usage(pool)}</div>{includes}'
-                f'<details class="wb-advanced" open><summary>Spend policy {level}</summary>{slider}</details>'
+                f'<details class="wb-advanced" id="policy-{pool_id}" open><summary>Spend policy {level}</summary>{slider}</details>'
                 f'{inventory}</{container}>')
 
     def antigravity(group):
