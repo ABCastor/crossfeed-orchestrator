@@ -1259,7 +1259,7 @@ def _native_oracle(name: str) -> Callable[[dict[str, Any], int], dict[str, Any]]
     return oracle
 
 
-# The provider's own readers (codex, claude, antigravity, copilot, opencode-go) need no
+# The provider's own readers need no
 # third-party app. `codexbar` stays available as an optional reader for other setups.
 ORACLE_REGISTRY: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "codexbar": oracle_codexbar,
@@ -1297,6 +1297,8 @@ def _source_identity(config: dict[str, Any]) -> Any:
             return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
+    if oracle == "openrouter":
+        return (oracle, str(native_usage.openrouter_key_path()))
     if oracle in native_usage.OBSERVERS:
         return (oracle, config.get("binary"), config.get("key"))
     return (oracle, id(config))

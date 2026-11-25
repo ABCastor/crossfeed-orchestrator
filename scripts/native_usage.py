@@ -1,6 +1,6 @@
 """Quota readings straight from each provider, through the provider's own tool or sign-in.
 
-Four readers, one per subscription the fleet meters, each returning the snapshot shape every
+The readers return the snapshot shape every
 quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes, label}`) or
 `{"available": False, "kind": ..., "reason": ...}`:
 
@@ -14,6 +14,7 @@ quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes
   existing ACP/CLI OAuth profile. Never starts the CLI or an interactive login.
 - copilot: GitHub's Copilot entitlement endpoint (`GET https://api.github.com/copilot_internal/user`)
   with the GitHub CLI's own sign-in (`gh auth token`) or a declared key reference.
+- openrouter: informational cash balances and spend from the free wrapper's existing key file.
 
 Credentials go only to the relevant provider on fixed HTTPS hosts. Never written or logged.
 A rejected sign-in, a missing tool and an unreadable answer stay distinct and never become 0%.
@@ -26,6 +27,7 @@ import datetime as dt
 import http.client
 import importlib.util
 import json
+import math
 import os
 import re
 import selectors
@@ -44,7 +46,7 @@ from typing import Any, Callable
 MAX_BODY_BYTES = 2_000_000
 
 # The Codex app server and OAuth endpoints have their own time limits.
-DEFAULT_TIMEOUTS = {"codex": 20, "codex-oauth": 10, "claude": 10, "copilot": 10}
+DEFAULT_TIMEOUTS = {"codex": 20, "codex-oauth": 10, "claude": 10, "copilot": 10, "openrouter": 10}
 
 
 def reader_timeout(oracle: str, config: dict[str, Any], timeout: int) -> int:
@@ -133,6 +135,16 @@ def _add(windows: dict[str, Any], idle: dict[str, Any], name: str, used: int | N
     windows[name] = entry
 
 
+def _finite_amount(raw: Any) -> float | None:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        amount = float(raw)
+    except (OverflowError, ValueError):
+        return None
+    return amount if math.isfinite(amount) else None
+
+
 def _duration_name(minutes: int | None) -> str:
     if minutes == 300:
         return "session"
@@ -145,7 +157,7 @@ def _duration_label(minutes: int | None) -> str | None:
     return {300: "Session", 10080: "Weekly"}.get(minutes or 0)
 
 
-def _http_get(url: str, headers: dict[str, str], timeout: int,
+def _http_get(url: str, headers: dict[str, str], timeout: float,
               opener: Callable[..., Any] | None) -> tuple[int, str]:
     """(status, body). Exceptions other than HTTP errors propagate for the caller's fixed message."""
     request = urllib.request.Request(url, method="GET", headers=headers)
@@ -352,11 +364,16 @@ def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> d
             if name in windows or name in idle:
                 name = f"{name}-{slot}"
             _add(windows, idle, name, used, _parse_time(reset), minutes, label)
-    if not windows:
+    credits = _mapping(root.get("credits"))
+    balance = _finite_amount(credits.get("balance")) if credits.get("unlimited") is not True else None
+    if not windows and balance is None:
         return None
     plan = root.get("plan_type")
-    return _snapshot(CODEX_OAUTH_SOURCE, windows, idle,
-                     plan.strip().capitalize() if isinstance(plan, str) else None, observed_at)
+    result = _snapshot(CODEX_OAUTH_SOURCE, windows, idle,
+                       plan.strip().capitalize() if isinstance(plan, str) else None, observed_at)
+    if balance is not None:
+        result["account_usage"] = {"credits_balance": balance}
+    return result
 
 
 def _owner_file(path: Path) -> bytes:
@@ -954,6 +971,7 @@ def parse_copilot(body: str, observed_at: dt.datetime | None = None) -> dict[str
     minutes = _month_minutes_before(reset) if reset else None
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
+    provider_used: dict[str, float] = {}
     for key, name, label in (("premium_interactions", "premium_monthly", "Premium"),
                              ("chat", "chat_monthly", "Chat")):
         snap = snapshots.get(key)
@@ -962,12 +980,17 @@ def parse_copilot(body: str, observed_at: dt.datetime | None = None) -> dict[str
         remaining = snap.get("percent_remaining")
         if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
             continue
-        _add(windows, idle, name, _percent(100.0 - float(remaining)), reset, minutes, label)
+        used = 100.0 - float(remaining)
+        _add(windows, idle, name, _percent(used), reset, minutes, label)
+        if 0 <= used <= 100:
+            provider_used[name] = round(used, 8)
     if not windows and not idle:
         return None
     plan = payload.get("copilot_plan")
-    return _snapshot(COPILOT_SOURCE, windows, idle,
-                     f"Copilot {plan.capitalize()}" if isinstance(plan, str) and plan else None, observed_at)
+    result = _snapshot(COPILOT_SOURCE, windows, idle,
+                       f"Copilot {plan.capitalize()}" if isinstance(plan, str) and plan else None, observed_at)
+    result["provider_used_percent"] = provider_used  # informational; routing keeps whole percentage points
+    return result
 
 
 def _providers_module():
@@ -1023,10 +1046,63 @@ def observe_copilot(config: dict[str, Any], timeout: int = 5, opener: Callable[.
     return parse_copilot(body) or unavailable(COPILOT_SOURCE, "malformed", "Copilot answer carried no metered quota")
 
 
+# Cash telemetry is not a quota window and does not modify the free-only price gate.
+OPENROUTER_SOURCE = "openrouter-account"
+OPENROUTER_BASE = "https://openrouter.ai/api/v1/"
+OPENROUTER_CASH_FIELDS = {
+    "credits": {"total_credits": "account_credits_usd", "total_usage": "account_usage_usd"},
+    "key": {"limit": "key_limit_usd", "limit_remaining": "key_limit_remaining_usd", "usage": "key_usage_usd",
+            "usage_daily": "key_usage_daily_usd", "usage_weekly": "key_usage_weekly_usd",
+            "usage_monthly": "key_usage_monthly_usd"},
+}
+
+
+def openrouter_key_path() -> Path:
+    # Same authority as openrouter-agent.sh, with no environment-token or management-key fallback.
+    return Path(os.environ.get("OPENROUTER_KEY_FILE") or Path.home() / ".config/orchestrator/openrouter_api_key")
+
+
+def observe_openrouter(config: dict[str, Any], timeout: int = 5,
+                       opener: Callable[..., Any] | None = None) -> dict[str, Any]:
+    try:
+        key = _owner_file(openrouter_key_path()).decode("utf-8").strip()
+    except (OSError, ValueError):
+        key = ""
+    if not key or not re.fullmatch(r"[!-~]{1,16000}", key):
+        return unavailable(OPENROUTER_SOURCE, "no-key", "No existing private OpenRouter wrapper key file")
+    cash: dict[str, float] = {}
+    statuses = []
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    per_request = reader_timeout("openrouter", config, timeout) / len(OPENROUTER_CASH_FIELDS)
+    for endpoint, fields in OPENROUTER_CASH_FIELDS.items():
+        try:
+            status, body = _http_get(OPENROUTER_BASE + endpoint, headers, per_request, opener)
+            statuses.append(status)
+            if status != 200:
+                continue
+            data = _mapping(_mapping(_json(body)).get("data"))
+            for field, output in fields.items():
+                amount = _finite_amount(data.get(field))
+                if amount is not None:
+                    cash[output] = amount
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            continue
+    if not cash:
+        if statuses and all(status in (401, 403) for status in statuses):
+            return unavailable(OPENROUTER_SOURCE, "unauthorized", "OpenRouter rejected the existing wrapper key")
+        return unavailable(OPENROUTER_SOURCE, "failed", "No OpenRouter cash telemetry returned")
+    if "account_credits_usd" in cash and "account_usage_usd" in cash:
+        balance = cash["account_credits_usd"] - cash["account_usage_usd"]
+        if math.isfinite(balance):
+            cash["account_balance_usd"] = balance
+    return {**_snapshot(OPENROUTER_SOURCE, {}, {}), "account_usage": cash}
+
+
 OBSERVERS: dict[str, Callable[..., dict[str, Any]]] = {
     "codex": observe_codex,
     "codex-oauth": observe_codex_oauth,
     "claude": observe_claude,
     "antigravity": observe_antigravity,
     "copilot": observe_copilot,
+    "openrouter": observe_openrouter,
 }
