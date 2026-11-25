@@ -1872,6 +1872,9 @@ def _quota_cell(item, data, scored):
     share, value = _number(basis.get('share_percent')), _number(basis.get('plan_value_usd'))
     if share is not None:
         details.append(f'A typical job uses about {share:.3g}% of this allowance.')
+        if qty == '—':
+            qty = f'<span class="wb-number">≈{share:.3g}%</span>'
+            details.append('There is no dollar estimate for this share.')
     if value is not None:
         details.append(f'Estimated value of this allowance: ${value:,.2f}.')
     details.append(basis.get('why') or 'No quota estimate is available for this route.')

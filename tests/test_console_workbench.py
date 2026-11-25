@@ -317,6 +317,10 @@ class WorkbenchTests(unittest.TestCase):
         self.assertIn('$0.0750', markup)
         self.assertIn('A typical job uses about 0.1%', markup)
         self.assertIn('Why it leads:', markup)
+        data['scores'][key]['quota_cost_usd'] = None
+        fallback = console._workbench(overview, data)
+        self.assertIn('≈0.1%', fallback)
+        self.assertIn('There is no dollar estimate for this share.', fallback)
 
     def test_benchmark_link_is_local_attributed_safe_and_revisited(self):
         href = 'https://example.com/verified-results'
