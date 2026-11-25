@@ -50,6 +50,13 @@ except ImportError:
     _pro_spec.loader.exec_module(chatgpt_pro)
 
 try:
+    import subscriptions
+except ImportError:
+    _subscriptions_spec = importlib.util.spec_from_file_location("fleet_subscriptions", Path(__file__).with_name("subscriptions.py"))
+    subscriptions = importlib.util.module_from_spec(_subscriptions_spec)
+    _subscriptions_spec.loader.exec_module(subscriptions)
+
+try:
     import opencode_go_usage
 except ImportError:
     _go_spec = importlib.util.spec_from_file_location("fleet_opencode_go_usage", Path(__file__).with_name("opencode_go_usage.py"))
@@ -6188,7 +6195,9 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--no-refresh", action="store_true", help=refresh_help)
 
     glance = sub.add_parser("glance", help="the limits at a glance: one line plus every pool's limits and resets")
-    glance.add_argument("--format", choices=("text", "swiftbar", "json"), default="text")
+    formats = glance.add_mutually_exclusive_group()
+    formats.add_argument("--format", choices=("text", "swiftbar", "json"), default="text")
+    formats.add_argument("--json", dest="format", action="store_const", const="json", help="alias for --format json")
     glance.add_argument("--lead", metavar="POOL", help="pool always named in the one-line summary")
     glance.add_argument("--force", action="store_true", help="read every provider again now, ignoring TTLs")
     glance.add_argument("--plugin", help="menu-bar plugin path, for its own 'read again' item")
@@ -6504,7 +6513,9 @@ def main() -> int:
             overview = fleet_overview(roster, runtime, state_dir)
             lead = resolve_lead_pool(roster, args.lead)
             if args.format == "json":
-                print(json.dumps(menubar.as_json(overview, lead), indent=2, sort_keys=True))
+                ledger = subscriptions.view(subscriptions.path_for(args.overlay), roster, overview)
+                print(json.dumps(menubar.as_json(overview, lead, subscriptions.tray_summary(ledger)),
+                                 indent=2, sort_keys=True))
             elif args.format == "swiftbar":
                 sys.stdout.write(menubar.swiftbar(overview, lead, args.plugin))
             else:

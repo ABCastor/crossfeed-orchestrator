@@ -150,10 +150,17 @@ class Console:
         runtime = fleetctl.load_json(self.state_dir / "runtime.json", {}) or {}
         overview = fleetctl.fleet_overview(roster, runtime, self.state_dir)
         overview['_brief_context'] = {'roster': roster, 'runtime': runtime}
+        overview['subscription_spend'] = fleetctl.subscriptions.view(
+            fleetctl.subscriptions.path_for(self.overlay_path), roster, overview)
         overview['provider_sources'] = providers.list_sources(roster)
         evidence = fleetctl.load_json(self.state_dir / 'evidence' / 'levels.json', {}) or {}
         overview['console_order'] = display_order(overview, runtime.get('console_order'), roster, evidence)
         return overview
+
+    def save_subscription(self, fields: dict) -> None:
+        roster = fleetctl.read_overlay(self.overlay_path, self.state_dir, discover=False)
+        fleetctl.subscriptions.save(fleetctl.subscriptions.path_for(self.overlay_path), roster,
+                                    fields.get('id', ''), fields)
 
     def set_pro_allowance(self, pool: str, allowance: str) -> None:
         if not re.fullmatch(r"[0-9]{1,6}", allowance):
@@ -503,12 +510,62 @@ def _settings_content(overview: dict[str, Any], token: str, *, panel: bool = Fal
                  '<select id="theme-choice" data-theme-choice><option value="system">System</option>'
                  '<option value="light">Light</option><option value="dark">Dark</option></select>'
                  '<p class="quiet">Saved in this browser.</p></div>' + ''.join(forms) +
+                 ('<div class="setting-row"><a href="/settings#subscriptions">Subscriptions</a></div>'
+                  if panel else _subscription_settings(overview, token)) +
                  f'<div class="setting-row"><h2>Fresh ChatGPT chats</h2><p>Hourly cap: <span data-settings-cap>{html.escape(cap)}</span>.</p>'
                  '<p class="quiet">Read the service status for the live cap. Set <code>--wake-hourly-cap</code> '
                  'in the Crossfeed Chat service launcher and restart that service. This console cannot change it.</p></div>'
                  '<div class="setting-row"><h2>Provider keys</h2><p>Keys entered here stay in <code>provider-keys/</code> beside your access overlay, '
                  'or in the secret reference you supplied. Values are never shown here.</p>'
                  '<a href="/#provider-setup">Add provider</a></div></section>')
+
+
+def _subscription_settings(overview: dict, token: str) -> str:
+    ledger = overview.get('subscription_spend') or {}
+    out = ['<section class="setting-row" id="subscriptions"><h2>Subscriptions</h2>']
+    if ledger.get('unavailable'):
+        out.append('<p>The subscriptions file is unreadable. Check its format and mode (600).</p>')
+    for month in ledger.get('monthly', []):
+        own = (f'{month["currency"]} {month["operator"]}' if month['operator'] is not None else 'not set')
+        out.append(f'<p>{html.escape(month["currency"])} {html.escape(month["total"])} / month recorded'
+                   f' · Your share: {html.escape(own)}</p>')
+    if ledger.get('unpriced'):
+        out.append(f'<p class="quiet">{ledger["unpriced"]} without a price. No price is assumed.</p>')
+    labels = {p['pool']: p['label'] for p in overview.get('pools', [])}
+
+    def input_field(row, name, label, kind='text', attrs=''):
+        value = html.escape(row[name] or '', quote=True)
+        return f'<label>{label}<input name="{name}" type="{kind}" value="{value}" {attrs}></label>'
+
+    for row in ledger.get('subscriptions', []):
+        out.append(f'<details class="setting-row"><summary>{html.escape(row["name"])}</summary>'
+                   '<form method="post" action="/settings/subscriptions">'
+                   f'<input type="hidden" name="t" value="{html.escape(token, quote=True)}">'
+                   f'<input type="hidden" name="id" value="{html.escape(row["id"], quote=True)}">')
+        out.append(input_field(row, 'amount', 'Plan price', 'number', 'min="0" step="0.01"'))
+        out.append(input_field(row, 'currency', 'Currency', attrs='maxlength="3" placeholder="EUR"'))
+        out.append('<label>Billing period<select name="period">')
+        for value, label in (('', 'Not set'), ('monthly', 'Monthly'), ('yearly', 'Yearly')):
+            selected = ' selected' if (row['period'] or '') == value else ''
+            out.append(f'<option value="{value}"{selected}>{label}</option>')
+        out.append('</select></label>')
+        out.append(input_field(row, 'renewal', 'Next renewal', 'date'))
+        out.append(input_field(row, 'operator_share_percent', 'Your share (%)', 'number', 'min="0" max="100" step="0.01"'))
+        out.append(input_field(row, 'other_payer', 'Other payer (optional)', attrs='maxlength="60"'))
+        if row['other_share_percent'] is not None:
+            out.append(f'<p class="quiet">Other share: {html.escape(row["other_share_percent"])}%</p>')
+        out.append('<button type="submit">Save</button></form>')
+        for pool in row['pools']:
+            value = row['pool_value'].get(pool)
+            equivalent = (f'USD {value["used_usd_equivalent"]} of {value["capacity_usd_equivalent"]} equivalent'
+                          if value else 'Value not measured')
+            paid = f'{row["currency"]} {row["monthly"]} / month for the plan' if row['monthly'] is not None else 'Price not set'
+            out.append(f'<p class="quiet">{html.escape(labels.get(pool, pool))}: {html.escape(equivalent)}'
+                       f' · {html.escape(paid)}</p>')
+        out.append('</details>')
+    out.append('<p class="quiet">Service value uses the current weekly quota window, not charges. '
+               'Shared pools show the same plan price; the total counts it once.</p></section>')
+    return ''.join(out)
 
 
 def render_settings(overview: dict[str, Any], token: str) -> str:
@@ -2065,7 +2122,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 self._refuse(401, "Signed out", "Open the console from the link it printed when it started.")
                 return
             path = urllib.parse.urlsplit(self.path).path
-            if path not in {"/settings/pro", "/level", "/preference", "/refresh", "/model", "/order", "/provider/probe", "/provider/add", "/provider/remove"}:
+            if path not in {"/settings/pro", "/settings/subscriptions", "/level", "/preference", "/refresh", "/model", "/order", "/provider/probe", "/provider/add", "/provider/remove"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             try:
@@ -2081,6 +2138,14 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 return
             pool = fields.get("pool", [""])[0]
             level = fields.get("level", [""])[0]
+            if path == '/settings/subscriptions':
+                try:
+                    console.save_subscription({name: values[0] for name, values in fields.items()})
+                except (ValueError, OSError, RecursionError, fleetctl.FleetError):
+                    self._refuse(400, 'Not saved', 'Check the price, currency, period, renewal date and share.')
+                else:
+                    self._redirect('/settings#subscriptions')
+                return
             try:
                 outcomes = None
                 if path.startswith('/provider/'):
