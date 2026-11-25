@@ -98,6 +98,8 @@ def _xdg_state() -> str:
 # The product's name, in one place: the console page, its title and the brief header read it.
 PRODUCT_NAME = "Crossfeed Orchestrator"
 
+# Older runtime snapshots can retain this provenance after the reader is removed.
+LEGACY_AGY_WIDGET_SOURCE = "antigravity-codexbar-widget"
 SCHEMA = "model-fleet-runtime/v1"
 RUN_SCHEMA = "opencode-run-usage/v2"
 AFK_SCHEMA = "afk-attempt/v1"
@@ -831,7 +833,7 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, "antigravity-codexbar-widget"}
+    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
                  and age_s > native_usage.AGY_REPORT_MAX_AGE_S)
     confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
@@ -1646,8 +1648,8 @@ def _commit_gauge(runtime: dict[str, Any], pool: str, observed: dict[str, Any],
         except (KeyError, TypeError, ValueError):
             pass
     active = observed.get("windows") or {}
-    if existing and observed.get("source") == native_usage.AGY_WIDGET_SOURCE:
-        # A percentage-only widget row cannot supersede an unexpired full window.
+    if existing and observed.get("source") in {native_usage.AGY_LOCAL_SOURCE, LEGACY_AGY_WIDGET_SOURCE}:
+        # A percentage without a reset clock cannot supersede an unexpired full window.
         # Preserve the original snapshot so we do not restamp its provenance.
         for name, window in existing.get("windows", {}).items():
             if name not in active and window.get("used_percent") == 100:
@@ -5347,7 +5349,7 @@ def fleet_overview(
             "lanes": lane_counts.get(pool, 0),
         }
         reading = snapshot or {}
-        display_only_fresh = (reading.get("source") in {native_usage.AGY_LOCAL_SOURCE, "antigravity-codexbar-widget"}
+        display_only_fresh = (reading.get("source") in {native_usage.AGY_LOCAL_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
                               and evidence.get("confidence") == "direct")
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, reading.get("idle_windows") if windows or display_only_fresh else None,
