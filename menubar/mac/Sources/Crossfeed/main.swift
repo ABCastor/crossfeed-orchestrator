@@ -70,7 +70,7 @@ enum Reader {
     }
 }
 
-/// A menu's tracking loop hands mouse events to the host; SwiftUI reports which tile or segment was hit.
+/// Route pointer tracking for the hosted tiles and dial; SwiftUI buttons still handle keyboard and accessibility.
 final class MenuHostingView: NSHostingView<CrossfeedMenuView> {
     let model: MenuState
 
@@ -84,10 +84,32 @@ final class MenuHostingView: NSHostingView<CrossfeedMenuView> {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    private func menuPoint(_ local: CGPoint) -> CGPoint {
+        CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if model.ownsPointer(at: menuPoint(convert(point, from: superview))) { return self }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = menuPoint(convert(event.locationInWindow, from: nil))
+        if model.ownsPointer(at: point) {
+            model.beginPointer(at: point)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        model.movePointer(to: menuPoint(convert(event.locationInWindow, from: nil)))
+    }
+
     override func mouseUp(with event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        let point = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
-        if !model.routeClick(at: point) { super.mouseUp(with: event) }
+        if !model.endPointer(at: menuPoint(convert(event.locationInWindow, from: nil))) {
+            super.mouseUp(with: event)
+        }
     }
 }
 
@@ -103,17 +125,32 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let io = DispatchQueue(label: "crossfeed.fleetctl", qos: .utility)
     var timers: [Timer] = []
     static let tabKey = "crossfeed.tab"
+    let tabOrder = TabOrder(defaults: .standard)
+    let console: ConsoleSession
 
-    init(config: Config) { self.config = config }
+    init(config: Config) {
+        self.config = config
+        self.console = ConsoleSession(config: config)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
         state.canEditPolicy = config.fixture.isEmpty || config.selftest
         state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
-        state.onOpenConsole = { Self.openConsole() }
+        state.onReorder = { [weak self] source, target in self?.reorder(source, onto: target) }
+        state.onOpenStatus = { [weak self] url in
+            self?.menu.cancelTracking()
+            NSWorkspace.shared.open(url)
+        }
+        state.onOpenConsole = { [weak self] in self?.openConsole() }
         state.onReload = { [weak self] in self?.reload() }
-        state.onAbout = { Self.about() }
+        state.onAbout = { [weak self] in self?.about() }
         state.onQuit = { NSApp.terminate(nil) }
+        console.onFailure = { [weak self] failure in
+            guard let self, self.state.actionFailure != failure else { return }
+            self.state.actionFailure = failure
+            if self.menuIsOpen { self.remeasure() } else { self.rebuildMenu() }
+        }
         state.failure = "Reading quotas…"
         if config.selftest { state.selected = config.selftestTab }
         menu.delegate = self
@@ -147,8 +184,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func changePolicy(_ change: PolicyChange) {
         guard config.fixture.isEmpty, !config.selftest,
-              let pool = glance?.pools.first(where: { $0.pool == change.pool }),
-              state.edits.begin(change, current: pool.level.flatMap(SpendLevel.init(rawValue:))) else { return }
+              let level = glance?.policyLevel(for: change.pool),
+              state.edits.begin(change, current: SpendLevel(rawValue: level), mixed: level == "mixed") else { return }
         revision += 1 // do not paint a pre-write poll over this transaction
         let c = config
         let command = PolicyCommand(python: c.python, fleetctl: c.fleetctl, overlay: c.overlay, stateDir: c.state)
@@ -160,10 +197,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self else { return }
                 if let refreshed {
                     self.acceptReading(.success(refreshed))
-                } else if case .success = result, let index = self.glance?.pools.firstIndex(where: { $0.pool == change.pool }) {
-                    // The CLI committed but the readback failed. Keep the saved selection without inventing attribution.
-                    self.glance?.pools[index].level = change.level.rawValue
-                    self.glance?.pools[index].levelControl = nil
+                } else if case .success = result {
+                    self.glance?.applyConfirmed(change)
                 }
                 self.state.edits.finish(result, readingAvailable: refreshed != nil)
                 self.tick()
@@ -190,6 +225,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             state.presenter = presenter
             let saved = UserDefaults.standard.string(forKey: Self.tabKey)
             let ids = presenter.tabs.map(\.id)
+            let order = config.fixture.isEmpty && !config.selftest ? tabOrder.ordered(ids) : ids
+            if order != state.providerOrder { state.providerOrder = order }
             if let current = state.selected, ids.contains(current) {
             } else {
                 state.selected = saved.flatMap { ids.contains($0) ? $0 : nil } ?? presenter.defaultTab
@@ -217,6 +254,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
     }
 
+    func reorder(_ source: String, onto target: String) {
+        guard config.fixture.isEmpty, !config.selftest, let ids = state.presenter?.tabs.map(\.id),
+              tabOrder.move(source, onto: target, among: ids) else { return }
+        state.providerOrder = tabOrder.ordered(ids)
+    }
+
     // MARK: Status item and menu
 
     func paintStatusItem() {
@@ -242,6 +285,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
+        state.cancelPointer()
         rebuildMenu()
     }
 
@@ -270,28 +314,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return entry
     }
 
-    @objc func openConsole() { Self.openConsole() }
+    @objc func openConsole() { console.open(.providers) }
     @objc func reloadView() { reload() }
-    @objc func about() { Self.about() }
+    @objc func about() { console.open(.about) }
     @objc func quit() { NSApp.terminate(nil) }
 
-    static func openConsole() {
-        let url = "http://127.0.0.1:8768/"
-        let launcher = NSHomeDirectory() + "/Applications/Crossfeed Orchestrator.app"
-        var isDirectory: ObjCBool = false
-        // The launcher app asks the console for a signed-in tab; the bare URL is the fallback.
-        if FileManager.default.fileExists(atPath: launcher, isDirectory: &isDirectory), isDirectory.boolValue {
-            NSWorkspace.shared.open(URL(fileURLWithPath: launcher))
-        } else if let target = URL(string: url) {
-            NSWorkspace.shared.open(target)
-        }
-    }
-
-    static func about() {
-        let credits = NSAttributedString(string: "Reads quotas and saves spend policy through fleetctl. No provider logins, cookies or network.\nMenu design adapted from CodexBar (MIT, Peter Steinberger). Provider marks from Lobe Icons (MIT).")
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Crossfeed", .credits: credits])
-        NSApp.activate(ignoringOtherApps: true)
-    }
+    func applicationWillTerminate(_ notification: Notification) { console.stop() }
 
     // MARK: Self test (builds the menu without a status item, shows nothing)
 
@@ -310,20 +338,62 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let tiles = self.state.tileFrames.count
             let fonts = NSFont(name: "Commissioner-Medium", size: 13) != nil && NSFont(name: "MartianMono-Regular", size: 13) != nil
             let policyFrames = self.state.policyFrames
-            let policyPools = self.state.selected.flatMap { self.state.presenter?.card(for: $0) }?
-                .sections.filter { $0.level != nil }.count ?? 0
+            let card = self.state.selected.flatMap { self.state.presenter?.card(for: $0) }
+            let targets = (card?.sections.compactMap { $0.policy?.id } ?? []) + [card?.subscriptionPolicy?.id].compactMap { $0 }
             var hit: PolicyChange?
             self.state.onPolicyChange = { hit = $0 }
-            var routeOK = policyPools == 0 && policyFrames.isEmpty
-            if let (change, rect) = policyFrames.first {
-                routeOK = self.state.routeClick(at: CGPoint(x: rect.midX, y: rect.midY)) && hit == change
+            let routeOK = targets.allSatisfy { id in
+                SpendLevel.allCases.allSatisfy { level in
+                    let change = PolicyChange(pool: id, level: level)
+                    guard let rect = policyFrames[change] else { return false }
+                    hit = nil
+                    return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && hit == change
+                }
             }
+            let dragOK = self.selftestDrag()
+            var statusClick: URL?
+            self.state.onOpenStatus = { statusClick = $0 }
+            let statuses = self.state.statusFrames
+            let statusOK = statuses.count == (card?.sections.compactMap { $0.extras.status }.count ?? 0)
+                && statuses.values.allSatisfy { link in
+                    statusClick = nil
+                    return self.state.endPointer(at: CGPoint(x: link.frame.midX, y: link.frame.midY))
+                        && statusClick == link.url
+                }
             let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1)
-                && self.menu.items.count == 7 && routeOK && policyFrames.count == policyPools * SpendLevel.allCases.count
-                && providerAssetCount == ProviderLogo.allCases.count
-            print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), policy segments \(policyFrames.count), card height \(Int(host.frame.height))")
+                && self.menu.items.count == 7 && routeOK && policyFrames.count == targets.count * SpendLevel.allCases.count
+                && providerAssetCount == ProviderLogo.allCases.count && dragOK && statusOK
+            print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), dial stops \(policyFrames.count), drag \(dragOK), status links \(statuses.count), card height \(Int(host.frame.height))")
             exit(ok ? 0 : 1)
         }
+    }
+
+    private func selftestDrag() -> Bool {
+        let original = state.presenter?.tabs.map(\.id) ?? []
+        guard original.count >= 2 else { return false }
+        let source = original[1], target = original[0]
+        guard let src = state.tileFrames[source], let dst = state.tileFrames[target] else { return false }
+        let a = CGPoint(x: src.midX, y: src.midY), b = CGPoint(x: dst.midX, y: dst.midY)
+        let suite = "org.crossfeed.selftest." + UUID().uuidString
+        guard let defaults = UserDefaults(suiteName: suite) else { return false }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let order = TabOrder(defaults: defaults)
+        var clicked: String?
+        state.onSelect = { clicked = $0 }
+        state.onReorder = { from, to in _ = order.move(from, onto: to, among: original) }
+        state.beginPointer(at: a)
+        guard state.endPointer(at: a), clicked == source, order.ordered(original) == original else { return false }
+        clicked = nil
+        let outside = CGPoint(x: -20, y: -20)
+        state.beginPointer(at: a)
+        state.movePointer(to: outside)
+        guard state.endPointer(at: outside), clicked == nil, order.ordered(original) == original else { return false }
+        state.beginPointer(at: a)
+        state.movePointer(to: b)
+        let expected = [source, target] + original.dropFirst(2)
+        guard state.endPointer(at: b), clicked == nil, order.ordered(original) == expected,
+              let newDefaults = UserDefaults(suiteName: suite) else { return false }
+        return TabOrder(defaults: newDefaults).ordered(original) == expected
     }
 }
 

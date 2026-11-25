@@ -38,9 +38,26 @@ public struct SectionModel: Equatable, Identifiable {
     public var note: String?          // why a pool is not read
     public var rows: [RowModel]
     public var logo: ProviderLogo?
-    public var level: SpendLevel?
-    public var attribution: PolicyAttribution?
+    public var policy: PolicyModel?
     public var models: [String]
+    public var extras: ProviderExtras
+}
+
+public struct PolicyModel: Equatable {
+    public let id: String
+    public let level: SpendLevel?
+    public let attribution: PolicyAttribution?
+
+    /// The only policy without a selected stop is a subscription whose pools disagree.
+    public var isMixed: Bool { level == nil }
+
+    init?(id: String, rawLevel: String?, attribution: PolicyAttribution?) {
+        let level = rawLevel.flatMap(SpendLevel.init(rawValue:))
+        guard level != nil || rawLevel == "mixed" else { return nil }
+        self.id = id
+        self.level = level
+        self.attribution = attribution
+    }
 }
 
 public enum ProviderLogo: String, CaseIterable {
@@ -78,11 +95,11 @@ public struct CardModel: Equatable {
     public var badge: String?
     public var sections: [SectionModel]
     public var isAntigravity: Bool
+    public var subscriptionPolicy: PolicyModel?
 
     public var heading: String { isAntigravity ? "Google AI Pro" : title }
 
-    /// An allowance belongs to a routing pool, not to a reset timer. Gemini keeps one policy
-    /// underneath both windows; the other two allowances have their own policy and model list.
+    /// The same rows as Claude, with the allowance name beside its window and no pool-level dial.
     public var allowanceSections: [SectionModel] {
         guard isAntigravity else { return sections }
         let order = ["antigravity-gemini", "antigravity-3p", "antigravity-argon"]
@@ -92,19 +109,15 @@ public struct CardModel: Equatable {
                 guard let family = titles[section.id] else { return section }
                 var result = section
                 result.title = nil
-                let sorted = section.rows.sorted { lhs, rhs in
-                    lhs.title.hasPrefix("Weekly") && !rhs.title.hasPrefix("Weekly")
-                }
-                result.rows = sorted.map { row in
-                    var named = row
-                    named.title = family + " " + row.title.lowercased()
-                    return named
-                }
                 let expected = section.id == "antigravity-gemini" ? ["weekly", "5-hour"] : ["weekly"]
-                for (index, title) in expected.enumerated() where !result.rows.contains(where: { $0.title.hasPrefix(family + " " + title) }) {
-                    result.rows.insert(RowModel(id: section.id + ":unread-" + title, title: family + " " + title,
-                                                usedText: "Not read", resetText: nil, paceText: nil, bar: nil),
-                                       at: min(index, result.rows.count))
+                result.rows = expected.map { window in
+                    let title = section.id == "antigravity-argon" ? "Weekly · Argon only" : "\(family) \(window)"
+                    if var row = section.rows.first(where: { $0.title.lowercased().hasPrefix(window) }) {
+                        row.title = title
+                        return row
+                    }
+                    return RowModel(id: section.id + ":unread-" + window, title: title,
+                                    usedText: "Not read", resetText: "Reset unknown", paceText: nil, bar: nil)
                 }
                 return result
             }
@@ -160,7 +173,7 @@ public struct Presenter {
 
     static func groupID(_ pool: Pool) -> String {
         let id = pool.pool
-        if ["antigravity-gemini", "antigravity-3p", "antigravity-argon"].contains(id) { return "agy" }
+        if pool.subscription == "antigravity" || ["antigravity-gemini", "antigravity-3p", "antigravity-argon"].contains(id) { return "agy" }
         if !pool.measured { return "other" }
         if id == "claude" { return "claude" }
         if id == "codex" { return "codex" }
@@ -219,14 +232,21 @@ public struct Presenter {
     public func card(for tab: String) -> CardModel? {
         guard let group = groups.first(where: { $0.id == tab }) else { return nil }
         let multi = group.pools.count > 1
-        let sections = group.pools.map { section($0, titled: multi) }
+        let agy = tab == "agy"
+        let sections = group.pools.map { section($0, titled: multi, hasOwnPolicy: !agy) }
+        let subscriptionPolicy = agy ? glance.subscriptions.first(where: { $0.id == "antigravity" }).flatMap { subscription in
+            let attribution = subscription.levelControl ?? group.pools.compactMap(\.levelControl)
+                .compactMap { record in Self.controlDate(record.when).map { ($0, record) } }
+                .max { $0.0 < $1.0 }?.1
+            return PolicyModel(id: subscription.id, rawLevel: subscription.level, attribution: attribution)
+        } : nil
         let head = group.pools.first
         let title = multi ? (Self.cardTitles[tab] ?? Self.titles[tab] ?? tab) : (head?.label ?? head?.name ?? tab)
         let age = group.pools.compactMap { $0.staleAgeS }.max() ?? ageSeconds()
         let read = group.pools.contains { $0.measured || $0.usedPercent != nil }
         return CardModel(title: title, subtitle: Self.updated(age: age, hasReading: read),
-                         badge: multi || tab == "agy" ? nil : stateWord(head?.state), sections: sections,
-                         isAntigravity: tab == "agy")
+                         badge: multi || agy ? nil : stateWord(head?.state), sections: sections,
+                         isAntigravity: agy, subscriptionPolicy: subscriptionPolicy)
     }
 
     func ageSeconds() -> Double? {
@@ -252,8 +272,8 @@ public struct Presenter {
         }
     }
 
-    func section(_ pool: Pool, titled: Bool) -> SectionModel {
-        let windows = pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil }
+    func section(_ pool: Pool, titled: Bool, hasOwnPolicy: Bool) -> SectionModel {
+        let windows = pool.limits.filter { $0.kind == "window" }
         var rows = windows.enumerated().map { index, limit in row(limit, poolID: pool.pool, index: index) }
         if rows.isEmpty, let used = pool.usedPercent {
             rows = [row(Limit(kind: "window", title: "Usage", usedPercent: used, resets: pool.resets,
@@ -261,7 +281,7 @@ public struct Presenter {
         }
         var note: String?
         var badge = titled ? stateWord(pool.state) : nil
-        if rows.isEmpty {
+        if rows.allSatisfy({ $0.bar == nil }) {
             // Nothing to draw a bar for: say so once, with fleetctl's reason when it gave one.
             let said = pool.measured || pool.gaugeError != nil ? "Not read" : "No quota window"
             badge = titled ? said : nil
@@ -273,8 +293,27 @@ public struct Presenter {
         }
         let title = pool.pool == "chatgpt-work" ? "ChatGPT Work" : pool.name
         return SectionModel(id: pool.pool, title: titled ? title : nil, badge: badge, note: note, rows: rows,
-                            logo: ProviderLogo.forPool(pool.pool), level: pool.level.flatMap(SpendLevel.init(rawValue:)),
-                            attribution: pool.levelControl, models: pool.models)
+                            logo: ProviderLogo.forPool(pool.pool),
+                            policy: hasOwnPolicy ? PolicyModel(id: pool.pool, rawLevel: pool.level, attribution: pool.levelControl) : nil,
+                            models: Self.modelNames(pool.models), extras: ProviderExtras(pool: pool))
+    }
+
+    static func modelNames(_ models: [GlanceModel]) -> [String] {
+        let active = models.filter { !$0.archived }
+        func family(_ model: GlanceModel) -> String { model.family ?? model.name }
+        let costs = Dictionary(grouping: active, by: family).mapValues { $0.compactMap(\.typicalCostUSD).max() ?? -.infinity }
+        // Preserve legacy order for families whose cost is not reported; tie costs in input order.
+        var families = [String: Int]()
+        for model in active where families[family(model)] == nil { families[family(model)] = families.count }
+        return active.enumerated().sorted { lhs, rhs in
+            let l = family(lhs.element), r = family(rhs.element)
+            if l != r {
+                if costs[l] != costs[r] { return costs[l, default: -.infinity] > costs[r, default: -.infinity] }
+                return families[l, default: 0] < families[r, default: 0]
+            }
+            let lc = lhs.element.typicalCostUSD ?? -.infinity, rc = rhs.element.typicalCostUSD ?? -.infinity
+            return lc != rc ? lc > rc : lhs.offset < rhs.offset
+        }.map { $0.element.name }
     }
 
     static func sentence(_ text: String, limit: Int = 96) -> String {
@@ -289,13 +328,13 @@ public struct Presenter {
     }
 
     func row(_ limit: Limit, poolID: String, index: Int) -> RowModel {
-        let used = min(100, max(0, limit.usedPercent ?? 0))
+        let used = limit.usedPercent.map { min(100, max(0, $0)) }
         var title = limit.title ?? "Usage"
         if let scope = limit.scope, !scope.isEmpty { title += " · " + scope }
         return RowModel(id: "\(poolID):\(limit.name ?? String(index))", title: title,
-                        usedText: "\(Int(used.rounded()))% used",
+                        usedText: used.map { "\(Int($0.rounded()))% used" } ?? "Not read",
                         resetText: resetText(limit), paceText: Self.paceLine(limit.pace),
-                        bar: Self.bar(used: used, pace: limit.pace))
+                        bar: used.map { Self.bar(used: $0, pace: limit.pace) })
     }
 
     static func bar(used: Double, pace: Pace?) -> BarModel {
@@ -326,6 +365,16 @@ public struct Presenter {
         f.formatOptions = [.withInternetDateTime]
         return f
     }()
+
+    static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func controlDate(_ value: String) -> Date? {
+        iso.date(from: value) ?? isoFractional.date(from: value)
+    }
 
     func resetText(_ limit: Limit) -> String? {
         if limit.resetUnknown == true { return "Reset unknown" }

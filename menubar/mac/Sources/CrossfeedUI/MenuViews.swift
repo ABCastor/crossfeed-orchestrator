@@ -13,10 +13,17 @@ public final class MenuState: ObservableObject {
     @Published public var presenter: Presenter?
     @Published public var selected: String?
     @Published public var failure: String?
+    @Published public var actionFailure: String?
     @Published public var edits = PolicyEdits()
     public var canEditPolicy = true
     public var onPolicyChange: (PolicyChange) -> Void = { _ in }
     public var onSelect: (String) -> Void = { _ in }
+    public var onReorder: (String, String) -> Void = { _, _ in }
+    @Published public var providerOrder: [String] = []
+    @Published var draggedTile: String?
+    @Published var dropTile: String?
+    private var pressedTile: (id: String, origin: CGPoint)?
+    public var onOpenStatus: (URL) -> Void = { _ in }
     public var onOpenConsole: () -> Void = {}
     public var onReload: () -> Void = {}
     public var onAbout: () -> Void = {}
@@ -25,6 +32,56 @@ public final class MenuState: ObservableObject {
     /// menu's tracking loop delivers to the view instead of to SwiftUI's button.
     public var tileFrames: [String: CGRect] = [:]
     public var policyFrames: [PolicyChange: CGRect] = [:]
+    public var statusFrames: [String: StatusTarget] = [:]
+
+    var orderedTabs: [TabModel] {
+        guard let tabs = presenter?.tabs else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
+        let ordered = providerOrder.compactMap { byID[$0] }
+        let used = Set(ordered.map(\.id))
+        return ordered + tabs.filter { !used.contains($0.id) }
+    }
+
+    public func ownsPointer(at point: CGPoint) -> Bool {
+        tile(at: point) != nil || policyFrames.values.contains { $0.contains(point) }
+            || statusFrames.values.contains { $0.frame.contains(point) }
+    }
+
+    public func beginPointer(at point: CGPoint) {
+        cancelPointer()
+        pressedTile = tile(at: point).map { ($0, point) }
+    }
+
+    public func movePointer(to point: CGPoint) {
+        guard let press = pressedTile else { return }
+        if draggedTile == nil {
+            guard hypot(point.x - press.origin.x, point.y - press.origin.y) >= 5 else { return }
+            draggedTile = press.id
+        }
+        let target = tile(at: point)
+        if dropTile != target { dropTile = target }
+    }
+
+    @discardableResult
+    public func endPointer(at point: CGPoint) -> Bool {
+        movePointer(to: point)
+        defer { cancelPointer() }
+        if let source = draggedTile {
+            if let target = tile(at: point), target != source { onReorder(source, target) }
+            return true // a drag cannot select a tab or move a dial
+        }
+        return routeClick(at: point)
+    }
+
+    public func cancelPointer() {
+        pressedTile = nil
+        if draggedTile != nil { draggedTile = nil }
+        if dropTile != nil { dropTile = nil }
+    }
+
+    private func tile(at point: CGPoint) -> String? {
+        tileFrames.first { $0.value.contains(point) }?.key
+    }
 
     @discardableResult
     public func routeClick(at point: CGPoint) -> Bool {
@@ -32,8 +89,12 @@ public final class MenuState: ObservableObject {
             if canEditPolicy, edits.pending == nil { onPolicyChange(hit.key) }
             return true
         }
-        if let hit = tileFrames.first(where: { $0.value.contains(point) }) {
-            onSelect(hit.key)
+        if let hit = statusFrames.values.first(where: { $0.frame.contains(point) }) {
+            onOpenStatus(hit.url)
+            return true
+        }
+        if let hit = tile(at: point) {
+            onSelect(hit)
             return true
         }
         return false
@@ -67,7 +128,7 @@ public struct CrossfeedMenuView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let presenter = state.presenter {
-                ProviderSwitcher(tabs: presenter.tabs, selected: state.selected, onSelect: state.onSelect)
+                ProviderSwitcher(state: state)
                     .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 6)
                 MenuDivider()
                 if let tab = state.selected, let card = presenter.card(for: tab) {
@@ -81,6 +142,11 @@ public struct CrossfeedMenuView: View {
                 SpendCard(model: presenter.spend).padding(.vertical, 4)
             } else {
                 EmptyCard(text: state.failure ?? "Reading quotas…")
+            }
+            if let failure = state.actionFailure {
+                MenuDivider(inset: true)
+                Text(failure).font(CF.face(11)).foregroundStyle(CF.humanText)
+                    .padding(.horizontal, MenuMetrics.horizontal).padding(.vertical, 6)
             }
             if showsActions {
                 MenuDivider(inset: true)
@@ -100,6 +166,7 @@ public struct CrossfeedMenuView: View {
         .coordinateSpace(name: MenuMetrics.space)
         .onPreferenceChange(TileFrames.self) { state.tileFrames = $0 }
         .onPreferenceChange(PolicyFrames.self) { state.policyFrames = $0 }
+        .onPreferenceChange(StatusFrames.self) { state.statusFrames = $0 }
         .background(CF.paper.opacity(0.9))
         .foregroundStyle(CF.ink)
     }
@@ -108,14 +175,27 @@ public struct CrossfeedMenuView: View {
 // MARK: Provider switcher
 
 struct ProviderSwitcher: View {
-    let tabs: [TabModel]
-    let selected: String?
-    let onSelect: (String) -> Void
+    @ObservedObject var state: MenuState
 
     var body: some View {
+        let tabs = state.orderedTabs
+        let source = tabs.firstIndex { $0.id == state.draggedTile }
         HStack(spacing: 2) {
-            ForEach(tabs) { tab in
-                ProviderTile(tab: tab, isSelected: tab.id == selected) { onSelect(tab.id) }
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                ProviderTile(tab: tab, isSelected: tab.id == state.selected) { state.onSelect(tab.id) }
+                    .opacity(tab.id == state.draggedTile ? 0.5 : 1)
+                    .overlay(alignment: (source ?? index) < index ? .trailing : .leading) {
+                        if tab.id == state.dropTile && tab.id != state.draggedTile {
+                            Capsule().fill(CF.machine).frame(width: 2).padding(.vertical, 4)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityAction(named: "Move left") {
+                        if index > 0 { state.onReorder(tab.id, tabs[index - 1].id) }
+                    }
+                    .accessibilityAction(named: "Move right") {
+                        if index + 1 < tabs.count { state.onReorder(tab.id, tabs[index + 1].id) }
+                    }
             }
         }
     }
@@ -146,6 +226,7 @@ struct ProviderTile: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help("\(tab.title) · Drag to reorder")
         .accessibilityLabel(tab.id == "agy" ? "Google AI Pro (Antigravity)" : tab.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -199,7 +280,12 @@ struct UsageCard: View {
             MenuDivider(inset: true).padding(.bottom, 6)
             ForEach(Array(card.allowanceSections.enumerated()), id: \.element.id) { index, section in
                 if index > 0 { MenuDivider(inset: true).padding(.vertical, 5) }
-                SectionView(section: section, state: state, now: now, showModels: card.isAntigravity)
+                SectionView(section: section, state: state, now: now, isAllowance: card.isAntigravity)
+            }
+            if let policy = card.subscriptionPolicy {
+                MenuDivider(inset: true).padding(.vertical, 7)
+                PolicyControl(policy: policy, state: state, now: now)
+                    .padding(.horizontal, MenuMetrics.horizontal)
             }
         }
         .padding(.bottom, 6)
@@ -230,7 +316,7 @@ struct SectionView: View {
     let section: SectionModel
     @ObservedObject var state: MenuState
     let now: Date
-    let showModels: Bool
+    let isAllowance: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -246,20 +332,90 @@ struct SectionView: View {
                 ForEach(section.rows) { row in MetricRow(row: row) }
             }
             if let note = section.note {
-                Text(showModels && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
+                Text(isAllowance && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
                     .font(CF.face(11)).foregroundStyle(CF.quiet)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).help(note)
             }
-            if showModels, !section.models.isEmpty {
+            if isAllowance, !section.models.isEmpty {
                 Text(section.models.joined(separator: " · ")).font(CF.face(11)).foregroundStyle(CF.quiet)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Models: " + section.models.joined(separator: ", "))
             }
-            if section.level != nil {
-                PolicyControl(section: section, state: state, now: now)
+            if let policy = section.policy {
+                PolicyControl(policy: policy, state: state, now: now)
             }
+            ProviderExtrasView(extras: section.extras, id: section.id, openStatus: state.onOpenStatus)
         }
         .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 4)
+    }
+}
+
+public struct StatusTarget: Equatable {
+    public let url: URL
+    public let frame: CGRect
+}
+
+struct StatusFrames: PreferenceKey {
+    static var defaultValue: [String: StatusTarget] = [:]
+    static func reduce(value: inout [String: StatusTarget], nextValue: () -> [String: StatusTarget]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+struct ProviderExtrasView: View {
+    let extras: ProviderExtras
+    let id: String
+    let openStatus: (URL) -> Void
+    @State private var hoveringStatus = false
+
+    var body: some View {
+        if !extras.credits.isEmpty || !extras.usage.isEmpty || !extras.perModel.isEmpty || extras.status != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                if !extras.credits.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(extras.creditTitle).font(CF.face(12, .semibold))
+                        ForEach(extras.credits, id: \.self) { line in
+                            Measure(line, size: 11.5).foregroundStyle(CF.quiet)
+                        }
+                    }
+                }
+                if !extras.usage.isEmpty { extraRows("Usage cost estimate", rows: extras.usage) }
+                if !extras.perModel.isEmpty { extraRows("Spend by model · last 30 days", rows: extras.perModel) }
+                if let url = extras.status {
+                    Button { openStatus(url) } label: {
+                        Label("Status page", systemImage: "arrow.up.right.square")
+                            .font(CF.face(11.5, .medium))
+                            .foregroundStyle(hoveringStatus ? CF.ink : CF.machineText)
+                            .frame(minHeight: 23, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(key: StatusFrames.self, value: [id: StatusTarget(
+                                    url: url, frame: geo.frame(in: .named(MenuMetrics.space)))])
+                            })
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveringStatus = $0 }
+                    .accessibilityAddTraits(.isLink)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func extraRows(_ heading: String, rows: [ExtraRow]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(heading).font(CF.face(12, .semibold))
+            ForEach(rows.indices, id: \.self) { index in
+                let row = rows[index]
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(row.label).font(CF.face(11.5)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Measure(row.detail, size: 11.5).foregroundStyle(CF.quiet)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 }
 
@@ -274,22 +430,24 @@ struct MetricRow: View {
                 UsageProgressBar(percent: bar.used, tint: bar.pace == .unknown && bar.hot ? CF.human : CF.machine,
                                  accessibilityLabel: row.title, pacePercent: bar.expected,
                                  paceOnTop: bar.pace != .deficit, paceColor: CF.paceColor(bar.pace))
-                HStack(alignment: .firstTextBaseline) {
+            }
+            HStack(alignment: .firstTextBaseline) {
+                if row.bar != nil {
                     Measure(row.usedText, size: 11.5, weight: .medium)
-                    Spacer(minLength: 8)
-                    if let reset = row.resetText {
-                        Measure(reset, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1)
-                    }
+                } else {
+                    Text(row.usedText).font(CF.face(11)).foregroundStyle(CF.quiet)
                 }
-                if let pace = row.paceText, let bar = row.bar {
-                    HStack(spacing: 5) {
-                        Circle().fill(CF.dotColor(bar.pace)).frame(width: 6, height: 6)
-                        Text(pace).font(CF.face(11)).foregroundStyle(bar.pace == .deficit ? CF.humanText : CF.quiet)
-                            .lineLimit(1).minimumScaleFactor(0.85)
-                    }
+                Spacer(minLength: 8)
+                if let reset = row.resetText {
+                    Measure(reset, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1)
                 }
-            } else {
-                Text(row.usedText).font(CF.face(11)).foregroundStyle(CF.quiet)
+            }
+            if let pace = row.paceText, let bar = row.bar {
+                HStack(spacing: 5) {
+                    Circle().fill(CF.dotColor(bar.pace)).frame(width: 6, height: 6)
+                    Text(pace).font(CF.face(11)).foregroundStyle(bar.pace == .deficit ? CF.humanText : CF.quiet)
+                        .lineLimit(1).minimumScaleFactor(0.85)
+                }
             }
         }
     }

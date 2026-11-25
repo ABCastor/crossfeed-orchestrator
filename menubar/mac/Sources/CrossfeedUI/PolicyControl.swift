@@ -1,75 +1,116 @@
 import CrossfeedCore
 import SwiftUI
 
+/// Five click stops on the console's rail: completed dots, paper-ringed knob, hollow future stops.
 struct PolicyControl: View {
-    let section: SectionModel
+    let policy: PolicyModel
     @ObservedObject var state: MenuState
     let now: Date
     @State private var hovered: SpendLevel?
 
-    private var selected: SpendLevel? { state.edits.selection(for: section.id, stored: section.level) }
-    private var saving: Bool { state.edits.pending?.pool == section.id }
-    private var tint: Color {
-        switch section.attribution?.actor {
+    private let levels = SpendLevel.allCases
+    private var selected: SpendLevel? { state.edits.selection(for: policy.id, stored: policy.level) }
+    private var index: Int? { selected.flatMap { levels.firstIndex(of: $0) } }
+    private var saving: Bool { state.edits.pending?.pool == policy.id }
+    private var railTint: Color {
+        switch policy.attribution?.actor {
+        case .operator_: return CF.human
+        case .agent: return CF.machine
+        case nil: return CF.quiet
+        }
+    }
+    private var textTint: Color {
+        switch policy.attribution?.actor {
         case .operator_: return CF.humanText
         case .agent: return CF.machineText
         case nil: return CF.quiet
         }
     }
 
-    private var policyName: String {
-        switch section.id {
-        case "antigravity-gemini": return "Gemini spend policy (both windows)"
-        case "antigravity-3p": return "Claude/GPT weekly spend policy"
-        case "antigravity-argon": return "Argon weekly spend policy"
-        default: return section.title.map { "\($0) spend policy" } ?? "Spend policy"
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 0) {
-                ForEach(SpendLevel.allCases, id: \.self) { level in
-                    segment(level)
+            HStack {
+                Text("Spend policy").font(CF.face(11.5, .semibold))
+                if selected == nil {
+                    Spacer()
+                    Text("Mixed").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
+                } else if selected == .forced {
+                    Spacer()
+                    Text("Ignores quota estimates").font(CF.face(10.5)).foregroundStyle(CF.quiet)
                 }
             }
-            .padding(2)
-            .background(RoundedRectangle(cornerRadius: 6).fill(CF.surface))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(CF.rule, lineWidth: 1))
+            HStack(spacing: 0) {
+                ForEach(Array(levels.enumerated()), id: \.element) { stop, level in stopButton(level, at: stop) }
+            }
+            .background(alignment: .top) {
+                GeometryReader { geo in
+                    let inset = geo.size.width / CGFloat(2 * levels.count)
+                    let width = geo.size.width - 2 * inset
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(CF.rule)
+                        if let index {
+                            Capsule().fill(railTint).frame(width: width * CGFloat(index) / CGFloat(levels.count - 1))
+                        }
+                    }
+                    .frame(width: width, height: 2)
+                    .offset(x: inset, y: 11)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(policyName)
-            .help(policyName)
-            Text(saving ? "Saving…" : state.edits.notices[section.id]
-                 ?? section.attribution?.line(now: now) ?? "No recorded change")
+            .accessibilityLabel("Spend policy")
+            .accessibilityValue(selected?.label ?? "Mixed")
+            Text(saving ? "Saving…" : state.edits.notices[policy.id]
+                 ?? policy.attribution?.line(now: now) ?? "No recorded change")
                 .font(CF.face(11)).lineLimit(1)
-                .foregroundStyle(state.edits.notices[section.id] == nil ? tint : CF.humanText)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .foregroundStyle(state.edits.notices[policy.id] == nil ? textTint : CF.humanText)
         }
-        .padding(.top, 2)
+        .padding(.top, 3)
     }
 
-    private func segment(_ level: SpendLevel) -> some View {
-        let change = PolicyChange(pool: section.id, level: level)
+    private func stopButton(_ level: SpendLevel, at stop: Int) -> some View {
+        let change = PolicyChange(pool: policy.id, level: level)
         let active = level == selected
+        let filled = index.map { stop < $0 } ?? false
         return Button { state.onPolicyChange(change) } label: {
-            Text(level.label).font(CF.face(11, active ? .semibold : .regular))
-                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                .padding(.horizontal, 4)
-                .frame(maxWidth: .infinity, minHeight: 23)
-                .foregroundStyle(active ? tint : CF.ink)
-                .background(RoundedRectangle(cornerRadius: 4)
-                    .fill(active ? tint.opacity(0.15) : hovered == level ? CF.ink.opacity(0.07) : .clear))
-                .contentShape(Rectangle())
-                .background(GeometryReader { geo in
-                    Color.clear.preference(key: PolicyFrames.self,
-                                           value: [change: geo.frame(in: .named(MenuMetrics.space))])
-                })
+            VStack(spacing: 3) {
+                dot(level, active: active, filled: filled).frame(height: 24)
+                Text(level.label)
+                    .font(CF.face(10.5, active ? .semibold : .medium))
+                    .foregroundStyle(active || hovered == level ? CF.ink : CF.quiet)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: true, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 42, alignment: .top)
+            .contentShape(Rectangle())
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: PolicyFrames.self,
+                                       value: [change: geo.frame(in: .named(MenuMetrics.space))])
+            })
         }
         .buttonStyle(.plain)
         .onHover { inside in
             if inside { hovered = level } else if hovered == level { hovered = nil }
         }
         .disabled(!state.canEditPolicy || state.edits.pending != nil)
+        .help(level == .forced ? "Max ignores quota estimates" : level.label)
+        .accessibilityLabel(level.label)
         .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
+    private func dot(_ level: SpendLevel, active: Bool, filled: Bool) -> some View {
+        let off = active && level == .off
+        let border = active || filled ? railTint : (hovered == level ? CF.ink : CF.ruleStrong)
+        return ZStack {
+            if active { Circle().fill(CF.paper).frame(width: 28, height: 28) }
+            Circle().fill(!off && (active || filled) ? railTint : CF.paper)
+                .overlay { Circle().strokeBorder(border, lineWidth: 1.5) }
+                .frame(width: active ? 20 : 10, height: active ? 20 : 10)
+                .scaleEffect(!active && hovered == level ? 1.3 : 1)
+            if off { Capsule().fill(railTint).frame(width: 1.5, height: 18).rotationEffect(.degrees(45)) }
+        }
+        .accessibilityHidden(true)
     }
 }
 

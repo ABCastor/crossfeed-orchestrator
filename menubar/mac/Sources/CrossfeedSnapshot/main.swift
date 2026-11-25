@@ -48,7 +48,7 @@ do {
     var all: [(title: String, image: NSImage)] = []
     if let reference = argument("--side-by-side") {
         guard let other = NSImage(contentsOfFile: reference) else { throw GlanceError.malformed }
-        all.append(("CodexBar 0.67.0 (MIT), README screenshot", other))
+        all.append((argument("--reference-title") ?? "CodexBar 0.67.0 (MIT), README screenshot", other))
     }
     all += panels
     let final = all.count == 1 ? all[0].image : Compose.row(all, scale: scale)
