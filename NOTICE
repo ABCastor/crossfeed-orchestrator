@@ -29,6 +29,7 @@ Portions of scripts/native_usage.py are adapted from CodexBar v0.67.0
 (https://github.com/steipete/CodexBar, e0286a895055e60ddaefa6a5f176f246aa2f05e4):
 - CodexOAuthUsageFetcher.swift and CodexOAuthCredentials.swift: Codex auth-file
   fields, read-only WHAM usage request, general and additional window fields.
+- ClaudeOAuthUsageFetcher.swift: field names for scoped limits in legacy Claude OAuth responses.
 - AntigravityStatusProbe.swift and AntigravityQuotaSummaryParser.swift: existing
   local quota-summary RPC and quota-bucket decoding. No launch or OAuth flow.
 The optional Antigravity OAuth summary reader interoperates with the provider's

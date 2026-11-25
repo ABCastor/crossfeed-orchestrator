@@ -129,6 +129,44 @@ class ClaudeTests(unittest.TestCase):
         snap = native.parse_claude(fixture("claude-usage-legacy.json"))
         self.assertEqual({k: v["used_percent"] for k, v in snap["windows"].items()}, {"session": 48, "weekly": 3})
 
+    def test_legacy_scoped_limits_do_not_replace_general_windows(self):
+        expiry = "2026-11-03T13:00:00Z"
+        body = {"seven_day": {"utilization": 9, "resets_at": expiry},
+                "seven_day_sonnet": {"utilization": 100, "resets_at": expiry},
+                "seven_day_opus": {"utilization": 12, "resets_at": expiry},
+                "seven_day_cowork": {"utilization": 0}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual({k: v["used_percent"] for k, v in snap["windows"].items()},
+                         {"weekly": 9, "claude-weekly-scoped-sonnet": 100, "claude-weekly-scoped-opus": 12})
+        self.assertEqual(snap["idle_windows"]["claude-weekly-scoped-cowork"]["used_percent"], 0)
+        self.assertFalse(fleetctl.quota_window_applies({}, "claude", "claude-weekly-scoped-sonnet",
+                                                      snap["windows"]["claude-weekly-scoped-sonnet"], "claude-opus-5-5"))
+
+    def test_reader_ignores_bridge_token_config_and_non_subscription_records(self):
+        api_login = claude_record()
+        api_login["claudeAiOauth"].update(subscriptionType="console", accessToken="not-a-subscription")
+        with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "bridge-only",
+                                     "ANTHROPIC_API_KEY": "api-only", "CLAUDE_CONFIG_DIR": "/bridge"}), \
+                patch.object(native.Path, "home", return_value=Path("/operator")), \
+                patch.object(native.shutil, "which", return_value="/usr/bin/security"), \
+                patch.object(native.subprocess, "run") as keychain, \
+                patch.object(native, "_owner_file", return_value=json.dumps(claude_record()).encode()) as read:
+            keychain.return_value.returncode = 0
+            keychain.return_value.stdout = json.dumps(api_login)
+            token, plan, failure = native.claude_token()
+        read.assert_called_once_with(Path("/operator/.claude/.credentials.json"))
+        self.assertEqual((token, plan, failure), (TOKEN, "Claude Max 20x", None))
+        self.assertEqual(native.claude_token([api_login])[2]["kind"], "no-key")
+
+    def test_no_http_redirect_or_proxy_for_subscription_token(self):
+        with patch.object(native.urllib.request, "build_opener") as build:
+            build.return_value.open = answering(status=302)
+            result = native.observe_claude({}, records=[claude_record()])
+        proxy, redirect = build.call_args.args
+        self.assertEqual(proxy.proxies, {})
+        self.assertIsNone(redirect.redirect_request(None, None, 302, "", {}, "https://elsewhere.invalid"))
+        self.assertEqual(result["kind"], "failed")
+
     def test_scoped_window_applies_only_to_its_model(self):
         roster = {"quota_pools": {"claude": {"label": "Claude"}},
                   "model_cards": {"claude-fable-5-1": {}, "claude-opus-5-5": {}}}

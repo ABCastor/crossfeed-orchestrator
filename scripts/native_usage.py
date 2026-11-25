@@ -8,15 +8,14 @@ quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes
   its sign-in and renews it; this reader never sees a token.
 - codex-oauth: CodexBar's usage endpoint with Codex's existing ChatGPT sign-in. No renewal.
 - claude: Anthropic's usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`) with the
-  sign-in Claude Code already keeps (macOS Keychain item `Claude Code-credentials`, else
-  `~/.claude/.credentials.json`). Read only: an expired sign-in is reported, never renewed here,
-  because renewing would rotate Claude Code's own credential.
-- antigravity: an operator-exported usage report, or optionally a live quota summary from
-  an already-running local language server. Never starts the CLI or a login.
+  default subscription sign-in Claude Code keeps (macOS Keychain item `Claude Code-credentials`,
+  else `~/.claude/.credentials.json`), never a bridge token. An expired sign-in is not renewed here.
+- antigravity: an operator export, a running local language server, or an explicitly selected
+  existing ACP/CLI OAuth profile. Never starts the CLI or an interactive login.
 - copilot: GitHub's Copilot entitlement endpoint (`GET https://api.github.com/copilot_internal/user`)
   with the GitHub CLI's own sign-in (`gh auth token`) or a declared key reference.
 
-Tokens stay in memory and in one request header: never logged, never in a reason, never on disk.
+Credentials go only to the relevant provider on fixed HTTPS hosts. Never written or logged.
 A rejected sign-in, a missing tool and an unreadable answer stay distinct and never become 0%.
 """
 from __future__ import annotations
@@ -148,7 +147,7 @@ def _http_get(url: str, headers: dict[str, str], timeout: int,
               opener: Callable[..., Any] | None) -> tuple[int, str]:
     """(status, body). Exceptions other than HTTP errors propagate for the caller's fixed message."""
     request = urllib.request.Request(url, method="GET", headers=headers)
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
     try:
         with open_url(request, timeout=timeout) as response:
             return int(getattr(response, "status", 200) or 200), \
@@ -383,8 +382,7 @@ def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
     if isinstance(account, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account):
         headers["ChatGPT-Account-Id"] = account
     try:
-        open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
-        status, body = _http_get(CODEX_USAGE_URL, headers, reader_timeout("codex-oauth", config, timeout), open_url)
+        status, body = _http_get(CODEX_USAGE_URL, headers, reader_timeout("codex-oauth", config, timeout), opener)
         if status == 200:
             return parse_codex_oauth(_json(body)) or unavailable(
                 CODEX_OAUTH_SOURCE, "malformed", "Codex reported no OAuth rate-limit windows")
@@ -400,7 +398,14 @@ CLAUDE_SOURCE = "claude-oauth-usage"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 CLAUDE_LIMIT_KINDS = {"session": ("session", 300, "Session"), "weekly_all": ("weekly", 10080, "Weekly")}
-CLAUDE_FALLBACK_FIELDS = (("five_hour", "session", 300, "Session"), ("seven_day", "weekly", 10080, "Weekly"))
+CLAUDE_FALLBACK_FIELDS = (
+    ("five_hour", "session", 300, "Session"),
+    ("seven_day", "weekly", 10080, "Weekly"),
+    ("seven_day_sonnet", "claude-weekly-scoped-sonnet", 10080, "Sonnet only"),
+    ("seven_day_opus", "claude-weekly-scoped-opus", 10080, "Opus only"),
+    ("seven_day_oauth_apps", "claude-weekly-scoped-oauth-apps", 10080, "OAuth apps only"),
+    ("seven_day_cowork", "claude-weekly-scoped-cowork", 10080, "Cowork only"),
+)
 SUBSCRIPTION_NAMES = {"max": "Claude Max", "pro": "Claude Pro", "team": "Claude Team", "enterprise": "Claude Enterprise"}
 
 
@@ -444,7 +449,7 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
 
 
 def _claude_credential_records() -> list[dict[str, Any]]:
-    """Claude Code's own sign-in records, newest store first. Never written to."""
+    """The default interactive subscription profile, not a bridge's CLAUDE_CONFIG_DIR."""
     records = []
     if shutil.which("security"):
         try:
@@ -456,10 +461,9 @@ def _claude_credential_records() -> list[dict[str, Any]]:
                 records.append(json.loads(found.stdout))
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
-    config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     try:
-        records.append(json.loads((config_dir / ".credentials.json").read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+        records.append(_json(_owner_file(Path.home() / ".claude" / ".credentials.json").decode("utf-8")))
+    except (OSError, ValueError, RecursionError):
         pass
     return [r for r in records if isinstance(r, dict)]
 
@@ -471,23 +475,30 @@ def claude_token(records: list[dict[str, Any]] | None = None,
     expired = False
     for record in records if records is not None else _claude_credential_records():
         oauth = record.get("claudeAiOauth")
-        if not isinstance(oauth, dict) or not isinstance(oauth.get("accessToken"), str):
+        if not isinstance(oauth, dict):
             continue
-        expires = oauth.get("expiresAt")
-        if isinstance(expires, (int, float)) and expires / 1000 <= now.timestamp() + 30:
+        plan = SUBSCRIPTION_NAMES.get(str(oauth.get("subscriptionType") or "").lower())
+        if not plan:
+            continue
+        expires = _parse_time(oauth.get("expiresAt", 0) / 1000) if type(oauth.get("expiresAt")) in (int, float) else None
+        if expires is None:
+            continue
+        if (expires - now).total_seconds() <= 30:
             expired = True
             continue
+        token = oauth.get("accessToken")
+        if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,16000}", token):
+            continue
         tier = str(oauth.get("rateLimitTier") or "")
-        plan = SUBSCRIPTION_NAMES.get(str(oauth.get("subscriptionType") or "").lower())
-        if plan and "20x" in tier:
+        if "20x" in tier:
             plan += " 20x"
-        elif plan and "5x" in tier:
+        elif "5x" in tier:
             plan += " 5x"
-        return oauth["accessToken"], plan, None
+        return token, plan, None
     if expired:
         return None, None, unavailable(CLAUDE_SOURCE, "expired",
-                                       "Claude Code's sign-in has expired; it renews the next time Claude Code runs")
-    return None, None, unavailable(CLAUDE_SOURCE, "no-key", "Claude Code is not signed in on this machine")
+                                       "Claude Code's subscription sign-in has expired; sign in without an environment token")
+    return None, None, unavailable(CLAUDE_SOURCE, "no-key", "No usable Claude Code subscription sign-in")
 
 
 def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..., Any] | None = None,
