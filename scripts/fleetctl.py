@@ -50,6 +50,13 @@ except ImportError:
     _pro_spec.loader.exec_module(chatgpt_pro)
 
 try:
+    import subscriptions
+except ImportError:
+    _subscriptions_spec = importlib.util.spec_from_file_location("fleet_subscriptions", Path(__file__).with_name("subscriptions.py"))
+    subscriptions = importlib.util.module_from_spec(_subscriptions_spec)
+    _subscriptions_spec.loader.exec_module(subscriptions)
+
+try:
     import opencode_go_usage
 except ImportError:
     _go_spec = importlib.util.spec_from_file_location("fleet_opencode_go_usage", Path(__file__).with_name("opencode_go_usage.py"))
@@ -91,6 +98,8 @@ def _xdg_state() -> str:
 # The product's name, in one place: the console page, its title and the brief header read it.
 PRODUCT_NAME = "Crossfeed Orchestrator"
 
+# Older runtime snapshots can retain this provenance after the reader is removed.
+LEGACY_AGY_WIDGET_SOURCE = "antigravity-codexbar-widget"
 SCHEMA = "model-fleet-runtime/v1"
 RUN_SCHEMA = "opencode-run-usage/v2"
 AFK_SCHEMA = "afk-attempt/v1"
@@ -871,7 +880,7 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, native_usage.AGY_WIDGET_SOURCE}
+    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
                  and age_s > native_usage.AGY_REPORT_MAX_AGE_S)
     confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
@@ -1278,10 +1287,11 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "opencode-go":
         return ("opencode-go", config.get("url"), config.get("key"))
     if oracle == "antigravity":
-        # Multiple quota pools can consume different windows from the same export.
+        # Multiple pools can filter the same reading; distinct sign-ins never share a claim.
         try:
-            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True,
-                    config.get("codexbar_widget") is True)
+            if "oauth_session_file" in config:
+                return (oracle, "oauth", str(Path(config["oauth_session_file"]).expanduser()))
+            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
     if oracle in native_usage.OBSERVERS:
@@ -1687,8 +1697,10 @@ def _commit_gauge(runtime: dict[str, Any], pool: str, observed: dict[str, Any],
         except (KeyError, TypeError, ValueError):
             pass
     active = observed.get("windows") or {}
-    if existing and observed.get("source") == native_usage.AGY_WIDGET_SOURCE:
-        # A percentage-only widget row cannot supersede an unexpired full window.
+    if existing and observed.get("source") in {
+        native_usage.AGY_LOCAL_SOURCE, native_usage.AGY_OAUTH_SOURCE, LEGACY_AGY_WIDGET_SOURCE,
+    }:
+        # A percentage without a reset clock cannot supersede an unexpired full window.
         # Preserve the original snapshot so we do not restamp its provenance.
         for name, window in existing.get("windows", {}).items():
             if name not in active and window.get("used_percent") == 100:
@@ -5388,8 +5400,9 @@ def fleet_overview(
             "lanes": lane_counts.get(pool, 0),
         }
         reading = snapshot or {}
-        display_only_fresh = (reading.get("source") == native_usage.AGY_WIDGET_SOURCE
-                              and evidence.get("confidence") == "direct")
+        display_only_fresh = (reading.get("source") in {
+            native_usage.AGY_LOCAL_SOURCE, native_usage.AGY_OAUTH_SOURCE, LEGACY_AGY_WIDGET_SOURCE,
+        } and evidence.get("confidence") == "direct")
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, reading.get("idle_windows") if windows or display_only_fresh else None,
             evidence.get("spend_down") or [], now)
@@ -6236,7 +6249,9 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--no-refresh", action="store_true", help=refresh_help)
 
     glance = sub.add_parser("glance", help="the limits at a glance: one line plus every pool's limits and resets")
-    glance.add_argument("--format", choices=("text", "swiftbar", "json"), default="text")
+    formats = glance.add_mutually_exclusive_group()
+    formats.add_argument("--format", choices=("text", "swiftbar", "json"), default="text")
+    formats.add_argument("--json", dest="format", action="store_const", const="json", help="alias for --format json")
     glance.add_argument("--lead", metavar="POOL", help="pool always named in the one-line summary")
     glance.add_argument("--force", action="store_true", help="read every provider again now, ignoring TTLs")
     glance.add_argument("--plugin", help="menu-bar plugin path, for its own 'read again' item")
@@ -6258,6 +6273,18 @@ def build_parser() -> argparse.ArgumentParser:
         control_parser.add_argument("--owner", action="store_true", help="explicit owner instruction; console actions use owner")
         control_parser.add_argument("--reason", help="short reason recorded with this control change")
     return parser
+
+
+def menubar_renderer():
+    spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
+    renderer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(renderer)
+    return renderer
+
+
+def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None) -> dict:
+    ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview)
+    return menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
 
 
 CONSOLE_OPEN_REQUEST = "console-open-request"
@@ -6545,18 +6572,15 @@ def main() -> int:
                     return 0
             except (OSError, ValueError, AttributeError):
                 pass
-            _menubar_spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
-            menubar = importlib.util.module_from_spec(_menubar_spec)
-            _menubar_spec.loader.exec_module(menubar)
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             overview = fleet_overview(roster, runtime, state_dir)
             lead = resolve_lead_pool(roster, args.lead)
             if args.format == "json":
-                print(json.dumps(menubar.as_json(overview, lead), indent=2, sort_keys=True))
+                print(json.dumps(glance_payload(args.overlay, roster, overview, lead), indent=2, sort_keys=True))
             elif args.format == "swiftbar":
-                sys.stdout.write(menubar.swiftbar(overview, lead, args.plugin))
+                sys.stdout.write(menubar_renderer().swiftbar(overview, lead, args.plugin))
             else:
-                sys.stdout.write(menubar.text(overview, lead))
+                sys.stdout.write(menubar_renderer().text(overview, lead))
             return 0
         if args.command == "import-bench":
             sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

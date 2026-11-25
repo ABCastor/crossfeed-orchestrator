@@ -93,17 +93,17 @@ SOURCE_WORDS = {"codexbar": "CodexBar", "opencode-go-api": "OpenCode", "codex-ap
                 "claude-oauth-usage": "Claude", "antigravity-cli": "Antigravity", "copilot-api": "GitHub"}
 
 
-def rows(overview: dict[str, Any], lead: str | None = None) -> list[dict[str, Any]]:
+def rows(overview: dict[str, Any], lead: str | None = None, *, include_unmeasured: bool = False) -> list[dict[str, Any]]:
     """One row per pool that has a reading, a failed gauge or a provider refusal; the lead pool first."""
     out = []
     for pool in overview.get("pools") or []:
         limits = [l for l in pool.get("limits") or [] if l.get("kind") in {"window", "refusal"}]
-        if not limits and not pool.get("gauge_error"):
+        if not include_unmeasured and not limits and not pool.get("gauge_error"):
             continue
         limit = tightest(pool)
         out.append({
             "pool": pool.get("pool"), "name": short_name(pool), "label": pool.get("label"),
-            "level": pool.get("level"), "state": pool.get("state"),
+            "level": pool.get("level"), "state": pool.get("state"), "measured": bool(pool.get("measured")),
             "full": is_full(pool, limit), "used_percent": int(limit["used_percent"]) if limit else None,
             "resets": (limit or {}).get("resets") or "", "reset_at": (limit or {}).get("reset_at"),
             "pace": (limit or {}).get("pace"),
@@ -187,6 +187,7 @@ def text(overview: dict[str, Any], lead: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def as_json(overview: dict[str, Any], lead: str | None) -> dict[str, Any]:
-    return {"title": title(overview, lead), "pools": rows(overview, lead),
-            "readings": overview.get("quota_readings") or {}}
+def as_json(overview: dict[str, Any], lead: str | None, spend: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"schema": 1, "title": title(overview, lead), "pools": rows(overview, lead, include_unmeasured=True),
+            "readings": overview.get("quota_readings") or {}, "subscription_spend": spend or {
+                "monthly": [], "unpriced": 0, "unsplit": 0, "unavailable": False}}

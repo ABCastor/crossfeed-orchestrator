@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "subscriptions": [
+    {
+      "id": "claude",
+      "name": "Example Claude plan",
+      "pools": ["claude"],
+      "amount": null,
+      "currency": null,
+      "period": null,
+      "renewal": null,
+      "operator_share_percent": null,
+      "other_payer": null,
+      "source": "Access overlay (plan); operator (billing)"
+    }
+  ]
+}
