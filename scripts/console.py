@@ -628,7 +628,7 @@ def _limit_row(limit: dict[str, Any], pool: str = "", *, spare_allowed: bool = T
         return (f'<li class="lim{" full" if full else ""}" aria-label="{html.escape(label)}"><span class="ln">{title}</span>'
                 f'{_meter(limit["used_percent"], full)}<span class="pc">{value}</span>'
                 f'<span class="rs" aria-hidden="true">{when}</span></li>')
-    used = int(limit["used_percent"])
+    used = limit["used_percent"]
     hot = used >= 75
     if limit["reset_at"] is None:
         reset = "reset not reported" if limit.get("reset_unknown") else "not started yet"
@@ -639,10 +639,10 @@ def _limit_row(limit: dict[str, Any], pool: str = "", *, spare_allowed: bool = T
     if use:
         when += ' <span class="use">· spare, use it</span>'
     classes = "lim" + (" hot" if hot else "") + (" full" if used >= 100 else "")
-    text = f'{limit["title"]}{", " + limit["scope"] if limit.get("scope") else ""}: {used}% used, {reset}' + (
+    text = f'{limit["title"]}{", " + limit["scope"] if limit.get("scope") else ""}: {used:g}% used, {reset}' + (
         ", with allowance to spare" if use else "")
     return (f'<li class="{classes}" aria-label="{html.escape(text)}"><span class="ln">{title}{scope}</span>'
-            f'{_meter(used, hot)}<span class="pc"><b class="num">{used}%</b></span>'
+            f'{_meter(used, hot)}<span class="pc"><b class="num">{used:g}%</b></span>'
             f'<span class="rs" aria-hidden="true">{when}</span></li>')
 
 
@@ -1608,7 +1608,7 @@ def _work_gauge(pool):
         used = limit['used_percent']
         reset = ('Resets ' + limit['resets'] if limit['reset_at'] else
                  'Reset not reported' if limit.get('reset_unknown') else 'No active reset')
-        count = f'{100 - used}%' if limit['reset_at'] or used else ''
+        count = f'{100 - used:g}%' if limit['reset_at'] or used or limit.get('reset_unknown') else ''
         if count and note:
             count = 'Last ' + count
         if limit not in prominent:

@@ -210,6 +210,51 @@ class ClaudeTests(unittest.TestCase):
 
 
 class AntigravityTests(unittest.TestCase):
+    def test_usage_shows_native_clockless_percent_and_stale_argon_as_last_reading(self):
+        prefix = "antigravity-quota-summary-"
+        weekly, short, argon = (prefix + w for w in ("3p-weekly", "3p-5h", "argon-weekly"))
+        live = native.parse_antigravity_local({"buckets": [
+            {"bucketId": "3p-weekly", "remainingFraction": .9985},
+            {"bucketId": "3p-5h", "remainingFraction": 1,
+             "resetTime": fleetctl.iso(NOW + dt.timedelta(hours=5))},
+        ]}, NOW, source=native.AGY_OAUTH_SOURCE)
+        self.assertEqual(live["windows"], {})
+        self.assertTrue(live["idle_windows"][short]["reset_unknown"])
+        argon_age = 40 * 3600
+        old = {"source": fleetctl.LEGACY_AGY_WIDGET_SOURCE,
+               "observed_at": fleetctl.iso(NOW - dt.timedelta(seconds=argon_age)), "windows": {},
+               "idle_windows": {argon: {"used_percent": 0, "reset_unknown": True}}}
+        pools = {"antigravity-3p": live, "antigravity-argon": old}
+        runtime = {"quota_snapshots": pools}
+        roster = {"quota_pools": {name: {"quota_refresh": {"oracle": "antigravity"}} for name in pools},
+                  "lanes": []}
+        with tempfile.TemporaryDirectory() as temp, patch.object(fleetctl, "utc_now", return_value=NOW):
+            state = Path(temp)
+            (state / "runtime.json").write_text(json.dumps(runtime))
+            with patch("sys.stdout", new_callable=io.StringIO) as report:
+                fleetctl.show_usage(state, state / "no.db", True, roster)
+            usage = json.loads(report.getvalue())["quota_pools"]
+            with patch("sys.stdout", new_callable=io.StringIO) as report:
+                fleetctl.show_usage(state, state / "no.db", False, roster)
+            text = report.getvalue()
+            overview = fleetctl.fleet_overview(roster, runtime, state, NOW)
+
+        self.assertEqual(usage["antigravity-3p"]["quota_state"], "UNKNOWN")
+        self.assertEqual(usage["antigravity-3p"]["display_only_windows"][weekly]["used_percent"], .15)
+        self.assertEqual(usage["antigravity-argon"]["windows"], {})
+        self.assertEqual(usage["antigravity-argon"]["last_observed_windows"][argon]["used_percent"], 0)
+        self.assertEqual(usage["antigravity-argon"]["age_seconds"], argon_age)
+        self.assertNotIn("display_only_windows", usage["antigravity-argon"])
+        self.assertIn("antigravity-3p (antigravity-oauth-usage): display only — reset unknown", text)
+        self.assertIn(f"{weekly}: 0.15% used, reset unknown", text)
+        self.assertIn(f"{short}: 0% used, reset unknown", text)
+        self.assertIn(f"{argon}: last reading 0% used, reset unknown (stale, "
+                      f"{fleetctl.format_duration(argon_age)} old)", text)
+        pool = next(p for p in overview["pools"] if p["pool"] == "antigravity-3p")
+        self.assertIsNone(pool["quota"])
+        self.assertEqual({limit["name"]: limit["used_percent"] for limit in pool["limits"]},
+                         {short: 0, weekly: .15})
+
     def test_every_family_keeps_its_own_windows(self):
         # An hour into the 5-hour windows, so every bucket has a running clock.
         snap = native.parse_antigravity(fixture("agy-usage.json"), NOW + dt.timedelta(hours=1))

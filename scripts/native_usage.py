@@ -688,7 +688,7 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
             _agy_store(windows, idle, family, cadence, used, reset)
             if source == AGY_OAUTH_SOURCE:
                 provider_used[name] = round(used, 8)
-            if name in idle and fraction != 1:
+            if name in idle and (source == AGY_OAUTH_SOURCE or fraction != 1):
                 idle[name]["reset_unknown"] = True
     if not windows and not idle:
         return None
