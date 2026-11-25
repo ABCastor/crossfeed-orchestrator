@@ -24,4 +24,11 @@ The menu design in this app is adapted from CodexBar v0.67.0 (https://github.com
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 
+Provider marks (Claude, OpenAI, GitHub Copilot, Gemini, Antigravity, OpenCode and OpenRouter):
+[@lobehub/icons-static-svg 1.106.0](https://github.com/lobehub/lobe-icons/tree/05260484d9f4de68f90cc87a634ae68fa4043efd/packages/static-svg),
+commit `05260484d9f4de68f90cc87a634ae68fa4043efd`, MIT, copyright (c) 2023 LobeHub.
+The SVGs and MIT text are in `Resources/ProviderLogos/`. The Gemini SVG expands packed arc flags
+for macOS CoreSVG without changing the geometry. The marks identify their respective providers;
+no affiliation or endorsement is implied.
+
 Fonts: Commissioner and Martian Mono, SIL Open Font License 1.1 (Resources/Fonts/OFL-*.txt).

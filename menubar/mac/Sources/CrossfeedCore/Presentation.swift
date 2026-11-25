@@ -37,18 +37,38 @@ public struct SectionModel: Equatable, Identifiable {
     public var badge: String?         // "Conserve", "Abundant"
     public var note: String?          // why a pool is not read
     public var rows: [RowModel]
+    public var logo: ProviderLogo?
+    public var level: SpendLevel?
+    public var attribution: PolicyAttribution?
+    public var models: [String]
+}
+
+public enum ProviderLogo: String, CaseIterable {
+    case claude = "claude-color", openai, copilot = "githubcopilot", gemini = "gemini-color"
+    case antigravity = "antigravity-color", opencode, openrouter
+
+    static func forPool(_ id: String) -> Self? {
+        if id == "claude" { return .claude }
+        if id.hasPrefix("codex") || id.hasPrefix("chatgpt") { return .openai }
+        if id.hasPrefix("github-copilot") { return .copilot }
+        if id.hasPrefix("antigravity") { return .antigravity }
+        if id.hasPrefix("gemini") { return .gemini }
+        if id.hasPrefix("opencode") { return .opencode }
+        if id.hasPrefix("openrouter") { return .openrouter }
+        return nil
+    }
 }
 
 public struct TabModel: Equatable, Identifiable {
     public var id: String
     public var title: String
-    public var symbol: String         // SF Symbol name
+    public var logo: ProviderLogo?    // nil for a group without one provider (Other)
     public var used: Double?          // the tab's tightest window, for the mini bar under it
     public var pace: PaceKind
     public var hot: Bool
 
-    public init(id: String, title: String, symbol: String, used: Double?, pace: PaceKind, hot: Bool) {
-        self.id = id; self.title = title; self.symbol = symbol; self.used = used; self.pace = pace; self.hot = hot
+    public init(id: String, title: String, logo: ProviderLogo?, used: Double?, pace: PaceKind, hot: Bool) {
+        self.id = id; self.title = title; self.logo = logo; self.used = used; self.pace = pace; self.hot = hot
     }
 }
 
@@ -57,6 +77,38 @@ public struct CardModel: Equatable {
     public var subtitle: String       // "Updated 2 min ago"
     public var badge: String?
     public var sections: [SectionModel]
+    public var isAntigravity: Bool
+
+    public var heading: String { isAntigravity ? "Google AI Pro" : title }
+
+    /// An allowance belongs to a routing pool, not to a reset timer. Gemini keeps one policy
+    /// underneath both windows; the other two allowances have their own policy and model list.
+    public var allowanceSections: [SectionModel] {
+        guard isAntigravity else { return sections }
+        let order = ["antigravity-gemini", "antigravity-3p", "antigravity-argon"]
+        let titles = ["antigravity-gemini": "Gemini", "antigravity-3p": "Claude/GPT", "antigravity-argon": "Argon"]
+        return sections.sorted { (order.firstIndex(of: $0.id) ?? order.count) < (order.firstIndex(of: $1.id) ?? order.count) }
+            .map { section in
+                guard let family = titles[section.id] else { return section }
+                var result = section
+                result.title = nil
+                let sorted = section.rows.sorted { lhs, rhs in
+                    lhs.title.hasPrefix("Weekly") && !rhs.title.hasPrefix("Weekly")
+                }
+                result.rows = sorted.map { row in
+                    var named = row
+                    named.title = family + " " + row.title.lowercased()
+                    return named
+                }
+                let expected = section.id == "antigravity-gemini" ? ["weekly", "5-hour"] : ["weekly"]
+                for (index, title) in expected.enumerated() where !result.rows.contains(where: { $0.title.hasPrefix(family + " " + title) }) {
+                    result.rows.insert(RowModel(id: section.id + ":unread-" + title, title: family + " " + title,
+                                                usedText: "Not read", resetText: nil, paceText: nil, bar: nil),
+                                       at: min(index, result.rows.count))
+                }
+                return result
+            }
+    }
 }
 
 /// CodexBar's "Extra usage" card, for the ledger: how much of the month's subscriptions is the operator's.
@@ -105,12 +157,11 @@ public struct Presenter {
     static let titles = ["claude": "Claude", "codex": "Codex", "copilot": "Copilot", "agy": "AGY",
                          "go": "OpenCode", "other": "Other"]
     static let cardTitles = ["agy": "Antigravity"]
-    static let symbols = ["claude": "asterisk", "codex": "curlybraces", "copilot": "airplane",
-                          "agy": "sparkle", "go": "bolt", "other": "ellipsis.circle"]
 
     static func groupID(_ pool: Pool) -> String {
-        if !pool.measured { return "other" }
         let id = pool.pool
+        if ["antigravity-gemini", "antigravity-3p", "antigravity-argon"].contains(id) { return "agy" }
+        if !pool.measured { return "other" }
         if id == "claude" { return "claude" }
         if id == "codex" { return "codex" }
         if id.hasPrefix("github-copilot") { return "copilot" }
@@ -143,7 +194,7 @@ public struct Presenter {
             return TabModel(
                 id: group.id,
                 title: Self.titles[group.id] ?? String(group.pools.first?.name.prefix(9) ?? Substring(group.id)),
-                symbol: Self.symbols[group.id] ?? "circle.grid.2x2",
+                logo: group.id == "other" ? nil : group.pools.first.flatMap { ProviderLogo.forPool($0.pool) },
                 used: tight?.used, pace: pace, hot: bars.contains { $0.hot })
         }
     }
@@ -174,7 +225,8 @@ public struct Presenter {
         let age = group.pools.compactMap { $0.staleAgeS }.max() ?? ageSeconds()
         let read = group.pools.contains { $0.measured || $0.usedPercent != nil }
         return CardModel(title: title, subtitle: Self.updated(age: age, hasReading: read),
-                         badge: multi ? nil : stateWord(head?.state), sections: sections)
+                         badge: multi || tab == "agy" ? nil : stateWord(head?.state), sections: sections,
+                         isAntigravity: tab == "agy")
     }
 
     func ageSeconds() -> Double? {
@@ -219,7 +271,10 @@ public struct Presenter {
             if pool.state?.uppercased() == "UNKNOWN" { badge = nil }
             if let error = pool.gaugeError { note = "Last reading kept · " + Self.sentence(error, limit: 60) }
         }
-        return SectionModel(id: pool.pool, title: titled ? pool.name : nil, badge: badge, note: note, rows: rows)
+        let title = pool.pool == "chatgpt-work" ? "ChatGPT Work" : pool.name
+        return SectionModel(id: pool.pool, title: titled ? title : nil, badge: badge, note: note, rows: rows,
+                            logo: ProviderLogo.forPool(pool.pool), level: pool.level.flatMap(SpendLevel.init(rawValue:)),
+                            attribution: pool.levelControl, models: pool.models)
     }
 
     static func sentence(_ text: String, limit: Int = 96) -> String {

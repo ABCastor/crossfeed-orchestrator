@@ -19,7 +19,14 @@ guard let fixture = argument("--fixture"), let out = argument("--out") else {
 }
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
-if let fonts = argument("--fonts") { _ = CF.registerFonts(in: URL(fileURLWithPath: fonts)) }
+let fonts = URL(fileURLWithPath: argument("--fonts") ?? "Resources/Fonts")
+CF.registerFonts(in: fonts)
+let logos = argument("--logos").map { URL(fileURLWithPath: $0) }
+    ?? fonts.deletingLastPathComponent().appendingPathComponent("ProviderLogos")
+guard ProviderAssets.load(from: logos) == ProviderLogo.allCases.count else {
+    FileHandle.standardError.write(Data("snapshot: bundled provider logos not found; set --logos DIR\n".utf8))
+    exit(2)
+}
 let now = argument("--now").flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
 let dark = argument("--appearance") == "dark"
 let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
