@@ -51,7 +51,7 @@ public struct CrossfeedMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let presenter = state.presenter {
                 ProviderSwitcher(tabs: presenter.tabs, selected: state.selected, onSelect: state.onSelect)
-                    .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
+                    .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 6)
                 MenuDivider()
                 if let tab = state.selected, let card = presenter.card(for: tab) {
                     UsageCard(card: card).padding(.top, 6)
@@ -114,7 +114,7 @@ struct ProviderTile: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Image(systemName: tab.symbol).font(.system(size: 14, weight: .medium)).frame(height: 17)
-                Text(tab.title).font(CF.face(10.5, .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                Text(tab.title).font(CF.face(10.5, .medium)).lineLimit(1).minimumScaleFactor(0.8)
             }
             .foregroundStyle(isSelected ? Color.white : CF.quiet)
             .frame(maxWidth: .infinity).padding(.top, 5).padding(.bottom, 9)

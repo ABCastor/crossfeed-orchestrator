@@ -224,7 +224,12 @@ public struct Presenter {
 
     static func sentence(_ text: String, limit: Int = 96) -> String {
         let flat = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        let cut = flat.count > limit ? String(flat.prefix(limit - 1)) + "…" : flat
+        var cut = flat
+        if flat.count > limit {
+            // Cut at a word, not in the middle of one.
+            let head = String(flat.prefix(limit - 1))
+            cut = (head.lastIndex(of: " ").map { String(head[..<$0]) } ?? head) + "…"
+        }
         return cut.prefix(1).uppercased() + cut.dropFirst()
     }
 

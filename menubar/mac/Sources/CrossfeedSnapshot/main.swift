@@ -1,7 +1,7 @@
 // Renders Crossfeed's open menu offscreen, with no screen, pointer or focus involved:
 // the very NSHostingView the app puts in its menu is drawn into a bitmap.
 //
-//   CrossfeedSnapshot --fixture glance.json --now 2026-11-25T09:53:57Z --fonts Resources/Fonts \
+//   CrossfeedSnapshot --fixture glance.json --now <ISO time> --fonts Resources/Fonts \
 //       --out menu.png [--appearance light|dark] [--tab codex] [--side-by-side codexbar.png]
 import AppKit
 import CrossfeedCore
