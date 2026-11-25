@@ -78,18 +78,22 @@ func short(s string, n int) string {
 	return s
 }
 
-func quota(used *int, reset string, p pace) string {
+func quota(used *int, reset string, p pace, compact bool) string {
 	if used == nil || *used < 0 || *used > 100 {
 		return "Not read"
 	}
 	label := fmt.Sprintf("%d%% left", 100-*used)
 	if reset != "" {
-		label += " · " + short(reset, 14)
+		label += " · " + short(reset, 24)
 	} else {
 		label += " · reset unknown"
 	}
-	if p.Words != "" {
-		label += " · " + short(p.Words, 32)
+	words := p.Words
+	if compact {
+		words, _, _ = strings.Cut(words, ", ")
+	}
+	if words != "" {
+		label += " · " + short(words, 70)
 	}
 	return label
 }
@@ -97,7 +101,7 @@ func quota(used *int, reset string, p pace) string {
 func rows(data snapshot) []row {
 	var out []row
 	for _, p := range data.Pools {
-		label := quota(p.Used, p.Reset, p.Pace)
+		label := quota(p.Used, p.Reset, p.Pace, true)
 		failed := len(p.GaugeError) != 0 && string(p.GaugeError) != "null"
 		if p.Used == nil && !p.Measured && !failed {
 			label = "No quota window"
@@ -105,10 +109,8 @@ func rows(data snapshot) []row {
 			label += " · stale"
 		}
 		r := row{title: short(p.Name, 24) + "  " + label}
-		if len(p.Limits) > 1 {
-			for _, l := range p.Limits {
-				r.children = append(r.children, short(l.Title, 25)+"  "+quota(l.Used, l.Reset, l.Pace))
-			}
+		for _, l := range p.Limits {
+			r.children = append(r.children, short(l.Title, 25)+"  "+quota(l.Used, l.Reset, l.Pace, false))
 		}
 		out = append(out, r)
 	}

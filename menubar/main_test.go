@@ -30,6 +30,18 @@ printf '%s' '{"schema":1,"pools":[],"subscription_spend":{"monthly":[],"unpriced
 	}
 }
 
+func TestCompactQuotaKeepsTheExactResetAndPace(t *testing.T) {
+	used := 58
+	reset := "Sat 28 Nov 11:36"
+	p := pace{Words: "2% in deficit, runs out in 2d 2h"}
+	if got := quota(&used, reset, p, true); got != "42% left · Sat 28 Nov 11:36 · 2% in deficit" {
+		t.Fatalf("compact line: %q", got)
+	}
+	if got := quota(&used, reset, p, false); !strings.HasSuffix(got, "runs out in 2d 2h") {
+		t.Fatalf("detailed line: %q", got)
+	}
+}
+
 func TestRowsUseRemainingAndDoNotConfuseMissingWithZero(t *testing.T) {
 	used := 35
 	data := snapshot{
