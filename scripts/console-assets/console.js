@@ -718,14 +718,13 @@ function boot(document, window) {
   }
   function showLevel(pool, level, means) {
     const row = document.getElementById(`pool-${pool}`);
-    const policy = workbench ? document.getElementById(`policy-${pool}`) || row : row;
-    const form = policy?.querySelector('.lv');
+    const form = row?.querySelector('.lv');
     if (!row || !form) return;
     const toggle = row.querySelector('.wb-pool-switch button');
     if (toggle) {
       const on = level !== 'off';
       showSwitch(toggle, on, on ? 'off' : 'normal');
-      const caption = policy.querySelector('.wb-level');
+      const caption = row.querySelector('.wb-level');
       if (caption) caption.textContent = form.querySelector(`[value="${level}"]`).getAttribute('aria-label');
     }
     const stops = [...form.querySelectorAll('.stop')];
@@ -739,7 +738,7 @@ function boot(document, window) {
       button.tabIndex = selected ? 0 : -1;   // one stop in the tab order; arrows move between them
       if (selected && meaning === undefined && button.title) meaning = button.title;
     }
-    if (meaning !== undefined) policy.querySelector('.means').textContent = meaning;
+    if (meaning !== undefined) row.querySelector('.means').textContent = meaning;
   }
   function showModels(pool, on, told) {
     const pick = picks.get(pool);
@@ -806,9 +805,13 @@ function boot(document, window) {
           if (open && gauge.querySelector('.pro-note')) gauge.querySelector('.pro-note').open = true;
         } else gauge.innerHTML = markup;
       }
-      if (row && !skip(`level:${pool.pool}`) && pool.control_actor !== undefined) {
+      // Attribution describes the last confirmed write, even while a newer choice is pending.
+      if (row) {
         const actor = row.querySelector('.level-actor');
-        if (actor) actor.textContent = pool.control_actor;
+        const attribution = workbench ? pool.wallet_control_actor : pool.control_actor;
+        if (actor && attribution !== undefined) actor.textContent = attribution;
+        const slider = row.querySelector('.lv');
+        if (slider && pool.control_actor_kind !== undefined) slider.dataset.levelActor = pool.control_actor_kind;
       }
       if (row && !skip(`model:${pool.pool}`) && pool.model_actors) {
         for (const option of row.querySelectorAll('[data-model]')) {
@@ -1097,7 +1100,7 @@ function boot(document, window) {
       }
       return;
     }
-    const output = (submitter?.closest('.wb-model') || form.closest('.wb-pool-control, .wb-agy-policy'))?.querySelector('.wb-error');
+    const output = (submitter?.closest('.wb-model') || form.closest('.wb-pool-control'))?.querySelector('.wb-error');
     const save = async key => {
       if (output) output.textContent = '';
       if (!await saver.save(key, {url: form.action, body}) && output && !saver.pending(key)) {

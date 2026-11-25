@@ -754,6 +754,17 @@ def _control_text(record: dict[str, Any] | None) -> str:
     return f"{actor}, {when.day} {when:%b %H:%M}"
 
 
+def _level_attribution(record: dict[str, Any] | None, as_of: str) -> tuple[str, str]:
+    words = {"owner": "you", "agent": "an agent"}
+    actor = (record or {}).get("actor")
+    if actor not in words:
+        return "unknown", "Last change not recorded"
+    when = fleetctl.parse_iso(record["when"]).astimezone()
+    days = (fleetctl.parse_iso(as_of).astimezone().date() - when.date()).days
+    date = f"today {when:%H:%M}" if days == 0 else "yesterday" if days == 1 else f"{when.day} {when:%b %Y %H:%M}"
+    return actor, f"Set by {words[actor]} · {date}"
+
+
 def _level_meaning(level: str) -> str:
     return LEVEL_PLAIN[level] + " Ignore estimates still obeys actual limits."
 
@@ -763,8 +774,12 @@ WALLET_LEVEL_MEANING = {"off": "Routing skips this plan.", "low": "Conserve allo
                         "forced": "Actual caps and refusals still apply."}
 
 
-def _slider(pool: dict[str, Any], form_token: str, return_fields: str = '') -> str:
+def _slider(pool: dict[str, Any], form_token: str, as_of: str | None = None, return_fields: str = '') -> str:
     meaning_for = WALLET_LEVEL_MEANING.__getitem__ if return_fields else _level_meaning
+    record = pool.get("control")
+    actor, attribution = _level_attribution(record, as_of or fleetctl.iso())
+    if not return_fields:
+        attribution = _control_text(record)
     current = pool["level"]
     at = LEVELS.index(current)
     label = html.escape(pool["label"])
@@ -785,12 +800,12 @@ def _slider(pool: dict[str, Any], form_token: str, return_fields: str = '') -> s
     pool_id = html.escape(pool["pool"])
     return (
         '<p class="lvh" aria-hidden="true">How agents use this plan</p>'
-        f'<form class="lv at-{at} is-{current}" method="post" action="/level" role="radiogroup" '
-        f'aria-label="How much of {label} to use" aria-describedby="means-{pool_id}">'
+        f'<form class="lv at-{at} is-{current}" data-level-actor="{actor}" method="post" action="/level" role="radiogroup" '
+        f'aria-label="How much of {label} to use" aria-describedby="actor-{pool_id} means-{pool_id}">'
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
         f'{return_fields}<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
+        f'<p id="actor-{pool_id}" class="control-actor level-actor">{html.escape(attribution)}</p>'
         f'<p class="means" id="means-{pool_id}">{html.escape(meaning_for(current))}</p>'
-        f'<span class="control-actor level-actor">{html.escape(_control_text(pool.get("control")))}</span>'
     )
 
 
@@ -1182,8 +1197,7 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
 
 
 def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token: str,
-            order: dict[str, Any] | None = None, *, return_fields: str = '', policy: str = '',
-            group_label: str = '') -> str:
+            order: dict[str, Any] | None = None, *, return_fields: str = '', policy: str = '') -> str:
     pool_id = html.escape(pool["pool"])
     label = html.escape(pool["label"])
     options = pool.get("options") or []
@@ -1195,9 +1209,8 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
         listing = ''.join(_option(by_key[o['model']], pool, o, compact=True) for o in options)
         count = len(options)
         count_text = f'{count} model {"entry" if count == 1 else "entries"}'
-        caption = f'{html.escape(group_label)} <small>{count_text}</small>' if group_label else count_text
         return (f'<details class="pick" id="pick-{pool_id}" data-pool="{pool_id}"><summary class="wb-inventory">'
-                f'{caption}</summary>{policy}'
+                f'{count_text}</summary>{policy}'
                 + f'<form class="wb-models" method="post" action="/model">{return_fields}'
                 f'<input type="hidden" name="pool" value="{pool_id}">'
                 f'<input type="hidden" name="t" value="{html.escape(form_token)}">'
@@ -1260,8 +1273,10 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
     pools = []
     for p in overview["pools"]:
         state, label, note = models_summary(p, by_key)
+        actor, attribution = _level_attribution(p.get("control"), overview["generated_at"])
         pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
                       "control_actor": _control_text(p.get("control")),
+                      "wallet_control_actor": attribution, "control_actor_kind": actor,
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
                       "gauge": _provider_gauge(p, overview) + _pro_usage(p),
                       "wallet_gauge": _work_gauge(p) + _pro_usage(p),
@@ -1574,6 +1589,7 @@ def _work_gauge(pool):
     rows = []
     windows = [limit for limit in limits if limit['kind'] == 'window']
     weekly = [limit for limit in windows if 'weekly' in limit['title'].lower()]
+    weekly.sort(key=lambda limit: bool(_scope_words(limit.get('scope'), pool['pool'])))
     prominent = ((weekly + [limit for limit in windows if limit not in weekly]) if pool['pool'] == 'opencode-go'
                  else weekly or windows[:1])
     extra = []
@@ -1582,8 +1598,13 @@ def _work_gauge(pool):
             rows.append(_limit_row(limit, pool['pool']))
             continue
         scope = _scope_words(limit.get('scope'), pool['pool'])
-        title = ('Fable weekly' if scope == 'Fable only' and limit['title'] == 'Weekly'
-                 else limit['title'] + (f' · {scope}' if scope else ''))
+        name = limit['title']
+        if name == 'Weekly' and scope in {'Fable', 'Fable only'}:
+            title = 'Fable weekly'
+        elif name == 'Weekly' and pool['pool'] in AGY_ALLOWANCES:
+            title = f'{AGY_ALLOWANCES[pool["pool"]]} weekly'
+        else:
+            title = name + (f' · {scope}' if scope else '')
         used = limit['used_percent']
         reset = ('Resets ' + limit['resets'] if limit['reset_at'] else
                  'Reset not reported' if limit.get('reset_unknown') else 'No active reset')
@@ -1602,7 +1623,12 @@ def _work_gauge(pool):
     rows.extend(extra)
     if not rows and not note:
         note = 'No published cap' if pool['plan'].get('limit') == 'none-known' else 'No reading'
-    return (f'<p class="wb-muted wb-reading-note">{esc(note)}</p>' if note else '') + (
+    refusal = ''
+    if pool['state'] == 'EXHAUSTED' and pool.get('until'):
+        reset_at = esc(pool['until'])
+        reset = esc(fleetctl.reset_words(pool['until']))
+        refusal = f'<p class="wb-refusal">Used up · back <time datetime="{reset_at}">{reset}</time></p>'
+    return refusal + (f'<p class="wb-muted wb-reading-note">{esc(note)}</p>' if note else '') + (
         f'<ul class="wb-limits" aria-label="Limits">{"".join(rows)}</ul>' if rows else '')
 
 
@@ -1631,6 +1657,7 @@ def _compare_cells(option, scored, pool, roster):
         headroom = 'Refresh failed' if pool.get('gauge_error') else 'Stale'
     elif used is not None:
         title, scope = fleetctl.limit_name(price['binding_window'], price['window'], pool.get('label', ''))
+        scope = _scope_words(scope, option['pool'])
         headroom = f'{100 - used:g}% left · {title}' + (f' · {scope}' if scope else '')
     else:
         headroom = 'Not reported'
@@ -1833,14 +1860,14 @@ def _wallet(overview, token, workbench, order):
                             for field, value in [('role', workbench['role']), ('value', workbench['value']),
                                                  *[('compare', key) for key in workbench['keys']]])
 
-    def parts(pool, *, allowance=False):
+    def allowance_row(pool, title, *, card=False):
         key = pool['pool']
         pool_id = esc(key)
         options = [o for o in pool.get('options') or [] if not o['retired_on']
                    and _visible_model(roster, archived, key, o['model'], lanes)]
         pool = dict(pool, options=options)
-        title = AGY_ALLOWANCES[key] if allowance else _wallet_title(pool)
-        tag = 'h3' if allowance else 'h2'
+        tag = 'h2' if card else 'h3'
+        container = 'article' if card else 'section'
         on = pool['level'] != 'off'
         explicit = bool(roster['quota_pools'][key].get('explicit_only'))
         included = [_name(by_key[o['model']]) for o in options if o['current'] and o['run_as']][:3]
@@ -1848,49 +1875,32 @@ def _wallet(overview, token, workbench, order):
                        f'{return_fields}<input type="hidden" name="t" value="{esc(token)}">'
                        f'<input type="hidden" name="pool" value="{pool_id}">'
                        + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal') + '</form>')
-        plan = '' if allowance else _wallet_plan(pool)
-        reading = (f'<article class="pool wb-pool-control {"wb-allowance" if allowance else "wb-ticket"} lvl-{pool["level"]}" '
-                   f'id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{esc(pool["label"])}" tabindex="-1">'
-                   f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}'
-                   '<p class="wb-error" role="status"></p>'
-                   f'<div class="gauge">{_work_gauge(pool) + _pro_usage(pool)}</div>')
+        plan = _wallet_plan(pool) if card else ''
         level = f'<small class="wb-level">{LEVEL_WORDS[pool["level"]]}</small>'
-        slider = _slider(pool, esc(token), return_fields)
-        if allowance:
-            policy = (f'<div class="wb-agy-policy" id="policy-{pool_id}"><p>{esc(title)} {level}</p>{slider}'
-                      '<p class="wb-error" role="status"></p></div>')
-        else:
-            policy = f'<details class="wb-advanced" open><summary>Spend policy {level}</summary>{slider}</details>'
+        slider = _slider(pool, esc(token), overview['generated_at'], return_fields)
         flag = ('<div class="wb-explicit">Explicit only '
                 + _work_switch('explicit-only', explicit, f'{title} explicit-only pool flag',
                                disabled='Set in roster.', hint_id=pool_id) + '</div>')
-        inventory = _picker(pool, by_key, token, order, return_fields=return_fields, policy=flag,
-                            group_label=title if allowance else '')
-        return reading, policy, inventory, included, len(options)
-
-    def includes(names):
-        return ('<p class="wb-includes"><small>Includes</small> <span class="nm">'
-                + esc(' · '.join(names)) + '</span></p>') if names else ''
-
-    def ticket(pool):
-        reading, policy, inventory, names, _ = parts(pool)
-        return reading + includes(names) + policy + inventory + '</article>'
+        inventory = _picker(pool, by_key, token, order, return_fields=return_fields, policy=flag)
+        includes = (f'<p class="wb-includes"><small>Includes</small> <span class="nm">'
+                    f'{esc(" · ".join(included))}</span></p>') if included else ''
+        ticket = ' wb-ticket' if card else ''
+        return (f'<{container} class="pool wb-pool-control{ticket} lvl-{pool["level"]}" '
+                f'id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{esc(pool["label"])}" tabindex="-1">'
+                f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}'
+                '<p class="wb-error" role="status"></p>'
+                f'<div class="gauge">{_work_gauge(pool) + _pro_usage(pool)}</div>{includes}'
+                f'<details class="wb-advanced" id="policy-{pool_id}" open><summary>Spend policy {level}</summary>{slider}</details>'
+                f'{inventory}</{container}>')
 
     def antigravity(group):
         members = esc(json.dumps([p['pool'] for p in group]))
-        readings, policies, inventories, names, counts = zip(*(parts(p, allowance=True) for p in group))
-        examples = list(dict.fromkeys(group_names[0] for group_names in names if group_names))
-        count = sum(counts)
         return (
             f'<article class="pool provider-group wb-ticket" id="provider-antigravity" data-pool="{group[0]["pool"]}" '
-            f'data-pool-members="{members}" data-search-label="Antigravity" tabindex="-1">'
-            '<div class="wb-head"><h2>Antigravity</h2></div><small class="wb-plan">Google AI Pro</small>'
-            '<details class="allowances" id="antigravity-allowances" open><summary>Separate allowances</summary>'
-            + ''.join(reading + '</article>' for reading in readings) + includes(examples)
-            + '<details class="wb-advanced wb-agy-settings" open><summary>Spend policy</summary>'
-            + ''.join(policies) + '</details>'
-            + f'<details class="wb-agy-models"><summary>{count} model {"entry" if count == 1 else "entries"}</summary>'
-            + ''.join(inventories) + '</details></details></article>')
+            f'data-pool-members="{members}" data-search-label="Antigravity Google AI Pro" tabindex="-1">'
+            '<div class="wb-head"><h2>Google AI Pro</h2></div><small class="wb-plan">Antigravity</small>'
+            '<div class="wb-allowances" id="antigravity-allowances">'
+            + ''.join(allowance_row(p, AGY_ALLOWANCES[p['pool']]) for p in group) + '</div></article>')
 
     by_pool = {p['pool']: p for p in overview['pools']}
     agy = [by_pool[key] for key in AGY_ALLOWANCES if key in by_pool]
@@ -1906,10 +1916,9 @@ def _wallet(overview, token, workbench, order):
             if not grouped:
                 grouped = True
                 primary.append(antigravity(agy))
-        elif key in WALLET_PRIMARY:
-            primary.append(ticket(pool))
         else:
-            other.append(ticket(pool))
+            destination = primary if key in WALLET_PRIMARY else other
+            destination.append(allowance_row(pool, _wallet_title(pool), card=True))
 
     readings = overview['quota_readings']
     stamp = _wallet_stamp(readings)
@@ -1918,7 +1927,7 @@ def _wallet(overview, token, workbench, order):
         '<h2 id="wallet-heading">Allowance by subscription</h2>'
         f'<div class="quota-reading"><p class="stamp">{esc(stamp)}</p>{_refresh_form(token, return_fields)}</div></div>'
         + f'<section class="pools wb-tickets" aria-label="Subscriptions">{"".join(primary)}</section>'
-        + '<p class="wb-footnote">Allowance left, not used. Stale readings are not current capacity.</p>'
+        + '<p class="wb-footnote">Window bars show allowance left. Stale readings are not current capacity.</p>'
         + (f'<details class="wb-other"><summary>Other subscriptions &amp; routes <small>{len(other)} groups</small></summary>'
            f'<section class="pools wb-tickets" aria-label="Other subscriptions and routes">{"".join(other)}</section></details>'
            if other else '') + '</section>'
@@ -1952,7 +1961,7 @@ def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, 
         return (
             f'<article class="pool lvl-{pool["level"]}" id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{html.escape(pool["label"])}" tabindex="-1">'
             f'<div class="who"><{tag}>{handle}{_pool_heading(title)}</{tag}>{plan}</div>'
-            f'<div class="gauge">{gauge}</div><div class="ctl">{_slider(pool, form_token)}</div>'
+            f'<div class="gauge">{gauge}</div><div class="ctl">{_slider(pool, form_token, overview["generated_at"])}</div>'
             f'{_picker(pool, by_key, form_token, order)}{_pins_note(pool, by_key)}'
             "</article>"
         )
