@@ -1,0 +1,431 @@
+{
+ "pools": [
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "Claude",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "secondary",
+     "pace": {
+      "delta_percent": -2.6,
+      "early": false,
+      "elapsed_percent": 12.4,
+      "points": 3,
+      "run_out_basis": "observed_pace",
+      "runs_out_in_s": 425522,
+      "status": "deficit",
+      "used_percent": 15.0,
+      "words": "3% in deficit, runs out in 4d 22h"
+     },
+     "reset_at": "2026-12-01T13:00:00Z",
+     "resets": "Tue 1 Dec 14:00",
+     "resets_in_s": 529563,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 15
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "claude-weekly-scoped-fable",
+     "pace": {
+      "delta_percent": 0.4,
+      "early": false,
+      "elapsed_percent": 12.4,
+      "points": 0,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "on_pace",
+      "used_percent": 12.0,
+      "words": "on pace"
+     },
+     "reset_at": "2026-12-01T13:00:00Z",
+     "resets": "Tue 1 Dec 14:00",
+     "resets_in_s": 529563,
+     "scope": "Fable only",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 12
+    }
+   ],
+   "measured": true,
+   "name": "Claude",
+   "pace": {
+    "delta_percent": -2.6,
+    "early": false,
+    "elapsed_percent": 12.4,
+    "points": 3,
+    "run_out_basis": "observed_pace",
+    "runs_out_in_s": 425522,
+    "status": "deficit",
+    "used_percent": 15.0,
+    "words": "3% in deficit, runs out in 4d 22h"
+   },
+   "pool": "claude",
+   "reset_at": "2026-12-01T13:00:00Z",
+   "resets": "Tue 1 Dec 14:00",
+   "stale_age_s": null,
+   "state": "ABUNDANT",
+   "used_percent": 15
+  },
+  {
+   "full": false,
+   "gauge_error": "no matching rate windows",
+   "label": "Antigravity \u00b7 Argon",
+   "level": "normal",
+   "limits": [],
+   "measured": true,
+   "name": "Argon",
+   "pace": null,
+   "pool": "antigravity-argon",
+   "reset_at": null,
+   "resets": "",
+   "stale_age_s": null,
+   "state": "GAUGE_ERROR",
+   "used_percent": null
+  },
+  {
+   "full": false,
+   "gauge_error": "no matching rate windows",
+   "label": "Antigravity \u00b7 Claude and GPT",
+   "level": "normal",
+   "limits": [],
+   "measured": true,
+   "name": "AGY Claude/GPT",
+   "pace": null,
+   "pool": "antigravity-3p",
+   "reset_at": null,
+   "resets": "",
+   "stale_age_s": null,
+   "state": "GAUGE_ERROR",
+   "used_percent": null
+  },
+  {
+   "full": false,
+   "gauge_error": "No usable running Antigravity quota server or usage export; automatic CLI sign-in is disabled",
+   "label": "Antigravity \u00b7 Gemini",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-gemini-5h",
+     "pace": null,
+     "reset_at": null,
+     "reset_unknown": true,
+     "resets": "",
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 0
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "antigravity-quota-summary-gemini-weekly",
+     "pace": null,
+     "reset_at": "2026-11-30T20:56:35Z",
+     "resets": "Mon 30 Nov 21:56",
+     "resets_in_s": 471758,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 1
+    }
+   ],
+   "measured": true,
+   "name": "Gemini",
+   "pace": null,
+   "pool": "antigravity-gemini",
+   "reset_at": "2026-11-30T20:56:35Z",
+   "resets": "Mon 30 Nov 21:56",
+   "stale_age_s": null,
+   "state": "ABUNDANT",
+   "used_percent": 1
+  },
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "ChatGPT chats via Crossfeed Chat",
+   "level": "high",
+   "limits": [],
+   "measured": false,
+   "name": "ChatGPT chats via Crossfeed Chat",
+   "pace": null,
+   "pool": "chatgpt-work",
+   "reset_at": null,
+   "resets": "",
+   "stale_age_s": null,
+   "state": "UNKNOWN",
+   "used_percent": null
+  },
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "Codex (ChatGPT)",
+   "level": "forced",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": {
+      "delta_percent": -45.8,
+      "early": false,
+      "elapsed_percent": 42.2,
+      "points": 46,
+      "run_out_basis": "average_burn",
+      "runs_out_in_s": 34770,
+      "status": "deficit",
+      "used_percent": 88.0,
+      "words": "46% in deficit, runs out in 9h 39m"
+     },
+     "reset_at": "2026-11-29T11:04:15Z",
+     "resets": "Sun 29 Nov 12:04",
+     "resets_in_s": 349818,
+     "scope": null,
+     "spend_down": false,
+     "state": "conserve",
+     "title": "Weekly",
+     "used_percent": 88
+    }
+   ],
+   "measured": true,
+   "name": "Codex",
+   "pace": {
+    "delta_percent": -45.8,
+    "early": false,
+    "elapsed_percent": 42.2,
+    "points": 46,
+    "run_out_basis": "average_burn",
+    "runs_out_in_s": 34770,
+    "status": "deficit",
+    "used_percent": 88.0,
+    "words": "46% in deficit, runs out in 9h 39m"
+   },
+   "pool": "codex",
+   "reset_at": "2026-11-29T11:04:15Z",
+   "resets": "Sun 29 Nov 12:04",
+   "stale_age_s": null,
+   "state": "CONSERVE",
+   "used_percent": 88
+  },
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "Gemini API",
+   "level": "normal",
+   "limits": [],
+   "measured": false,
+   "name": "Gemini API",
+   "pace": null,
+   "pool": "gemini-metered",
+   "reset_at": "2026-11-25T23:00:00Z",
+   "resets": "midnight",
+   "stale_age_s": null,
+   "state": "UNKNOWN",
+   "used_percent": 0
+  },
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "GitHub Copilot",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 43200,
+     "name": "premium_monthly",
+     "pace": {
+      "delta_percent": 81.4,
+      "early": false,
+      "elapsed_percent": 81.4,
+      "points": 81,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 0.0,
+      "words": "81% surplus"
+     },
+     "reset_at": "2026-12-01T00:00:00Z",
+     "resets": "Tue 1 Dec 01:00",
+     "resets_in_s": 482763,
+     "scope": "Premium",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Monthly",
+     "used_percent": 0
+    }
+   ],
+   "measured": true,
+   "name": "GitHub Copilot",
+   "pace": {
+    "delta_percent": 81.4,
+    "early": false,
+    "elapsed_percent": 81.4,
+    "points": 81,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 0.0,
+    "words": "81% surplus"
+   },
+   "pool": "github-copilot-student",
+   "reset_at": "2026-12-01T00:00:00Z",
+   "resets": "Tue 1 Dec 01:00",
+   "stale_age_s": null,
+   "state": "ABUNDANT",
+   "used_percent": 0
+  },
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "OpenCode Go",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "rolling_5h",
+     "pace": {
+      "delta_percent": 50.1,
+      "early": false,
+      "elapsed_percent": 54.1,
+      "points": 50,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 4.0,
+      "words": "50% surplus"
+     },
+     "reset_at": "2026-11-25T12:11:44Z",
+     "resets": "today 13:11",
+     "resets_in_s": 8267,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 4
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": {
+      "delta_percent": 28.5,
+      "early": false,
+      "elapsed_percent": 34.5,
+      "points": 28,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 6.0,
+      "words": "28% surplus"
+     },
+     "reset_at": "2026-11-30T00:00:00Z",
+     "resets": "Mon 30 Nov 01:00",
+     "resets_in_s": 396363,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 6
+    },
+    {
+     "kind": "window",
+     "minutes": 43200,
+     "name": "monthly",
+     "pace": {
+      "delta_percent": 22.7,
+      "early": false,
+      "elapsed_percent": 26.7,
+      "points": 23,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 4.0,
+      "words": "23% surplus"
+     },
+     "reset_at": "2026-12-17T09:35:45Z",
+     "resets": "Thu 17 Dec",
+     "resets_in_s": 1899708,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Monthly",
+     "used_percent": 4
+    }
+   ],
+   "measured": true,
+   "name": "Go",
+   "pace": {
+    "delta_percent": 28.5,
+    "early": false,
+    "elapsed_percent": 34.5,
+    "points": 28,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 6.0,
+    "words": "28% surplus"
+   },
+   "pool": "opencode-go",
+   "reset_at": "2026-11-30T00:00:00Z",
+   "resets": "Mon 30 Nov 01:00",
+   "stale_age_s": null,
+   "state": "ABUNDANT",
+   "used_percent": 6
+  },
+  {
+   "full": false,
+   "gauge_error": null,
+   "label": "OpenRouter",
+   "level": "normal",
+   "limits": [],
+   "measured": false,
+   "name": "OpenRouter",
+   "pace": null,
+   "pool": "openrouter-free",
+   "reset_at": null,
+   "resets": "",
+   "stale_age_s": null,
+   "state": "UNKNOWN",
+   "used_percent": null
+  }
+ ],
+ "readings": {
+  "measured_pools": 5,
+  "newest_age_s": 144,
+  "sources": [
+   "antigravity-codexbar-widget",
+   "codex-oauth-usage",
+   "codexbar",
+   "copilot-api",
+   "opencode-go-api"
+  ]
+ },
+ "schema": 1,
+ "subscription_spend": {
+  "monthly": [
+   {
+    "currency": "EUR",
+    "operator": "10.00",
+    "total": "20.00"
+   }
+  ],
+  "unavailable": false,
+  "unpriced": 2,
+  "unsplit": 0
+ },
+ "title": "Claude 15% \u00b7 Codex 88%"
+}
