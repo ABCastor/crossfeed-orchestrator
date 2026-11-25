@@ -8,14 +8,17 @@ if [[ $# != 1 || $1 != /* ]]; then
 fi
 config=$1
 python=${CROSSFEED_PYTHON:-python3}
+port=${CROSSFEED_PHONE_PORT:-8443}
+[[ $port =~ ^[0-9]+$ ]] || { echo 'CROSSFEED_PHONE_PORT must be a number.' >&2; exit 2; }
 base=$(cd -- "$(dirname -- "$0")" && pwd)
 # Do not place Crossfeed on a listener already in use, particularly a Funnel.
-if ! tailscale serve status --json | "$python" -c '
-import json, sys
+if ! tailscale serve status --json | CROSSFEED_PHONE_PORT="$port" "$python" -c '
+import json, os, sys
+PORT = os.environ["CROSSFEED_PHONE_PORT"]
 
 def occupied(node):
     if isinstance(node, dict):
-        return any(k == "8443" or k.endswith(":8443") or occupied(v) for k, v in node.items())
+        return any(k == PORT or k.endswith(":" + PORT) or occupied(v) for k, v in node.items())
     if isinstance(node, list):
         return any(map(occupied, node))
     return False
@@ -25,7 +28,7 @@ try:
 except ValueError:
     raise SystemExit(1)
 '; then
-  echo 'Cannot verify that tailnet HTTPS port 8443 is unused. No route was changed.' >&2
+  echo "Cannot verify that tailnet HTTPS port $port is unused. No route was changed." >&2
   exit 1
 fi
 # Keep this path short enough for the macOS Unix socket pathname limit.
@@ -50,7 +53,7 @@ done
 [[ -S "$socket" ]] || { echo 'Crossfeed phone view could not start.' >&2; exit 1; }
 # Tailscale Serve adds Tailscale-User-Login and strips a client-supplied value.
 # The target is not reachable over TCP, and the signed console is never a target.
-tailscale serve --https=8443 --set-path=/crossfeed "unix:$socket"
+tailscale serve --https="$port" --set-path=/crossfeed "unix:$socket"
 }
 
 main "$@"; exit $?
