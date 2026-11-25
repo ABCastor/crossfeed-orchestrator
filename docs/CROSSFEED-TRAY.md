@@ -23,3 +23,9 @@ Requires Go 1.23+, and the macOS Command Line Tools on macOS. From the repositor
 - **Headless Linux:** use `fleetctl.py glance` and the signed loopback console; no tray is required.
 
 The tray only displays cached state; keep the orchestrator's normal quota refresh job running. Development check: `cd menubar && go test ./...`.
+
+## From a phone or iPad
+
+The signed local console shows the read-only view at `/phone`. To reach only this view from your tailnet, put `{"operator_login":"<your exact Tailscale login>"}` in a private mode-600 `~/.config/orchestrator/phone.json`. Run `bash scripts/serve-phone.sh "$HOME/.config/orchestrator/phone.json"` in a terminal on the orchestrator host. Open the HTTPS `/crossfeed` URL printed by Tailscale Serve on the phone or iPad, signed into the same tailnet and login. The script requires idle Tailscale HTTPS port 8443, supports no public Funnel, and removes the foreground route when it stops.
+
+This route goes to a private Unix socket, not to the console's TCP port. Tailscale Serve strips a client-supplied identity header and forwards the real `Tailscale-User-Login`; the app accepts exactly one header equal to the configured operator login. Keep the socket private to this local user and the Tailscale service. Missing identities (including tagged clients with no user identity) and other logins get no data. There is no write endpoint, provider refresh, billing edit or signed-console session on the tailnet view.

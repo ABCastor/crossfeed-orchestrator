@@ -6228,6 +6228,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def menubar_renderer():
+    spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
+    renderer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(renderer)
+    return renderer
+
+
+def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None) -> dict:
+    ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview)
+    return menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
+
+
 CONSOLE_OPEN_REQUEST = "console-open-request"
 CONSOLE_OPEN_REQUEST_MAX_AGE_S = 120
 
@@ -6513,20 +6525,15 @@ def main() -> int:
                     return 0
             except (OSError, ValueError, AttributeError):
                 pass
-            _menubar_spec = importlib.util.spec_from_file_location("fleet_menubar", Path(__file__).with_name("menubar.py"))
-            menubar = importlib.util.module_from_spec(_menubar_spec)
-            _menubar_spec.loader.exec_module(menubar)
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             overview = fleet_overview(roster, runtime, state_dir)
             lead = resolve_lead_pool(roster, args.lead)
             if args.format == "json":
-                ledger = subscriptions.view(subscriptions.path_for(args.overlay), roster, overview)
-                print(json.dumps(menubar.as_json(overview, lead, subscriptions.tray_summary(ledger)),
-                                 indent=2, sort_keys=True))
+                print(json.dumps(glance_payload(args.overlay, roster, overview, lead), indent=2, sort_keys=True))
             elif args.format == "swiftbar":
-                sys.stdout.write(menubar.swiftbar(overview, lead, args.plugin))
+                sys.stdout.write(menubar_renderer().swiftbar(overview, lead, args.plugin))
             else:
-                sys.stdout.write(menubar.text(overview, lead))
+                sys.stdout.write(menubar_renderer().text(overview, lead))
             return 0
         if args.command == "import-bench":
             sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

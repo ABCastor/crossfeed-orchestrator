@@ -62,9 +62,10 @@ _keep_spec.loader.exec_module(console_keep)
 keep_html = console_keep.keep_html
 
 try:
+    import phone_view
     import providers
 except ImportError:
-    from scripts import providers
+    from scripts import phone_view, providers
 
 PRODUCT_NAME = fleetctl.PRODUCT_NAME
 LEVELS = fleetctl.LEVELS
@@ -517,7 +518,8 @@ def _settings_content(overview: dict[str, Any], token: str, *, panel: bool = Fal
                  'in the Crossfeed Chat service launcher and restart that service. This console cannot change it.</p></div>'
                  '<div class="setting-row"><h2>Provider keys</h2><p>Keys entered here stay in <code>provider-keys/</code> beside your access overlay, '
                  'or in the secret reference you supplied. Values are never shown here.</p>'
-                 '<a href="/#provider-setup">Add provider</a></div></section>')
+                 '<a href="/#provider-setup">Add provider</a></div>'
+                 '<div class="setting-row"><a href="/phone">Phone view</a></div></section>')
 
 
 def _subscription_settings(overview: dict, token: str) -> str:
@@ -2017,11 +2019,12 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             # sign-in link's query string is the secret.
             return
 
-        def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None) -> None:
+        def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None,
+                  *, csp: str = CSP) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Content-Security-Policy", csp)
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "same-origin")
@@ -2062,13 +2065,22 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             if url.path.startswith("/static/"):
                 self._static(url.path[len("/static/"):])
                 return
-            if url.path not in {"/", "/snapshot", "/settings", "/benchmarks", "/model-cards.json"}:
+            if url.path not in {"/", "/snapshot", "/settings", "/benchmarks", "/model-cards.json", "/phone"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             if not console.signed_in(self.headers):
                 self._refuse(401, "Signed out",
                              "Open the console from the link it printed when it started. "
                              "The link signs this browser in for as long as the console runs.")
+                return
+            if url.path == '/phone':
+                try:
+                    view = phone_view.cached_snapshot(fleetctl, console.overlay_path, console.state_dir)
+                    body = phone_view.render(view).encode('utf-8')
+                except (fleetctl.FleetError, OSError, ValueError):
+                    self._refuse(503, 'Readings unavailable', 'Crossfeed could not read the saved quotas and spend.')
+                    return
+                self._send(200, body, 'text/html; charset=utf-8', csp=phone_view.CSP)
                 return
             try:
                 if url.path in {'/benchmarks', '/model-cards.json'}:
