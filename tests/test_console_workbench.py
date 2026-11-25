@@ -1,6 +1,7 @@
 """The workbench's read preview and existing audited writes, on disposable state."""
 import datetime as dt
 import json
+import stat
 import tempfile
 import types
 import unittest
@@ -89,7 +90,9 @@ class WorkbenchTests(unittest.TestCase):
                                        *[('compare', key) for key in choices]])
         _, payload = self.get('/?' + query)
         page = Page(payload.decode())
-        self.assertEqual(self.switch(page, 'preview-value')['aria-checked'], 'true')
+        modes = {node['attrs']['value']: node['attrs']['aria-pressed'] for node in page.nodes
+                 if node['attrs'].get('name') == 'preview-value'}
+        self.assertEqual(modes, {'best-value': 'false', 'absolute-best': 'true'})
         table = next(node for node in page.nodes if node['tag'] == 'table' and node['attrs'].get('class') == 'wb-matrix')
         self.assertEqual(sum(node['tag'] == 'th' and node['attrs'].get('scope') == 'col' and table in node['parents']
                              for node in page.nodes), 5)
@@ -205,17 +208,18 @@ class WorkbenchTests(unittest.TestCase):
         self.assertLess(page.nodes.index(compare), page.nodes.index(wallet))
 
     def test_archived_and_retired_models_do_not_enter_workbench_inventory_or_menu(self):
-        # A direct or active lane may still be present; the archival filter does not mutate the roster.
-        home = self.state / 'fixture-home'
-        archive = home / '.claude' / 'roster' / 'models' / '_archive'
-        archive.mkdir(parents=True)
-        (archive / self.model).mkdir()
         roster = json.loads(self.overlay.read_text())
+        snapshot = self.app.overview(refresh=False)
+        pool = next(p for p in snapshot['pools'] if p['pool'] == self.pool)
+        model = next(o for o in pool['options'] if o['model'] == self.model)
+        pool['archived'] = [dict(model, archived=True, set_by='agent', set_at=snapshot['generated_at'])]
+        pool['options'].remove(model)
         retired = 'gpt-6.1-sol'
         roster['model_cards'][retired]['status'] = 'retired'
         self.overlay.write_text(json.dumps(roster))
         before = self.overlay.read_bytes()
-        with patch.object(console.Path, 'home', return_value=home):
+        snapshot['_brief_context']['roster'] = fleet.read_overlay(self.overlay, self.state, discover=False)
+        with patch.object(self.app, 'overview', return_value=snapshot):
             query = urllib.parse.urlencode({'fragment': 'compare', 'role': 'implementation',
                                             'compare': f'{self.pool}:{self.model}:high'})
             status, body = self.get('/?' + query)
@@ -227,6 +231,9 @@ class WorkbenchTests(unittest.TestCase):
             page = self.page()
             for key in (self.model, retired):
                 self.assertFalse(any(node['attrs'].get('data-model') == key for node in page.nodes))
+            restore = next(node for node in page.nodes if node['attrs'].get('name') == 'restore')
+            self.assertEqual(restore['attrs']['value'], self.model)
+            self.assertIn(page.ident('archived'), restore['parents'])
         self.assertEqual(self.overlay.read_bytes(), before)
         self.assertFalse((self.state / 'selections').exists())
 
@@ -251,7 +258,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(console._compare_cells({**option, 'funding': 'metered'}, score, pool, {})[2], '≈$0.0240')
         self.assertEqual(console._compare_cells(option, None, {'stale_age_s': 200}, {})[-1], 'Stale')
 
-    def test_antigravity_is_one_card_with_a_policy_and_models_inside_each_pool_row(self):
+    def test_antigravity_is_one_card_with_one_subscription_policy_and_member_switches(self):
         _, payload = self.get()
         self.assertIn(b'<h2>Google AI Pro</h2>', payload)
         page = Page(payload.decode())
@@ -260,25 +267,95 @@ class WorkbenchTests(unittest.TestCase):
         members = json.loads(group['attrs']['data-pool-members'])
         self.assertEqual(members, list(console.AGY_ALLOWANCES))
         self.assertFalse(any(node['tag'] == 'details' for node in rows['parents']))
-        for key in [*members, self.pool]:
+        slider, = [node for node in page.nodes if group in node['parents'] and node['attrs'].get('role') == 'radiogroup']
+        self.assertNotIn(rows, slider['parents'])
+        policy = page.ident('policy-antigravity')
+        self.assertIn('open', policy['attrs'])
+        self.assertIn(policy, slider['parents'])
+        self.assertIn(policy, page.ident('actor-antigravity')['parents'])
+        stops = [node['attrs'] for node in page.nodes if slider in node['parents'] and node['attrs'].get('role') == 'radio']
+        self.assertEqual([(stop['value'], stop['aria-label']) for stop in stops], list(console.LEVEL_WORDS.items()))
+        pool_field, = [node for node in page.nodes if slider in node['parents'] and node['attrs'].get('name') == 'pool']
+        self.assertEqual(pool_field['attrs']['value'], 'antigravity')
+        for key in members:
             row = page.ident('pool-' + key)
-            if key in members:
-                self.assertIn(group, row['parents'])
-                self.assertIn(rows, row['parents'])
-                self.assertNotEqual(row['tag'], 'article', 'no nested subscription card')
-            children = [node for node in page.nodes if row in node['parents']]
-            slider, = (node for node in children if node['attrs'].get('role') == 'radiogroup')
-            policy, = (node for node in children if node['attrs'].get('class') == 'wb-advanced')
-            self.assertIn('open', policy['attrs'])
-            self.assertIn(policy, slider['parents'])
-            self.assertIn(row, page.ident('pick-' + key)['parents'])
-            self.assertIn(policy, page.ident('actor-' + key)['parents'])
-            self.assertEqual([node['attrs']['aria-label'] for node in children if slider in node['parents']
-                              and node['attrs'].get('role') == 'radio'], list(console.LEVEL_WORDS.values()))
-            for form in [slider, *(node for node in children if node['attrs'].get('class') == 'wb-models')]:
-                pool_field, = (node for node in children if form in node['parents'] and node['attrs'].get('name') == 'pool')
-                self.assertEqual(pool_field['attrs']['value'], key)
+            self.assertIn(rows, row['parents'])
+            self.assertNotEqual(row['tag'], 'article', 'no nested subscription card')
+            pick = page.ident('pick-' + key)
+            self.assertIn(row, pick['parents'])
+            model_pool, = [node for node in page.nodes if pick in node['parents'] and node['attrs'].get('name') == 'pool']
+            self.assertEqual(model_pool['attrs']['value'], key)
         self.assertNotIn(group, page.ident('pool-gemini-metered')['parents'])
+
+    def test_session_and_old_form_survive_relaunch_but_not_another_install(self):
+        headers = self.headers()
+        token = self.app.form_token
+        startup_key = self.app.login_key
+        self.relaunch()
+        self.assertNotEqual(startup_key, self.app.login_key)
+        self.assertEqual(self.request('GET', '/snapshot', headers)[0].status, 200)
+        self.assertEqual(self.request('GET', '/snapshot')[0].status, 401)
+        self.assertEqual(self.post('/level', {'pool': self.pool, 'level': 'low'}, token=token).status, 303)
+        key = self.state / 'console-session.key'
+        self.assertEqual(stat.S_IMODE(key.stat().st_mode), 0o600)
+        other = console.Console(self.overlay, self.state / 'independent', self.port)
+        self.assertFalse(other.signed_in(headers))
+        self.assertFalse(other.form_ok(token))
+
+    def test_one_model_quotes_raw_price_separately_from_quota(self):
+        overview = self.app.overview(refresh=False)
+        data = console.workbench_data(overview, self.state, 'implementation', count=1)
+        key, = data['keys']
+        data['scores'][key].update(quota_cost_usd=.075, api_cost_usd=.012,
+                                   quota_basis={'plan': 'Example Go', 'window': 'weekly', 'window_limit': 80,
+                                                'share_percent': .1, 'plan_value_usd': 50,
+                                                'why': 'The estimated debit comes from published rates.'})
+        markup = console._workbench(overview, data)
+        self.assertIn('data-count="1"', markup)
+        self.assertIn('API cost / job', markup)
+        self.assertIn('$0.0120', markup)
+        self.assertIn('$0.0750', markup)
+        self.assertIn('A typical job uses about 0.1%', markup)
+        self.assertIn('Why it leads:', markup)
+        data['scores'][key]['quota_cost_usd'] = None
+        fallback = console._workbench(overview, data)
+        self.assertIn('≈0.1%', fallback)
+        self.assertIn('There is no dollar estimate for this share.', fallback)
+
+    def test_benchmark_link_is_local_attributed_safe_and_revisited(self):
+        href = 'https://example.com/verified-results'
+        fields = {'model': self.model, 'url': href, 'label': 'Independent <board>'}
+        self.assertEqual(self.post('/benchmark-link', fields, token='invalid').status, 403)
+        self.assertEqual(self.post('/benchmark-link', {**fields, 'url': 'javascript:alert(0)'}).status, 400)
+        saved = self.post('/benchmark-link', fields)
+        self.assertEqual(saved.status, 303)
+        self.assertEqual(saved.getheader('Location'), f'/benchmarks#model-{self.model}')
+        self.assertEqual(self.post('/benchmark-link', fields).status, 303)
+        links = json.loads(self.runtime.read_text())['console_benchmark_links'][self.model]
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]['set_by'], 'operator')
+        self.relaunch()
+        status, page = self.get('/benchmarks')
+        self.assertEqual(status.status, 200)
+        self.assertIn(b'Independent &lt;board&gt;', page)
+        self.assertIn(b'Added by you', page)
+        self.assertIn(b'action="/benchmark-link"', page)
+
+    def test_model_families_are_contiguous_by_peak_cost_then_descending_within_family(self):
+        options = [{'model': name, 'family': family, 'typical_cost_usd': cost}
+                   for name, family, cost in [('C-low', 'C', .1), ('B-high', 'B', .3), ('A', 'A', .4),
+                                              ('B-low', 'B', .2), ('C-high', 'C', .5), ('D', 'D', None)]]
+        self.assertEqual([o['model'] for o in console._sort_model_entries(options, {})],
+                         ['C-high', 'C-low', 'A', 'B-high', 'B-low', 'D'])
+
+    def test_plan_extras_do_not_confuse_zero_cost_with_missing_data(self):
+        view = {'pool': 'openrouter-free', 'credits': {'balance': 3, 'unit': 'USD', 'expires_at': None,
+                'renews_at': '2026-12-02T00:00:00Z'}, 'usage_cost': {'today_usd': 0, 'last_30d_usd': .25},
+                'per_model': [{'model': 'Fixture Model', 'usd_30d': .25, 'requests': 2}]}
+        markup = console._plan_extras(view)
+        for text in ('3 USD', 'Expires not reported', 'New credits arrive', '$0.00', '$0.25',
+                     'Status page', 'Fixture Model', '2 requests'):
+            self.assertIn(text, markup)
 
     def test_spend_attribution_follows_the_last_saved_actor_not_the_level(self):
         now = fleet.utc_now()

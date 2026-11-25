@@ -227,14 +227,14 @@ function setupComparison(section) {
   function updateAddButtons() {
     const menu = new Set([...form.querySelectorAll('.wb-model-picker option')].map(option => routeOf(option.value)));
     const selected = new Set(params().getAll('compare').map(routeOf));
-    for (const button of document.querySelectorAll('.wb-add')) {
+    for (const button of document.querySelectorAll('.wb-add[data-route]')) {
       const route = button.dataset.route;
       const on = selected.has(route);
-      const capped = on ? selected.size <= 2 : selected.size >= 4;
+      const capped = on ? selected.size <= 1 : selected.size >= 4;
       button.hidden = !menu.has(route);
       button.setAttribute('aria-pressed', String(on));
       button.setAttribute('aria-disabled', String(capped));
-      button.title = capped ? 'Compare two to four models.' : '';
+      button.title = capped ? 'Compare one to four models.' : '';
       button.textContent = on ? 'Comparing' : 'Compare';
     }
   }
@@ -259,11 +259,9 @@ function setupComparison(section) {
     form.elements.value.value = form.elements.value.defaultValue;
   }
   function previewMode(mode) {
-    const button = form.elements['preview-value'];
-    const absolute = mode === 'absolute-best';
-    button.setAttribute('aria-checked', String(absolute));
-    button.querySelector('.st').textContent = absolute ? 'Absolute best' : 'Best value';
-    button.value = absolute ? 'best-value' : 'absolute-best';
+    for (const button of form.querySelectorAll('.wb-mode button')) {
+      button.setAttribute('aria-pressed', String(button.value === mode));
+    }
     form.elements.value.value = mode;
   }
   async function refresh(change) {
@@ -287,7 +285,13 @@ function setupComparison(section) {
       if (inForm && focused.dataset.col) {
         const cls = focused.matches('.wb-model-picker') ? 'wb-model-picker' : 'wb-effort-picker';
         focusSelector = `.${cls}[data-col="${focused.dataset.col}"]`;
+      } else if (inForm && focused.name === 'preview-value') {
+        focusSelector = `.wb-mode [value="${focused.value}"]`;
       } else if (inForm && focused.name) focusSelector = `[name="${focused.name}"]`;
+      const expanded = new Set([...form.querySelectorAll('details[open][data-detail]')].map(el => el.dataset.detail));
+      for (const detail of next.querySelectorAll('details[data-detail]')) {
+        detail.open = expanded.has(detail.dataset.detail);
+      }
       form.replaceChildren(...next.childNodes);
       if (focusSelector) (form.querySelector(focusSelector) || form.elements.count).focus({preventScroll: true});
       const details = section.querySelector('.wb-numbers');
@@ -323,8 +327,18 @@ function setupComparison(section) {
     if (preview) previewMode(preview);
     refresh(params(preview));
   });
+  document.addEventListener('submit', event => {
+    if (!(event.submitter?.matches('[name="archive"], [name="restore"]'))) return;
+    // These are navigation POSTs; carry the comparison that is on the screen, not the initial one.
+    for (const old of event.target.querySelectorAll('input[name^="return-"]')) old.remove();
+    for (const [name, value] of params()) {
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = `return-${name}`; input.value = value;
+      event.target.append(input);
+    }
+  });
   document.addEventListener('click', event => {
-    const add = event.target.closest('.wb-add');
+    const add = event.target.closest('.wb-add[data-route]');
     if (!add || add.getAttribute('aria-disabled') === 'true') return;
     const select = form.querySelector('.wb-model-picker');
     const choice = [...(select?.options || [])].find(option => routeOf(option.value) === add.dataset.route);
@@ -601,7 +615,7 @@ function boot(document, window) {
   const compare = workbench?.querySelector('.wb-query') ? setupComparison(workbench) : null;
   if (window.location.hash) {
     const target = document.getElementById(window.location.hash.slice(1));
-    if (workbench && target?.matches('details.pick')) {
+    if (workbench && target?.matches('details.pick, details.wb-archived')) {
       target.open = true;
       target.querySelector('summary')?.focus();
     }
@@ -708,7 +722,7 @@ function boot(document, window) {
     .map(sw => sw.dataset.key || Crossfeed.splitChange(sw.value)[0]);
   for (const [pool, pick] of picks) confirmed.set(`model:${pool}`, onOf(pick));
   for (const form of document.querySelectorAll('.lv')) {
-    confirmed.set(`level:${form.querySelector('[name=pool]').value}`, form.querySelector('.stop.on')?.value);
+    confirmed.set(`level:${form.querySelector('[name=pool]').value}`, form.querySelector('.stop.on')?.value || 'mixed');
   }
 
   function showSwitch(button, on, next) {
@@ -716,29 +730,31 @@ function boot(document, window) {
     button.setAttribute('value', next);
     button.querySelector('.st').textContent = on ? 'On' : 'Off';
   }
+  const levelRow = pool => document.getElementById(`provider-${pool}`) || document.getElementById(`pool-${pool}`);
   function showLevel(pool, level, means) {
-    const row = document.getElementById(`pool-${pool}`);
+    const row = levelRow(pool);
     const form = row?.querySelector('.lv');
     if (!row || !form) return;
+    const stops = [...form.querySelectorAll('.stop')];
+    const index = stops.findIndex(button => button.value === level);
     const toggle = row.querySelector('.wb-pool-switch button');
     if (toggle) {
       const on = level !== 'off';
       showSwitch(toggle, on, on ? 'off' : 'normal');
-      const caption = row.querySelector('.wb-level');
-      if (caption) caption.textContent = form.querySelector(`[value="${level}"]`).getAttribute('aria-label');
     }
-    const stops = [...form.querySelectorAll('.stop')];
+    const caption = row.querySelector('.wb-level');
+    if (caption) caption.textContent = index >= 0 ? stops[index].getAttribute('aria-label') : 'Mixed';
     row.className = row.className.replace(/\blvl-\S+/g, `lvl-${level}`);
-    form.className = `lv at-${stops.findIndex(b => b.value === level)} is-${level}`;
-    let meaning = workbench ? undefined : means;
-    for (const button of stops) {
-      const selected = button.value === level;
+    form.className = `lv at-${index >= 0 ? index : 'mixed'} is-${level}`;
+    for (const [i, button] of stops.entries()) {
+      const selected = i === index;
       button.classList.toggle('on', selected);
       button.setAttribute('aria-checked', String(selected));
-      button.tabIndex = selected ? 0 : -1;   // one stop in the tab order; arrows move between them
-      if (selected && meaning === undefined && button.title) meaning = button.title;
+      button.tabIndex = (selected || (index < 0 && i === 0)) ? 0 : -1;
     }
-    if (meaning !== undefined) row.querySelector('.means').textContent = meaning;
+    const meaning = index < 0 ? (means || form.dataset.mixedMeaning) :
+      (workbench ? stops[index].title : means ?? stops[index].title);
+    if (meaning) row.querySelector('.means').textContent = meaning;
   }
   function showModels(pool, on, told) {
     const pick = picks.get(pool);
@@ -789,12 +805,24 @@ function boot(document, window) {
   function update(data, skip = () => false) {
     const agySummary = document.querySelector('.allowance-summary');
     if (agySummary && data.agy_summary !== undefined) agySummary.textContent = data.agy_summary;
+    function updateLevel(id, record) {
+      // Remember server-confirmed state, even when a newer click is still in flight.
+      confirmed.set(`level:${id}`, record.level);
+      if (!skip(`level:${id}`)) showLevel(id, record.level, record.means);
+      const row = levelRow(id);
+      const slider = row?.querySelector('.lv');
+      if (!slider) return;
+      const actor = row.querySelector('.level-actor');
+      const attribution = workbench ? record.wallet_control_actor : record.control_actor;
+      if (actor && attribution !== undefined) actor.textContent = attribution;
+      if (record.control_actor_kind !== undefined) slider.dataset.levelActor = record.control_actor_kind;
+    }
+    if (workbench) for (const subscription of data.subscriptions || []) {
+      if (document.getElementById(`provider-${subscription.id}`)?.querySelector('.lv')) updateLevel(subscription.id, subscription);
+    }
     for (const pool of data.pools || []) {
-      // What the server confirmed is always remembered (a failed newer click puts it back); the
-      // page only follows it when no newer click of ours is still on its way.
-      confirmed.set(`level:${pool.pool}`, pool.level);
-      if (!skip(`level:${pool.pool}`)) showLevel(pool.pool, pool.level, pool.means);
       const row = document.getElementById(`pool-${pool.pool}`);
+      if (row === levelRow(pool.pool)) updateLevel(pool.pool, pool);
       const gauge = row?.querySelector('.gauge');
       const markup = workbench ? pool.wallet_gauge : pool.gauge;
       if (gauge && markup !== undefined && (!workbench || gauge.dataset.markup !== markup)) {
@@ -805,13 +833,12 @@ function boot(document, window) {
           if (open && gauge.querySelector('.pro-note')) gauge.querySelector('.pro-note').open = true;
         } else gauge.innerHTML = markup;
       }
-      // Attribution describes the last confirmed write, even while a newer choice is pending.
-      if (row) {
-        const actor = row.querySelector('.level-actor');
-        const attribution = workbench ? pool.wallet_control_actor : pool.control_actor;
-        if (actor && attribution !== undefined) actor.textContent = attribution;
-        const slider = row.querySelector('.lv');
-        if (slider && pool.control_actor_kind !== undefined) slider.dataset.levelActor = pool.control_actor_kind;
+      const extras = workbench && row?.querySelector('.wallet-extras');
+      if (extras && pool.wallet_extras !== undefined && extras.dataset.markup !== pool.wallet_extras && !extras.contains(document.activeElement)) {
+        const open = extras.querySelector('details')?.open;
+        extras.dataset.markup = pool.wallet_extras;
+        extras.innerHTML = pool.wallet_extras;
+        if (open && extras.querySelector('details')) extras.querySelector('details').open = true;
       }
       if (row && !skip(`model:${pool.pool}`) && pool.model_actors) {
         for (const option of row.querySelectorAll('[data-model]')) {
@@ -1042,6 +1069,7 @@ function boot(document, window) {
         if (workbench && result.snapshot) {
           const pools = new Map(result.snapshot.pools.map(pool => [pool.pool, pool]));
           for (const row of document.querySelectorAll('.wb-pool-control')) {
+            if (row.dataset.poolMembers) continue;
             const pool = pools.get(row.dataset.pool);
             if (!pool) row.remove();
             else {
@@ -1071,6 +1099,7 @@ function boot(document, window) {
 
   document.addEventListener('submit', async event => {
     const form = event.target;
+    if (event.submitter?.matches('[name="archive"], [name="restore"]')) return;
     if (!form.matches('.lv, .choose, .quota-refresh, .wb-pool-switch, .wb-models, [action="/settings/pro"]')) return;
     event.preventDefault();
     const body = new URLSearchParams(new FormData(form));
@@ -1155,6 +1184,13 @@ function boot(document, window) {
   });
 
   // ---- copy what agents read: the control at the block's top right, with a "Copied" state ----
+  for (const button of document.querySelectorAll('[data-copy-block]')) {
+    button.addEventListener('click', async () => {
+      const block = button.closest('.connect-copy');
+      const done = await Crossfeed.copyText(block.querySelector('pre').textContent, window.navigator, document);
+      block.querySelector('.copy-status').textContent = done ? 'Copied.' : 'Could not copy. Select and copy the text.';
+    });
+  }
   const copyButton = document.querySelector('.copy');
   let copyTimer = 0;
   copyButton?.addEventListener('click', async () => {

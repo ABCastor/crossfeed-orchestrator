@@ -664,18 +664,9 @@ h1{margin-top:calc(17px + var(--line-w))}
 /* Comparison first, then the subscription wallet. The column holds at wide sizes. */
 .dashboard {
   --wb-accent:var(--machine);--wb-select:color-mix(in srgb,var(--machine) 8%,var(--paper));
-  scroll-padding-top:12px;
 }
-.dashboard .wrap{max-width:728px;padding:0 12px 3rem}
-.dashboard main{padding-top:10px;min-width:0}
-.dashboard .mast{position:relative;inset:auto;width:auto;height:auto;padding:6px 0 0;align-items:center;gap:4px 12px;border-bottom:1px solid var(--machine)}
-.dashboard .mast :is(.here),.dashboard .mast::before,.dashboard .mast::after{display:none}
-.dashboard .mast :is(.brand,.nav,.bar-tools,.find-panel,.settings-panel){animation:none;translate:none;scale:1}
-.dashboard .mast .brand{--nm:18px}
-.dashboard .mast .brand a{padding-bottom:0}
-.dashboard .mast .nav{order:0;flex-basis:auto;margin-left:auto;gap:12px;font-size:12px}
-.dashboard .mast .bar-tools{margin:0}
-.dashboard :is(.find-panel,.settings-panel){right:0}
+.dashboard main:has(#compare){max-width:704px;margin-inline:auto;min-width:0}
+.dashboard #compare,.dashboard .bench-page{margin-top:20px}
 .wb-head{display:flex;align-items:center;justify-content:space-between;gap:4px 8px;margin-bottom:8px;flex-wrap:wrap}
 .wb-head :is(h1,h2){margin:0;color:var(--ink);font:600 20px/1.2 var(--read);letter-spacing:0}
 .wb-head h1{font-size:24px}
@@ -685,6 +676,11 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-toolbar label{display:flex;align-items:center;gap:6px;color:var(--ink);font-size:12px}
 .wb-query select{min-width:0;max-width:100%;padding:2px 5px;min-height:30px;font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:6px}
 .wb-toolbar select{min-height:32px}
+.wb-mode{display:inline-flex;gap:1px;padding:2px;background:var(--rule);border-radius:6px}
+.wb-mode button{color:var(--ink);background:var(--paper);border:0;border-radius:4px;min-height:27px;padding:3px 8px;font:500 12px/1.2 var(--face);cursor:pointer}
+.wb-mode button:hover:not([aria-pressed=true]){background:var(--surface)}
+.wb-mode button[aria-pressed=true]{background:var(--wb-accent);color:var(--paper);font-weight:650}
+.wb-mode-help{margin:0 0 8px;color:var(--quiet);font-size:12px}
 .wb-pick{font-size:12px;margin:0 0 8px;border-inline-start:1px solid var(--wb-accent);padding:4px 8px;background:var(--surface)}
 .wb-pick b{font-weight:650}
 .wb-matrix{width:100%;border-collapse:collapse;table-layout:fixed}
@@ -730,9 +726,10 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-ticket .wb-head{margin-bottom:4px}
 .wb-ticket .wb-head h2{text-decoration:none}
 .wb-ticket .allow{font-size:12px;margin:0}
-.wb-ticket .pick,.wb-advanced,.wb-other,.wb-more{border-top:1px solid var(--rule);margin:6px 0 0}
-.dashboard main summary{font-size:14px;line-height:1.4;font-weight:650;cursor:pointer;border-radius:6px;padding:7px 4px}
-.dashboard main summary small{font-weight:400;color:var(--quiet);margin-inline-start:4px}
+.wb-ticket .pick,.wb-advanced,.wb-archived,.wb-more{border-top:1px solid var(--rule);margin:6px 0 0}
+:is(.wb,.wb-wallet,.wb-more) summary{font-size:14px;line-height:1.4;font-weight:650;cursor:pointer;border-radius:6px;padding:7px 4px}
+:is(.wb,.wb-wallet,.wb-more) summary small{font-weight:400;color:var(--quiet);margin-inline-start:4px}
+.wb-wallet .lv.is-mixed .rail{border-top:1px dashed var(--rule-strong);background:transparent}
 .wb-allowances>.pool{display:block;padding:8px 0 0;margin-top:6px;border-top:1px solid var(--rule);border-bottom:0}
 .wb-includes,.wb-reading-note,.wb-refusal{margin:4px 0;font-size:12px}
 .wb-wallet :is(.wb-reading-note,.wb-refusal){color:var(--human-text)}
@@ -763,8 +760,52 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wb-add{cursor:pointer;min-height:28px;font:400 12px var(--face);color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:6px;padding:2px 6px}
 .wb-add[aria-pressed="true"]{border-color:var(--wb-accent)}
 .wb-add[aria-disabled="true"]{cursor:not-allowed;color:var(--quiet)}
-.wb-model-control:has(button:disabled){max-width:104px;gap:2px 4px}
-.wb-other,.wb-more{margin-top:8px}
+.wb-model-control:has(button:disabled){max-width:11rem;gap:2px 4px}
+.wb-more{margin-top:8px}
+.wb-archive:hover,.wb-add:hover{border-color:var(--machine);color:var(--machine-text)}
+.wb-archived ul{list-style:none;padding:0;margin:0}
+.wb-archived li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 4px;border-top:1px solid var(--rule)}
+.archive-actor{display:block}
+.wb-archived .archive-actor[data-actor="owner"]{color:var(--human-text)}
+.wb-archived .archive-actor[data-actor="agent"]{color:var(--machine-text)}
+.wallet-extras{color:var(--quiet);font-size:12px}
+.wallet-extras:not(:empty){margin-block:6px}
+.wallet-extras p,.wallet-extras ul{margin:3px 0}
+.wallet-extras summary{font-size:12px}
+.wallet-extras a,.benchmark-sources a,.connect a{color:var(--machine-text)}
+:is(.quota-explain,.efficient-effort)>summary{display:flex;align-items:center;gap:4px;min-height:24px;padding:0 3px;font-size:12px}
+:is(.quota-explain,.efficient-effort)[open]>summary svg{transform:rotate(180deg)}
+:is(.quota-explain,.efficient-effort) svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;vertical-align:middle}
+:is(.quota-explain,.efficient-effort) p{margin:4px 0;font:400 12px/1.45 var(--face);color:var(--quiet)}
+.efficient-effort{margin-block:3px}
+.connect,.benchmark-sources{margin-top:24px;padding-top:12px;border-top:1px solid var(--rule)}
+.connect h2,.benchmark-sources h3{font:600 20px/1.3 var(--read);margin:0 0 8px}
+.connect h3{font:650 14px/1.4 var(--face);margin:0 0 4px}
+.connect p{max-width:67ch;font-size:14px;margin:8px 0 12px}
+.connect-tools{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.connect-copy{margin:8px 0 12px;min-width:0}
+.connect-copy pre{max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;margin:0 0 6px;background:var(--surface);border-radius:4px;font-size:12px}
+.copy-status{margin-inline-start:8px;font-size:12px;color:var(--quiet)}
+.benchmark-sources{margin:4px 0 12px;padding:10px 12px;background:var(--surface);border-radius:4px;font-size:14px}
+.benchmark-sources ul{display:grid;gap:6px;padding-left:18px;margin:6px 0 12px}
+.benchmark-sources small{display:block;color:var(--quiet)}
+.benchmark-add{display:flex;align-items:end;flex-wrap:wrap;gap:8px;margin-top:12px}
+.benchmark-add label{display:grid;gap:3px;min-width:0;font-size:12px}
+.benchmark-add label:first-of-type{flex:1 1 240px}
+.benchmark-add input{min-width:0;min-height:32px;color:var(--ink);background:var(--paper);border:1px solid var(--rule-strong);border-radius:4px;padding:4px 6px;font:inherit}
+.benchmark-add button{min-height:32px}
+#about{scroll-margin-top:1rem}
+
+/* Label first; the same drawn chevron shows what opens or closes, without native triangles. */
+details > summary{cursor:pointer;list-style:none}
+details > summary::-webkit-details-marker{display:none}
+details > summary::marker{content:""}
+details:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick-line,.model-line))::before,
+.model-disclosure>.model-line .details-label::after{content:"";display:inline-block;width:6px;height:6px;flex:none;box-sizing:content-box;margin:0 8px 3px 1px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg);transition:transform .16s var(--ease)}
+details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick-line,.model-line))::before,
+.model-disclosure[open]>.model-line .details-label::after{transform:translateY(3px) rotate(225deg)}
+.model-disclosure>.model-line .details-label::after{margin-inline:7px 0}
+:is(.facts,.more,.older)>summary::after{content:none}
 .wb-more > :not(summary){margin-inline:4px}
 @media (max-width:620px){
   .wb-tickets.pools{grid-template-columns:minmax(0,1fr)}
@@ -774,10 +815,8 @@ h1{margin-top:calc(17px + var(--line-w))}
   .wb-matrix tr>th:first-child{width:78px}
 }
 @media (max-width:510px){
-  .dashboard .wrap{padding-inline:8px}
-  .dashboard .mast .nav{order:2;flex-basis:100%;margin:4px 0 8px}
-  .dashboard .mast .bar-tools{margin-left:auto}
-  .wb-switch.sw,.wb-query select,.wb-wallet .stop,.wb-add{min-height:44px}
+  .wb-switch.sw,.wb-query select,.wb-wallet .stop,.wb-add,.wb-mode button,.benchmark-add input{min-height:44px}
+  .wb-matrix[data-count="1"]{--wb-columns:1}
   .wb-matrix[data-count="2"]{--wb-columns:2}
   .wb-matrix[data-count="3"]{--wb-columns:3}
   .wb-matrix[data-count="4"]{--wb-columns:4}
@@ -785,7 +824,8 @@ h1{margin-top:calc(17px + var(--line-w))}
   .wb-matrix tr>th:first-child{width:auto;grid-column:1/-1;padding-block:4px}
   .wb-matrix thead tr>th:first-child{display:none}
   .wb-tickets.pools{grid-template-columns:minmax(0,1fr)}
-  .dashboard main summary{min-height:44px}
+  .connect-tools{grid-template-columns:minmax(0,1fr)}
+  :is(.wb,.wb-wallet,.wb-more) summary{min-height:44px}
 }
 .control-actor { font-size: .75rem; color: var(--quiet); }
 .level-actor { margin: .25rem 0 0; text-align: center; }
