@@ -36,6 +36,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from pathlib import Path
 from typing import Any, Callable
 
@@ -591,6 +592,7 @@ AGY_LOCAL_SOURCE = "antigravity-local"
 AGY_OAUTH_SOURCE = "antigravity-oauth-usage"
 AGY_OAUTH_HOSTS = ("daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com")
 AGY_OAUTH_QUOTA = "/v1internal:retrieveUserQuotaSummary"
+AGY_OAUTH_TOKEN_HOST = "oauth2.googleapis.com"
 AGY_LOCAL_QUOTA = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
 _AGY_BUCKET = re.compile(r"(gemini|3p|argon)-(5h|weekly|daily)\Z")
 _AGY_PREFIX = "antigravity-quota-summary-"
@@ -751,47 +753,93 @@ def _observe_running_antigravity(timeout: int) -> dict[str, Any] | None:
     return None
 
 
-def _agy_oauth_request(host: str, token: str, timeout: float) -> Any:
-    # Use the existing provider sign-in only with the fixed, Google TLS endpoints.
-    # http.client does not use proxies, redirects or cookies.
+def _agy_google_post(host: str, path: str, data: bytes, headers: dict[str, str], timeout: float) -> tuple[int, Any]:
+    # Only the fixed Google hosts below; http.client does not follow redirects or use cookies or proxies.
     conn = http.client.HTTPSConnection(host, timeout=timeout)
     try:
-        conn.request("POST", AGY_OAUTH_QUOTA, b"{}", {
-            "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "antigravity",
-        })
+        conn.request("POST", path, data, headers)
         with conn.getresponse() as reply:
-            if reply.status == 200:
-                return _json(reply.read(MAX_BODY_BYTES + 1).decode("utf-8"))
-        return None
+            return reply.status, (_json(reply.read(MAX_BODY_BYTES + 1).decode("utf-8")) if reply.status == 200 else None)
     finally:
         conn.close()
 
 
-def _observe_antigravity_oauth(path: Any, timeout: int) -> dict[str, Any]:
-    """Borrow an explicitly selected AGY OAuth session. Never refresh it or use T3's state APIs."""
-    now = _now()
+def _agy_oauth_request(host: str, token: str, timeout: float, project: str | None = None) -> Any:
+    body = json.dumps({"project": project} if project else {}, separators=(",", ":")).encode()
+    _, payload = _agy_google_post(host, AGY_OAUTH_QUOTA, body, {
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "antigravity",
+    }, timeout)
+    return payload
+
+
+def _agy_oauth_field(value: Any) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"[!-~]{1,16000}", value))
+
+
+def _agy_acp_access(doc: dict[str, Any], timeout: float) -> tuple[str | None, str | None, str]:
+    # Standard OAuth refresh for an existing ACP profile, as in T3 Code's quota reader.
+    # Do not send refresh credentials to quota hosts or retain/save any returned credential.
+    form = {key: doc.get(key) for key in ("client_id", "client_secret", "refresh_token")}
+    if not all(_agy_oauth_field(value) for value in form.values()):
+        return None, None, "no-auth"
+    project = doc.get("project_id")
+    if project not in (None, "") and not _agy_oauth_field(project):
+        return None, None, "no-auth"
+    form["grant_type"] = "refresh_token"
+    status, data = _agy_google_post(AGY_OAUTH_TOKEN_HOST, "/token", urlencode(form).encode("ascii"),
+                                   {"Content-Type": "application/x-www-form-urlencoded"}, timeout)
+    token = _mapping(data).get("access_token")
+    if status in {400, 401, 403}:
+        return None, None, "unauthorized"
+    if not _agy_oauth_field(token):
+        return None, None, "failed"
+    return token, project, ""
+
+
+def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False) -> dict[str, Any]:
+    """Use one explicitly selected profile. No account discovery or fallback."""
+    deadline = time.monotonic() + max(1, min(timeout, 10))
+    source = AGY_OAUTH_SOURCE
     try:
         path = Path(path).expanduser()
         if not path.is_absolute():
             raise ValueError
         doc = _mapping(_json(_owner_file(path).decode("utf-8")))
+    except (TypeError, OSError, ValueError, RuntimeError):
+        return unavailable(source, "no-auth", "No readable Antigravity OAuth session")
+    project = None
+    if acp:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return unavailable(source, "failed", "Antigravity OAuth exchange timed out")
+        try:
+            token, project, failure = _agy_acp_access(doc, remaining / 2)
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            failure = "failed"
+        if failure:
+            return unavailable(source, failure, {
+                "no-auth": "No usable Antigravity ACP sign-in",
+                "unauthorized": "Google rejected the selected Antigravity ACP sign-in",
+                "failed": "Antigravity ACP OAuth exchange failed",
+            }[failure])
+    else:
         fields = _mapping(doc.get("token"))
         token, expires = fields.get("access_token"), _parse_time(fields.get("expiry"))
-    except (TypeError, OSError, ValueError, OverflowError, RecursionError):
-        token = expires = None
-    if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,16000}", token) or not expires:
-        return unavailable(AGY_OAUTH_SOURCE, "no-auth", "No readable Antigravity OAuth session")
-    if (expires - now).total_seconds() <= 60:
-        return unavailable(AGY_OAUTH_SOURCE, "expired", "Antigravity's session has expired; renew it in Antigravity")
-    deadline = time.monotonic() + max(1, min(timeout, 10))
+        if not _agy_oauth_field(token) or not expires:
+            return unavailable(source, "no-auth", "No readable Antigravity OAuth session")
+        if (expires - _now()).total_seconds() <= 60:
+            return unavailable(source, "expired", "Antigravity's session has expired; renew it in Antigravity")
+    now = _now()
     windows, idle = {}, {}
     for host in AGY_OAUTH_HOSTS:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         try:
-            snap = parse_antigravity_local(_agy_oauth_request(host, token, remaining / 2), now,
-                                           source=AGY_OAUTH_SOURCE)
+            request_at = _now()
+            payload = _agy_oauth_request(host, token, remaining / 2, project) if project else \
+                _agy_oauth_request(host, token, remaining / 2)
+            snap = parse_antigravity_local(payload, request_at, source=source)
         except (OSError, ValueError, TypeError, http.client.HTTPException, RecursionError):
             continue
         if snap:
@@ -817,6 +865,10 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
     Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Re-reading
     an export never advances its observation time.
     """
+    if "oauth_acp_file" in config:
+        if "oauth_session_file" in config:
+            return unavailable(AGY_OAUTH_SOURCE, "no-auth", "Select only one Antigravity OAuth profile type")
+        return _observe_antigravity_oauth(config["oauth_acp_file"], timeout, acp=True)
     if "oauth_session_file" in config:
         return _observe_antigravity_oauth(config["oauth_session_file"], timeout)
     if config.get("reuse_running") is True:

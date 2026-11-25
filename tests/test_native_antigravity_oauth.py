@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
 
 from tests.test_fleetctl import fleetctl
@@ -56,6 +57,62 @@ class AntigravityOAuthTests(unittest.TestCase):
             self.file.chmod(0o644)
             self.assertEqual(native.observe_antigravity(self.config)['kind'], 'no-auth')
         rpc.assert_not_called()
+        running.assert_not_called()
+
+    def test_acp_exchange_reads_all_families_without_starting_processes_or_writing_credentials(self):
+        config = {"oauth_acp_file": str(self.file), "reuse_running": True}
+        fields = {"client_id": "fixture-id", "client_secret": "fixture-secret",
+                  "refresh_token": "fixture-refresh+token", "project_id": "fixture-project"}
+        self.file.write_text(json.dumps(fields))
+        self.file.chmod(0o600)
+        original = self.file.read_bytes()
+        buckets = {"buckets": [
+            {"bucketId": bucket, "remainingFraction": .75, "resetTime": "2026-11-25T12:00:00Z"}
+            for bucket in ("gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "gemini-argon-wtu-weekly")
+        ]}
+        with patch.object(native, "_now", return_value=NOW), \
+                patch.object(native.subprocess, "run") as spawn, \
+                patch.object(native, "_agy_google_post", side_effect=[
+                    (200, {"access_token": "fixture-grant", "refresh_token": "not-saved"}), (200, buckets), (403, None),
+                ]) as request:
+            result = native.observe_antigravity(config)
+        spawn.assert_not_called()
+        token_post, *quota_posts = [call.args for call in request.call_args_list]
+        self.assertEqual(token_post[:2], ("oauth2.googleapis.com", "/token"))
+        form = parse_qs(token_post[2].decode())
+        self.assertEqual(form, {k: [v] for k, v in fields.items() if k != "project_id"}
+                         | {"grant_type": ["refresh_token"]})
+        self.assertNotIn("Authorization", token_post[3])
+        for host, path, body, headers, _ in quota_posts:
+            self.assertIn(host, native.AGY_OAUTH_HOSTS)
+            self.assertEqual(path, native.AGY_OAUTH_QUOTA)
+            self.assertEqual(json.loads(body), {"project": "fixture-project"})
+            self.assertEqual(headers["Authorization"], "Bearer fixture-grant")
+            self.assertNotIn("Cookie", headers)
+        self.assertEqual(self.file.read_bytes(), original)
+        self.assertEqual(set(result["windows"]), {
+            "antigravity-quota-summary-" + key
+            for key in ("gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "argon-weekly")
+        })
+        self.assertNotIn("fixture-", json.dumps(result))
+        self.assertNotIn("not-saved", json.dumps(result))
+        self.assertNotEqual(fleetctl._source_identity({"oracle": "antigravity", **config}),
+                            fleetctl._source_identity(self.config))
+
+    def test_acp_profiles_fail_closed_without_sending_any_other_credential(self):
+        config = {"oauth_acp_file": str(self.file), "reuse_running": True}
+        self.file.write_text(json.dumps({"client_id": "fixture-id", "client_secret": "fixture-secret",
+                                         "refresh_token": "fixture-refresh"}))
+        self.file.chmod(0o600)
+        with patch.object(native, "_agy_google_post", return_value=(400, None)) as request, \
+                patch.object(native, "_observe_running_antigravity") as running:
+            self.assertEqual(native.observe_antigravity({**config, **self.config})["kind"], "no-auth")
+            self.assertEqual(native.observe_antigravity(config)["kind"], "unauthorized")
+            request.assert_called_once()
+            request.reset_mock()
+            self.file.chmod(0o644)
+            self.assertEqual(native.observe_antigravity(config)["kind"], "no-auth")
+            request.assert_not_called()
         running.assert_not_called()
 
     def test_https_summary_post_has_no_redirect_cookie_or_refresh_fallback(self):

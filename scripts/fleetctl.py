@@ -1289,8 +1289,10 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "antigravity":
         # Multiple pools can filter the same reading; distinct sign-ins never share a claim.
         try:
-            if "oauth_session_file" in config:
-                return (oracle, "oauth", str(Path(config["oauth_session_file"]).expanduser()))
+            selected = tuple((key, str(Path(config[key]).expanduser()))
+                             for key in ("oauth_session_file", "oauth_acp_file") if key in config)
+            if selected:
+                return (oracle, "oauth", selected)
             return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
