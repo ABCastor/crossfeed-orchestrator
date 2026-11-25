@@ -227,7 +227,7 @@ function setupComparison(section) {
   function updateAddButtons() {
     const menu = new Set([...form.querySelectorAll('.wb-model-picker option')].map(option => routeOf(option.value)));
     const selected = new Set(params().getAll('compare').map(routeOf));
-    for (const button of document.querySelectorAll('.wb-add')) {
+    for (const button of document.querySelectorAll('.wb-add[data-route]')) {
       const route = button.dataset.route;
       const on = selected.has(route);
       const capped = on ? selected.size <= 1 : selected.size >= 4;
@@ -338,7 +338,7 @@ function setupComparison(section) {
     }
   });
   document.addEventListener('click', event => {
-    const add = event.target.closest('.wb-add');
+    const add = event.target.closest('.wb-add[data-route]');
     if (!add || add.getAttribute('aria-disabled') === 'true') return;
     const select = form.querySelector('.wb-model-picker');
     const choice = [...(select?.options || [])].find(option => routeOf(option.value) === add.dataset.route);

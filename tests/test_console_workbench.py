@@ -349,7 +349,7 @@ class WorkbenchTests(unittest.TestCase):
                 'renews_at': '2026-12-02T00:00:00Z'}, 'usage_cost': {'today_usd': 0, 'last_30d_usd': .25},
                 'per_model': [{'model': 'Fixture Model', 'usd_30d': .25, 'requests': 2}]}
         markup = console._plan_extras(view)
-        for text in ('3 USD', 'Expires not reported', 'New credits arrive', '$0.0000', '$0.2500',
+        for text in ('3 USD', 'Expires not reported', 'New credits arrive', '$0.00', '$0.25',
                      'Status page', 'Fixture Model', '2 requests'):
             self.assertIn(text, markup)
 

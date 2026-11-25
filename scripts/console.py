@@ -189,9 +189,9 @@ class Console:
             raise ValueError('invalid benchmark link')
         roster = fleetctl.read_overlay(self.overlay_path, self.state_dir, discover=False)
         with fleetctl.locked_runtime(self.state_dir) as runtime:
-            evidence = fleetctl.load_json(self.state_dir / 'evidence' / 'levels.json', {}) or {}
-            known = {canonical for canonical, _ in selector.evidence_index(roster, evidence.get('rows', []))}
+            known = {canonical for canonical, _ in _comparison_evidence(roster, self.state_dir)}
             known.update(selector.canonical_model(row['model'], roster) for row in fleetctl.model_overview(roster, runtime))
+            known.update(lane['benchmark_identity'] for lane in roster.get('lanes', []) if lane.get('benchmark_identity'))
             if model not in known:
                 raise ValueError('unknown model')
             rows = runtime.setdefault('console_benchmark_links', {}).setdefault(model, [])
@@ -1376,7 +1376,7 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         actor, attribution = _level_attribution(p if p.get('set_by') else p.get('control'), overview['generated_at'])
         pools.append({"pool": p["pool"], "subscription": p.get('subscription'), "level": p["level"],
                       'set_by': p.get('set_by'), 'set_at': p.get('set_at'), 'archived': p.get('archived', []),
-                      **{key: p[key] for key in ('credits', 'status_url', 'usage_cost', 'per_model') if key in p},
+                      **{key: p[key] for key in ('credits', 'spend_credits', 'status_url', 'usage_cost', 'per_model', 'per_model_error') if key in p},
                       'wallet_extras': _plan_extras(p, show_status=p['pool'] not in AGY_ALLOWANCES,
                                                    empty=p['pool'] not in AGY_ALLOWANCES),
                       "means": _level_meaning(p["level"]),
@@ -1565,7 +1565,7 @@ def _lane_statuses(roster):
     return statuses
 
 
-def _unlisted_compare_options(overview):
+def _unlisted_compare_options(overview, evidence):
     """Keep an admitted route discoverable even if a quote (for example while Off) is unavailable."""
     roster = overview['_brief_context']['roster']
     lanes = {}
@@ -1594,11 +1594,17 @@ def _unlisted_compare_options(overview):
                 configured_levels = effort.get('levels') or {}
                 levels = (configured_levels.get(harness) if isinstance(configured_levels, dict) else configured_levels)
                 for level in levels or [lane.get('worker_level') or effort.get('default') or 'provider-default']:
-                    yield {'pool': pool_id, 'model_key': key, 'model_identity': selector.canonical_model(key, roster),
-                           **{field: lane[field] for field in ('benchmark_identity', 'benchmark_effort') if field in lane},
-                           'harness': harness, 'level': level, 'lane_id': lane.get('lane_id'),
-                           'funding': selector.funding.classify(roster, pool_id, lane),
-                           'comparison_only': True, 'efficient_effort': entry.get('efficient_effort')}
+                    item = {'pool': pool_id, 'model_key': key, 'model_identity': selector.canonical_model(key, roster),
+                            **{field: lane[field] for field in ('benchmark_identity', 'benchmark_effort') if field in lane},
+                            'harness': harness, 'level': level, 'lane_id': lane.get('lane_id'),
+                            'funding': selector.funding.classify(roster, pool_id, lane),
+                            'comparison_only': True, 'efficient_effort': entry.get('efficient_effort')}
+                    if hasattr(selector, 'api_cost') and hasattr(selector, 'option_evidence'):
+                        item['api_cost_usd'] = selector.api_cost(selector.option_evidence(evidence, item), lane.get('price_1m'))
+                    if pool['level'] == 'off':
+                        item['quota_basis'] = {'plan': pool['plan'].get('name'),
+                                               'why': 'The plan is Off for routing; no quota price is applied.'}
+                    yield item
 
 
 def _workbench_query(query: dict[str, list[str]]) -> tuple[str, str, list[str], int]:
@@ -1626,6 +1632,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
     """Replay the selector on the same local inputs as the subscription rows; never emit a receipt."""
     roster = overview['_brief_context']['roster']
     runtime = overview['_brief_context']['runtime']
+    evidence = _comparison_evidence(roster, state_dir)
     fleet = types.SimpleNamespace(**vars(fleetctl))
 
     def replay(allow=None):
@@ -1660,7 +1667,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
                 key = _compare_key(option)
                 menu[key] = {**option, **menu.get(key, {})}
     present = {(item['pool'], item['model_key']) for item in menu.values()}
-    for option in _unlisted_compare_options(overview):
+    for option in _unlisted_compare_options(overview, evidence):
         if (option['pool'], option['model_key']) not in present and visible(option):
             menu.setdefault(_compare_key(option), option)
     memo = {}
@@ -1745,7 +1752,7 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
                          key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))
     return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
             'runner': runner, 'exploring': result.get('exploration', False), 'why': why, 'refusals': prioritized[:16], 'hidden_pick': hidden_pick,
-            'evidence': _comparison_evidence(roster, state_dir),
+            'evidence': evidence,
             'as_of': fleetctl.utc_now().astimezone().strftime('%H:%M'), 'count': count}
 
 
@@ -1920,8 +1927,10 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
     def name(option):
         return _compact_name(models.get(option['model_key']), option['model_key'], option['pool'])
     def route(option):
-        return (f'<span class="nm">{esc(name(option))}</span> · {esc(_pretty(option["level"]))}'
-                if option else 'None eligible')
+        if not option:
+            return 'None eligible'
+        heading = f'<span class="nm">{esc(name(option))}</span>'
+        return heading if option['pool'] == 'chatgpt-work' else heading + ' · ' + esc(_pretty(option['level']))
     def select(values, current):
         return ''.join(f'<option value="{esc(str(key))}"{" selected" if key == current else ""}>{esc(text)}</option>'
                        for key, text in values.items())
@@ -2101,7 +2110,6 @@ STATUS_PAGES = {
 def _plan_extras(pool, *, show_status=True, empty=True):
     esc = html.escape
     status = _benchmark_url(pool.get('status_url') or STATUS_PAGES.get(pool['pool'])) if show_status else None
-    credits = pool.get('credits') or {}
     usage = pool.get('usage_cost') or {}
     per_model = pool.get('per_model') or usage.get('per_model') or []
 
@@ -2114,25 +2122,37 @@ def _plan_extras(pool, *, show_status=True, empty=True):
         except (ValueError, TypeError, AttributeError):
             return 'not reported'
 
+    def cash(amount):
+        value = _number(amount)
+        if value is None:
+            return '—'
+        return '<span class="wb-number">' + (f'${value:,.2f}' if not 0 < value < .01 else f'${value:.4f}') + '</span>'
+
     pieces = []
-    balance = credits.get('balance')
-    if balance is not None:
+    for field, label in [('credits', 'Credit balance'), ('spend_credits', 'Spend credit balance')]:
+        credits = pool.get(field) or {}
+        balance = credits.get('balance')
+        if balance is None:
+            continue
         unit = credits.get('unit') or 'credits'
-        pieces.append(f'<p>Credit balance <b>{esc(str(balance))} {esc(str(unit))}</b><br>'
+        amount = f'{balance:,.2f}'.rstrip('0').rstrip('.') if _number(balance) is not None else str(balance)
+        pieces.append(f'<p>{label} <b>{esc(amount)} {esc(str(unit))}</b><br>'
                       f'Expires {esc(date(credits.get("expires_at")))} · New credits arrive {esc(date(credits.get("renews_at")))}</p>')
     if _number(usage.get('today_usd')) is not None or _number(usage.get('last_30d_usd')) is not None:
         tokens = ''
         if (_number(usage.get('today_tokens')) is not None and _number(usage.get('last_30d_tokens')) is not None):
             tokens = f'<br><small>{usage["today_tokens"]:,.0f} today · {usage["last_30d_tokens"]:,.0f} tokens in the last 30 days</small>'
-        pieces.append(f'<p>Usage cost: {_money_cell(usage.get("today_usd"))} today · '
-                      f'{_money_cell(usage.get("last_30d_usd"))} in the last 30 days{tokens}</p>')
+        pieces.append(f'<p>Usage cost: {cash(usage.get("today_usd"))} today · '
+                      f'{cash(usage.get("last_30d_usd"))} in the last 30 days{tokens}</p>')
     elif empty:
         pieces.append('<p>Usage cost not reported</p>')
     rows = ''.join(f'<li><span class="nm">{esc(str(row.get("model") or "Unknown model"))}</span> '
-                   f'{_money_cell(row.get("usd_30d"))} · {esc(str(row.get("requests", "—")))} requests</li>'
+                   f'{cash(row.get("usd_30d"))} · {esc(str(row.get("requests", "—")))} requests</li>'
                    for row in per_model)
     if rows:
         pieces.append(f'<details><summary>Spend by model · last 30 days</summary><ul>{rows}</ul></details>')
+    elif pool.get('per_model_error'):
+        pieces.append('<p>Spend by model is not available for this connection.</p>')
     if status:
         pieces.append(f'<a href="{esc(status)}" rel="noreferrer">Status page</a>')
     return ''.join(pieces)
@@ -2179,7 +2199,8 @@ def _wallet(overview, token, workbench, order):
         tag = 'h2' if card else 'h3'
         container = 'article' if card else 'section'
         explicit = bool(roster['quota_pools'][key].get('explicit_only'))
-        included = [_name(by_key.get(o['model'], o), o['model']) for o in options if o['current'] and o['run_as']][:3]
+        included = [_compact_name(by_key.get(o['model'], o), o['model'], key)
+                    for o in options if o['current'] and o['run_as']][:3]
         pool_switch, policy = controls(pool) if card and separate_dial else ('', '')
         plan = _wallet_plan(pool) if card else ''
         flag = ('<div class="wb-explicit">Explicit only '
@@ -2466,8 +2487,13 @@ def _benchmark_data(overview, cards, evidence):
             rows.append({'model': key, 'name': _name(model), 'level': 'provider-default'})
             seen.add(key)
     references = {}
-    for (key, _), row in selector.evidence_index(roster, evidence.get('rows', [])).items():
+    for (key, _), row in evidence.items():
         references.setdefault(key, []).extend(row.get('sources') or [])
+    for lane in roster.get('lanes', []):
+        key = lane.get('benchmark_identity')
+        if key and key not in seen and canonical(lane['model_key']) in active:
+            rows.append({'model': key, 'level': lane.get('benchmark_effort') or 'provider-default'})
+            seen.add(key)
     for records in [fleetctl.model_cards(roster), roster.get('model_evidence') or {}]:
         for key, row in records.items():
             for field in ('benchmarks', 'benchmark_links', 'benchmark_sources'):
@@ -2587,7 +2613,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     else:
                         overview = console.overview(refresh=False)
                         runtime = overview['_brief_context']['runtime']
-                        evidence = fleetctl.load_json(console.state_dir / 'evidence' / 'levels.json', {}) or {}
+                        evidence = _comparison_evidence(overview['_brief_context']['roster'], console.state_dir)
                         cards, sources = _benchmark_data(overview, cards, evidence)
                         self._html(200, render_benchmarks(cards, console.form_token,
                                                         runtime.get('console_benchmark_links'), sources,
