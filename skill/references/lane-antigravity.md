@@ -20,7 +20,7 @@ Exits: 3 may mean exhausted quota; 4 empty output; 5 no route/lease/control gate
 
 ## Current catalogue and provisional routing
 
-AGY 1.4.0, caller-verified on 16 October 2026. The supported selectors below are the declared admitted list. Tests compare it with the offline catalogue fixture and the example roster's active model/effort combinations.
+The table records the example roster, based on AGY 1.4.0 and checked on 16 October 2026. It is not authority to start a model on another installation. Read the active overlay for admitted Gemini models and efforts: a pool-specific archive may retain old selectors for attribution while refusing every new run.
 
 <!-- agy-models:start -->
 | Model | Pool | Selectors |

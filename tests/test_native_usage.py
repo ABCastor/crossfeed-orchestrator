@@ -129,6 +129,44 @@ class ClaudeTests(unittest.TestCase):
         snap = native.parse_claude(fixture("claude-usage-legacy.json"))
         self.assertEqual({k: v["used_percent"] for k, v in snap["windows"].items()}, {"session": 48, "weekly": 3})
 
+    def test_legacy_scoped_limits_do_not_replace_general_windows(self):
+        expiry = "2026-11-03T13:00:00Z"
+        body = {"seven_day": {"utilization": 9, "resets_at": expiry},
+                "seven_day_sonnet": {"utilization": 100, "resets_at": expiry},
+                "seven_day_opus": {"utilization": 12, "resets_at": expiry},
+                "seven_day_cowork": {"utilization": 0}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual({k: v["used_percent"] for k, v in snap["windows"].items()},
+                         {"weekly": 9, "claude-weekly-scoped-sonnet": 100, "claude-weekly-scoped-opus": 12})
+        self.assertEqual(snap["idle_windows"]["claude-weekly-scoped-cowork"]["used_percent"], 0)
+        self.assertFalse(fleetctl.quota_window_applies({}, "claude", "claude-weekly-scoped-sonnet",
+                                                      snap["windows"]["claude-weekly-scoped-sonnet"], "claude-opus-5-5"))
+
+    def test_reader_ignores_bridge_token_config_and_non_subscription_records(self):
+        api_login = claude_record()
+        api_login["claudeAiOauth"].update(subscriptionType="console", accessToken="not-a-subscription")
+        with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "bridge-only",
+                                     "ANTHROPIC_API_KEY": "api-only", "CLAUDE_CONFIG_DIR": "/bridge"}), \
+                patch.object(native.Path, "home", return_value=Path("/operator")), \
+                patch.object(native.shutil, "which", return_value="/usr/bin/security"), \
+                patch.object(native.subprocess, "run") as keychain, \
+                patch.object(native, "_owner_file", return_value=json.dumps(claude_record()).encode()) as read:
+            keychain.return_value.returncode = 0
+            keychain.return_value.stdout = json.dumps(api_login)
+            token, plan, failure = native.claude_token()
+        read.assert_called_once_with(Path("/operator/.claude/.credentials.json"))
+        self.assertEqual((token, plan, failure), (TOKEN, "Claude Max 20x", None))
+        self.assertEqual(native.claude_token([api_login])[2]["kind"], "no-key")
+
+    def test_no_http_redirect_or_proxy_for_subscription_token(self):
+        with patch.object(native.urllib.request, "build_opener") as build:
+            build.return_value.open = answering(status=302)
+            result = native.observe_claude({}, records=[claude_record()])
+        proxy, redirect = build.call_args.args
+        self.assertEqual(proxy.proxies, {})
+        self.assertIsNone(redirect.redirect_request(None, None, 302, "", {}, "https://elsewhere.invalid"))
+        self.assertEqual(result["kind"], "failed")
+
     def test_scoped_window_applies_only_to_its_model(self):
         roster = {"quota_pools": {"claude": {"label": "Claude"}},
                   "model_cards": {"claude-fable-5-1": {}, "claude-opus-5-5": {}}}
@@ -227,6 +265,13 @@ class CopilotTests(unittest.TestCase):
             "used_percent": 1, "window_minutes": 31 * 1440, "label": "Premium", "reset_at": "2026-11-01T00:00:00Z"}})
         self.assertEqual(snap["plan"], "Copilot Individual")
 
+    def test_raw_percent_is_visible_without_changing_the_routing_precision(self):
+        payload = json.loads(fixture("copilot-user.json"))
+        payload["quota_snapshots"]["premium_interactions"]["percent_remaining"] = 99.8
+        snap = native.parse_copilot(json.dumps(payload), NOW)
+        self.assertEqual(snap["windows"]["premium_monthly"]["used_percent"], 0)
+        self.assertEqual(snap["provider_used_percent"]["premium_monthly"], .2)
+
     def test_unlimited_is_not_a_window(self):
         self.assertIsNone(native.parse_copilot(fixture("copilot-unlimited.json")))
 
@@ -265,6 +310,14 @@ class CodexBarPortTests(unittest.TestCase):
         self.assertEqual(snap["windows"], {"weekly": {"used_percent": 66, "window_minutes": 10080,
                                                       "reset_at": "2026-11-22T10:39:25Z", "label": "Weekly"}})
         self.assertNotIn(TOKEN, json.dumps(snap))
+
+    def test_credit_balance_is_read_but_not_used_as_a_window(self):
+        payload = {"credits": {"balance": "1234.5", "unlimited": False}}
+        snap = native.parse_codex_oauth(payload, NOW)
+        self.assertEqual(snap["account_usage"], {"credits_balance": 1234.5})
+        self.assertEqual(snap["windows"], {})
+        payload["credits"]["unlimited"] = True
+        self.assertIsNone(native.parse_codex_oauth(payload, NOW))
 
     def test_codex_oauth_preserves_scoped_signal_and_ignores_invalid_slots(self):
         answer = json.loads(fixture("codex-wham-usage.json"))
@@ -348,6 +401,51 @@ class CodexBarPortTests(unittest.TestCase):
             for provider in ("agy", "all", "antigravity", "claude,antigravity"):
                 self.assertFalse(fleetctl.codexbar_observed(provider)["available"])
         spawn.assert_not_called()
+
+
+class OpenRouterAccountTests(unittest.TestCase):
+    def test_existing_key_reads_account_credits_and_key_usage_without_a_quota_window(self):
+        calls = []
+        def usage(request, timeout):
+            calls.append(request.full_url)
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(request.get_header("Authorization"), f"Bearer {TOKEN}")
+            if request.full_url.endswith("/credits"):
+                return Response('{"data":{"total_credits":30,"total_usage":26.25,"name":"redact"}}')
+            return Response('{"data":{"usage_daily":0,"usage_weekly":0.125,"limit_remaining":3,"label":"redact"}}')
+        with patch.dict(os.environ, {"OPENROUTER_KEY_FILE": "/existing/key"}), \
+                patch.object(native, "_owner_file", return_value=TOKEN.encode()) as read:
+            snap = native.observe_openrouter({}, opener=usage)
+        read.assert_called_once_with(Path("/existing/key"))
+        self.assertEqual(calls, [native.OPENROUTER_BASE + suffix for suffix in ("credits", "key")])
+        self.assertEqual(snap["windows"], {})
+        self.assertEqual(snap["account_usage"], {"account_credits_usd": 30, "account_usage_usd": 26.25,
+                                                 "account_balance_usd": 3.75, "key_usage_daily_usd": 0,
+                                                 "key_usage_weekly_usd": .125, "key_limit_remaining_usd": 3})
+        self.assertNotIn(TOKEN, json.dumps(snap))
+        self.assertNotIn("redact", json.dumps(snap))
+        self.assertEqual(fleetctl.current_pool_state({"quota_snapshots": {"openrouter-free": snap}},
+                                                    "openrouter-free")[0], "UNKNOWN")
+
+    def test_account_only_oracle_refreshes_without_using_quota_for_routing(self):
+        pool = "openrouter-free"
+        roster = {"quota_pools": {pool: {"plan": {"limit": "none-known"},
+                                         "quota_refresh": {"oracle": "openrouter", "ttl_s": 1800}}}}
+        snap = {**native._snapshot(native.OPENROUTER_SOURCE, {}, {}), "account_usage": {"account_balance_usd": 1.5}}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(native.OBSERVERS, {"openrouter": lambda *_a, **_k: snap}):
+            path = Path(temp)
+            self.assertEqual(fleetctl.refresh_stale_pools(path, [pool], roster=roster, force=True), {pool: "refreshed"})
+            runtime = json.loads((path / "runtime.json").read_text())
+            self.assertEqual(runtime["quota_snapshots"][pool]["account_usage"], snap["account_usage"])
+            self.assertEqual(fleetctl.current_pool_state(runtime, pool, roster=roster)[0], "UNKNOWN")
+
+    def test_an_env_token_is_never_used_as_a_fallback(self):
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": TOKEN}), \
+                patch.object(native, "_owner_file", side_effect=OSError), \
+                patch.object(native, "_http_get") as fetch:
+            self.assertEqual(native.observe_openrouter({})["kind"], "no-key")
+        fetch.assert_not_called()
 
 
 class FleetWiringTests(unittest.TestCase):

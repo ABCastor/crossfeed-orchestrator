@@ -1259,7 +1259,7 @@ def _native_oracle(name: str) -> Callable[[dict[str, Any], int], dict[str, Any]]
     return oracle
 
 
-# The provider's own readers (codex, claude, antigravity, copilot, opencode-go) need no
+# The provider's own readers need no
 # third-party app. `codexbar` stays available as an optional reader for other setups.
 ORACLE_REGISTRY: dict[str, Callable[[dict[str, Any], int], dict[str, Any]]] = {
     "codexbar": oracle_codexbar,
@@ -1289,18 +1289,23 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "antigravity":
         # Multiple pools can filter the same reading; distinct sign-ins never share a claim.
         try:
-            if "oauth_session_file" in config:
-                return (oracle, "oauth", str(Path(config["oauth_session_file"]).expanduser()))
+            selected = tuple((key, str(Path(config[key]).expanduser()))
+                             for key in ("oauth_session_file", "oauth_acp_file") if key in config)
+            keychain = config.get("oauth_cli_keychain") is True
+            if selected or keychain:
+                return (oracle, "oauth", selected, keychain)
             return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
+    if oracle == "openrouter":
+        return (oracle, str(native_usage.openrouter_key_path()))
     if oracle in native_usage.OBSERVERS:
         return (oracle, config.get("binary"), config.get("key"))
     return (oracle, id(config))
 
 
 def quota_sources(roster: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    """Which pools have a fetchable quota percentage, from where, and how often.
+    """Which pools have a fetchable usage reading, from where, and how often.
 
     Declared per pool in the overlay as `quota_pools.<pool>.quota_refresh`.
     Returns only what the overlay declares, and `{}` for an absent or unreadable overlay.
@@ -1309,14 +1314,14 @@ def quota_sources(roster: dict[str, Any] | None = None) -> dict[str, dict[str, A
     for pool, config in ((roster or {}).get("quota_pools") or {}).items():
         if not isinstance(config, dict) or "quota_refresh" not in config:
             continue
-        if pool_has_no_known_limit(roster, pool):
-            continue
         declared = config["quota_refresh"]
         if not declared or not isinstance(declared, dict):
             continue
         oracle = declared.get("oracle")
         if not oracle or not isinstance(oracle, str) or oracle not in ORACLE_REGISTRY:
             continue
+        if pool_has_no_known_limit(roster, pool) and oracle != "openrouter":
+            continue  # quota readers do not attach a borrowed window; OpenRouter is cash-only
         try:
             ttl = int(declared.get("ttl_s", REFRESH_NETWORK_TTL_S))
         except (TypeError, ValueError):
@@ -1604,6 +1609,8 @@ def _filtered_observation(observed: dict[str, Any], config: dict[str, Any]) -> d
     result = dict(observed)
     for key in ("windows", "idle_windows"):
         result[key] = {k: v for k, v in observed.get(key, {}).items() if k in allowed}
+    if "provider_used_percent" in observed:
+        result["provider_used_percent"] = {k: v for k, v in observed["provider_used_percent"].items() if k in allowed}
     if not result["windows"] and not result["idle_windows"]:
         result.update(available=False, reason="no matching rate windows")
     return result

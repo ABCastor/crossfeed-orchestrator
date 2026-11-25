@@ -1,6 +1,6 @@
 """Quota readings straight from each provider, through the provider's own tool or sign-in.
 
-Four readers, one per subscription the fleet meters, each returning the snapshot shape every
+The readers return the snapshot shape every
 quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes, label}`) or
 `{"available": False, "kind": ..., "reason": ...}`:
 
@@ -8,24 +8,26 @@ quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes
   its sign-in and renews it; this reader never sees a token.
 - codex-oauth: CodexBar's usage endpoint with Codex's existing ChatGPT sign-in. No renewal.
 - claude: Anthropic's usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`) with the
-  sign-in Claude Code already keeps (macOS Keychain item `Claude Code-credentials`, else
-  `~/.claude/.credentials.json`). Read only: an expired sign-in is reported, never renewed here,
-  because renewing would rotate Claude Code's own credential.
-- antigravity: an operator-exported usage report, or optionally a live quota summary from
-  an already-running local language server. Never starts the CLI or a login.
+  default subscription sign-in Claude Code keeps (macOS Keychain item `Claude Code-credentials`,
+  else `~/.claude/.credentials.json`), never a bridge token. An expired sign-in is not renewed here.
+- antigravity: an operator export, a running local language server, or an explicitly selected
+  existing ACP/CLI OAuth profile. Never starts the CLI or an interactive login.
 - copilot: GitHub's Copilot entitlement endpoint (`GET https://api.github.com/copilot_internal/user`)
   with the GitHub CLI's own sign-in (`gh auth token`) or a declared key reference.
+- openrouter: informational cash balances and spend from the free wrapper's existing key file.
 
-Tokens stay in memory and in one request header: never logged, never in a reason, never on disk.
+Credentials go only to the relevant provider on fixed HTTPS hosts. Never written or logged.
 A rejected sign-in, a missing tool and an unreadable answer stay distinct and never become 0%.
 """
 from __future__ import annotations
 
+import base64
 import calendar
 import datetime as dt
 import http.client
 import importlib.util
 import json
+import math
 import os
 import re
 import selectors
@@ -37,13 +39,14 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from pathlib import Path
 from typing import Any, Callable
 
 MAX_BODY_BYTES = 2_000_000
 
 # The Codex app server and OAuth endpoints have their own time limits.
-DEFAULT_TIMEOUTS = {"codex": 20, "codex-oauth": 10, "claude": 10, "copilot": 10}
+DEFAULT_TIMEOUTS = {"codex": 20, "codex-oauth": 10, "claude": 10, "copilot": 10, "openrouter": 10}
 
 
 def reader_timeout(oracle: str, config: dict[str, Any], timeout: int) -> int:
@@ -132,6 +135,16 @@ def _add(windows: dict[str, Any], idle: dict[str, Any], name: str, used: int | N
     windows[name] = entry
 
 
+def _finite_amount(raw: Any) -> float | None:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        amount = float(raw)
+    except (OverflowError, ValueError):
+        return None
+    return amount if math.isfinite(amount) else None
+
+
 def _duration_name(minutes: int | None) -> str:
     if minutes == 300:
         return "session"
@@ -144,11 +157,11 @@ def _duration_label(minutes: int | None) -> str | None:
     return {300: "Session", 10080: "Weekly"}.get(minutes or 0)
 
 
-def _http_get(url: str, headers: dict[str, str], timeout: int,
+def _http_get(url: str, headers: dict[str, str], timeout: float,
               opener: Callable[..., Any] | None) -> tuple[int, str]:
     """(status, body). Exceptions other than HTTP errors propagate for the caller's fixed message."""
     request = urllib.request.Request(url, method="GET", headers=headers)
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
     try:
         with open_url(request, timeout=timeout) as response:
             return int(getattr(response, "status", 200) or 200), \
@@ -351,11 +364,16 @@ def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> d
             if name in windows or name in idle:
                 name = f"{name}-{slot}"
             _add(windows, idle, name, used, _parse_time(reset), minutes, label)
-    if not windows:
+    credits = _mapping(root.get("credits"))
+    balance = _finite_amount(credits.get("balance")) if credits.get("unlimited") is not True else None
+    if not windows and balance is None:
         return None
     plan = root.get("plan_type")
-    return _snapshot(CODEX_OAUTH_SOURCE, windows, idle,
-                     plan.strip().capitalize() if isinstance(plan, str) else None, observed_at)
+    result = _snapshot(CODEX_OAUTH_SOURCE, windows, idle,
+                       plan.strip().capitalize() if isinstance(plan, str) else None, observed_at)
+    if balance is not None:
+        result["account_usage"] = {"credits_balance": balance}
+    return result
 
 
 def _owner_file(path: Path) -> bytes:
@@ -383,8 +401,7 @@ def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
     if isinstance(account, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account):
         headers["ChatGPT-Account-Id"] = account
     try:
-        open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
-        status, body = _http_get(CODEX_USAGE_URL, headers, reader_timeout("codex-oauth", config, timeout), open_url)
+        status, body = _http_get(CODEX_USAGE_URL, headers, reader_timeout("codex-oauth", config, timeout), opener)
         if status == 200:
             return parse_codex_oauth(_json(body)) or unavailable(
                 CODEX_OAUTH_SOURCE, "malformed", "Codex reported no OAuth rate-limit windows")
@@ -400,7 +417,14 @@ CLAUDE_SOURCE = "claude-oauth-usage"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 CLAUDE_LIMIT_KINDS = {"session": ("session", 300, "Session"), "weekly_all": ("weekly", 10080, "Weekly")}
-CLAUDE_FALLBACK_FIELDS = (("five_hour", "session", 300, "Session"), ("seven_day", "weekly", 10080, "Weekly"))
+CLAUDE_FALLBACK_FIELDS = (
+    ("five_hour", "session", 300, "Session"),
+    ("seven_day", "weekly", 10080, "Weekly"),
+    ("seven_day_sonnet", "claude-weekly-scoped-sonnet", 10080, "Sonnet only"),
+    ("seven_day_opus", "claude-weekly-scoped-opus", 10080, "Opus only"),
+    ("seven_day_oauth_apps", "claude-weekly-scoped-oauth-apps", 10080, "OAuth apps only"),
+    ("seven_day_cowork", "claude-weekly-scoped-cowork", 10080, "Cowork only"),
+)
 SUBSCRIPTION_NAMES = {"max": "Claude Max", "pro": "Claude Pro", "team": "Claude Team", "enterprise": "Claude Enterprise"}
 
 
@@ -444,7 +468,7 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
 
 
 def _claude_credential_records() -> list[dict[str, Any]]:
-    """Claude Code's own sign-in records, newest store first. Never written to."""
+    """The default interactive subscription profile, not a bridge's CLAUDE_CONFIG_DIR."""
     records = []
     if shutil.which("security"):
         try:
@@ -456,10 +480,9 @@ def _claude_credential_records() -> list[dict[str, Any]]:
                 records.append(json.loads(found.stdout))
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
-    config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     try:
-        records.append(json.loads((config_dir / ".credentials.json").read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+        records.append(_json(_owner_file(Path.home() / ".claude" / ".credentials.json").decode("utf-8")))
+    except (OSError, ValueError, RecursionError):
         pass
     return [r for r in records if isinstance(r, dict)]
 
@@ -471,23 +494,30 @@ def claude_token(records: list[dict[str, Any]] | None = None,
     expired = False
     for record in records if records is not None else _claude_credential_records():
         oauth = record.get("claudeAiOauth")
-        if not isinstance(oauth, dict) or not isinstance(oauth.get("accessToken"), str):
+        if not isinstance(oauth, dict):
             continue
-        expires = oauth.get("expiresAt")
-        if isinstance(expires, (int, float)) and expires / 1000 <= now.timestamp() + 30:
+        plan = SUBSCRIPTION_NAMES.get(str(oauth.get("subscriptionType") or "").lower())
+        if not plan:
+            continue
+        expires = _parse_time(oauth.get("expiresAt", 0) / 1000) if type(oauth.get("expiresAt")) in (int, float) else None
+        if expires is None:
+            continue
+        if (expires - now).total_seconds() <= 30:
             expired = True
             continue
+        token = oauth.get("accessToken")
+        if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,16000}", token):
+            continue
         tier = str(oauth.get("rateLimitTier") or "")
-        plan = SUBSCRIPTION_NAMES.get(str(oauth.get("subscriptionType") or "").lower())
-        if plan and "20x" in tier:
+        if "20x" in tier:
             plan += " 20x"
-        elif plan and "5x" in tier:
+        elif "5x" in tier:
             plan += " 5x"
-        return oauth["accessToken"], plan, None
+        return token, plan, None
     if expired:
         return None, None, unavailable(CLAUDE_SOURCE, "expired",
-                                       "Claude Code's sign-in has expired; it renews the next time Claude Code runs")
-    return None, None, unavailable(CLAUDE_SOURCE, "no-key", "Claude Code is not signed in on this machine")
+                                       "Claude Code's subscription sign-in has expired; sign in without an environment token")
+    return None, None, unavailable(CLAUDE_SOURCE, "no-key", "No usable Claude Code subscription sign-in")
 
 
 def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..., Any] | None = None,
@@ -580,6 +610,10 @@ AGY_LOCAL_SOURCE = "antigravity-local"
 AGY_OAUTH_SOURCE = "antigravity-oauth-usage"
 AGY_OAUTH_HOSTS = ("daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com")
 AGY_OAUTH_QUOTA = "/v1internal:retrieveUserQuotaSummary"
+AGY_OAUTH_TOKEN_HOST = "oauth2.googleapis.com"
+# This quota response is client-version dependent. A generic "antigravity" UA omits Gemini
+# windows even with a valid sign-in. Use the verified T3 Hub protocol/version prefix.
+AGY_OAUTH_USER_AGENT = "antigravity/hub/2.24.0"
 AGY_LOCAL_QUOTA = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
 _AGY_BUCKET = re.compile(r"(gemini|3p|argon)-(5h|weekly|daily)\Z")
 _AGY_PREFIX = "antigravity-quota-summary-"
@@ -619,6 +653,7 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
     observed = observed_at or _now()
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
+    provider_used: dict[str, float] = {}
     for raw in groups:
         buckets = _mapping(raw).get("buckets")
         if not isinstance(buckets, list):
@@ -649,10 +684,18 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
             if (source == AGY_OAUTH_SOURCE and fraction == 1 and not bucket.get("description")
                     and reset and abs((reset - observed).total_seconds() - AGY_WINDOW_MINUTES[cadence] * 60) <= 60):
                 reset = None  # an unused window's synthetic near-now + duration clock
-            _agy_store(windows, idle, family, cadence, 100 * (1 - fraction), reset)
+            used = 100 * (1 - fraction)
+            _agy_store(windows, idle, family, cadence, used, reset)
+            if source == AGY_OAUTH_SOURCE:
+                provider_used[name] = round(used, 8)
             if name in idle and fraction != 1:
                 idle[name]["reset_unknown"] = True
-    return _snapshot(source, windows, idle, None, observed) if windows or idle else None
+    if not windows and not idle:
+        return None
+    snap = _snapshot(source, windows, idle, None, observed)
+    if provider_used:
+        snap["provider_used_percent"] = provider_used
+    return snap
 
 
 def _agy_reuse_target(deadline: float) -> list[tuple[int, str]]:
@@ -740,54 +783,124 @@ def _observe_running_antigravity(timeout: int) -> dict[str, Any] | None:
     return None
 
 
-def _agy_oauth_request(host: str, token: str, timeout: float) -> Any:
-    # Use the existing provider sign-in only with the fixed, Google TLS endpoints.
-    # http.client does not use proxies, redirects or cookies.
+def _agy_google_post(host: str, path: str, data: bytes, headers: dict[str, str], timeout: float) -> tuple[int, Any]:
+    # Only the fixed Google hosts below; http.client does not follow redirects or use cookies or proxies.
     conn = http.client.HTTPSConnection(host, timeout=timeout)
     try:
-        conn.request("POST", AGY_OAUTH_QUOTA, b"{}", {
-            "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "antigravity",
-        })
+        conn.request("POST", path, data, headers)
         with conn.getresponse() as reply:
-            if reply.status == 200:
-                return _json(reply.read(MAX_BODY_BYTES + 1).decode("utf-8"))
-        return None
+            return reply.status, (_json(reply.read(MAX_BODY_BYTES + 1).decode("utf-8")) if reply.status == 200 else None)
     finally:
         conn.close()
 
 
-def _observe_antigravity_oauth(path: Any, timeout: int) -> dict[str, Any]:
-    """Borrow an explicitly selected AGY OAuth session. Never refresh it or use T3's state APIs."""
-    now = _now()
+def _agy_oauth_request(host: str, token: str, timeout: float, project: str | None = None) -> Any:
+    body = json.dumps({"project": project} if project else {}, separators=(",", ":")).encode()
+    _, payload = _agy_google_post(host, AGY_OAUTH_QUOTA, body, {
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": AGY_OAUTH_USER_AGENT,
+    }, timeout)
+    return payload
+
+
+def _agy_oauth_field(value: Any) -> bool:
+    return isinstance(value, str) and bool(re.fullmatch(r"[!-~]{1,16000}", value))
+
+
+def _agy_acp_access(doc: dict[str, Any], timeout: float) -> tuple[str | None, str | None, str]:
+    # Standard OAuth refresh for an existing ACP profile, as in T3 Code's quota reader.
+    # Do not send refresh credentials to quota hosts or retain/save any returned credential.
+    form = {key: doc.get(key) for key in ("client_id", "client_secret", "refresh_token")}
+    if not all(_agy_oauth_field(value) for value in form.values()):
+        return None, None, "no-auth"
+    project = doc.get("project_id")
+    if project not in (None, "") and not _agy_oauth_field(project):
+        return None, None, "no-auth"
+    form["grant_type"] = "refresh_token"
+    status, data = _agy_google_post(AGY_OAUTH_TOKEN_HOST, "/token", urlencode(form).encode("ascii"),
+                                   {"Content-Type": "application/x-www-form-urlencoded"}, timeout)
+    token = _mapping(data).get("access_token")
+    if status in {400, 401, 403}:
+        return None, None, "unauthorized"
+    if not _agy_oauth_field(token):
+        return None, None, "failed"
+    return token, project, ""
+
+
+def _agy_cli_keychain(timeout: float) -> dict[str, Any]:
+    """Antigravity CLI's own macOS go-keyring entry, captured without a shell or logs."""
+    if timeout <= 0 or not Path("/usr/bin/security").is_file():
+        return {}
+    found = subprocess.run(
+        ["/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"],
+        capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
+    )
+    body = found.stdout.strip()
+    if found.returncode != 0 or len(body) > MAX_BODY_BYTES:
+        return {}
+    if body.startswith(b"go-keyring-base64:"):
+        body = base64.b64decode(body.partition(b":")[2], validate=True)
+    elif body.startswith(b"go-keyring-encoded:"):
+        body = bytes.fromhex(body.partition(b":")[2].decode("ascii"))
+    return _mapping(_json(body.decode("utf-8")))
+
+
+def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False,
+                                keychain: bool = False) -> dict[str, Any]:
+    """Use one explicitly selected profile. No account discovery or fallback."""
+    deadline = time.monotonic() + max(1, min(timeout, 10))
+    source = AGY_OAUTH_SOURCE
     try:
-        path = Path(path).expanduser()
-        if not path.is_absolute():
-            raise ValueError
-        doc = _mapping(_json(_owner_file(path).decode("utf-8")))
+        if keychain:
+            doc = _agy_cli_keychain(min(3, deadline - time.monotonic()))
+        else:
+            path = Path(path).expanduser()
+            if not path.is_absolute():
+                raise ValueError
+            doc = _mapping(_json(_owner_file(path).decode("utf-8")))
+    except (TypeError, OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        return unavailable(source, "no-auth", "No readable Antigravity OAuth session")
+    project = None
+    if acp:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return unavailable(source, "failed", "Antigravity OAuth exchange timed out")
+        try:
+            token, project, failure = _agy_acp_access(doc, remaining / 2)
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            failure = "failed"
+        if failure:
+            return unavailable(source, failure, {
+                "no-auth": "No usable Antigravity ACP sign-in",
+                "unauthorized": "Google rejected the selected Antigravity ACP sign-in",
+                "failed": "Antigravity ACP OAuth exchange failed",
+            }[failure])
+    else:
         fields = _mapping(doc.get("token"))
         token, expires = fields.get("access_token"), _parse_time(fields.get("expiry"))
-    except (TypeError, OSError, ValueError, OverflowError, RecursionError):
-        token = expires = None
-    if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,16000}", token) or not expires:
-        return unavailable(AGY_OAUTH_SOURCE, "no-auth", "No readable Antigravity OAuth session")
-    if (expires - now).total_seconds() <= 60:
-        return unavailable(AGY_OAUTH_SOURCE, "expired", "Antigravity's session has expired; renew it in Antigravity")
-    deadline = time.monotonic() + max(1, min(timeout, 10))
-    windows, idle = {}, {}
+        if not _agy_oauth_field(token) or not expires:
+            return unavailable(source, "no-auth", "No readable Antigravity OAuth session")
+        if (expires - _now()).total_seconds() <= 60:
+            return unavailable(source, "expired", "Antigravity's session has expired; renew it in Antigravity")
+    now = _now()
+    windows, idle, provider_used = {}, {}, {}
     for host in AGY_OAUTH_HOSTS:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         try:
-            snap = parse_antigravity_local(_agy_oauth_request(host, token, remaining / 2), now,
-                                           source=AGY_OAUTH_SOURCE)
+            request_at = _now()
+            payload = _agy_oauth_request(host, token, remaining / 2, project) if project else \
+                _agy_oauth_request(host, token, remaining / 2)
+            snap = parse_antigravity_local(payload, request_at, source=source)
         except (OSError, ValueError, TypeError, http.client.HTTPException, RecursionError):
             continue
         if snap:
             for original, target in ((snap.get("windows", {}), windows), (snap.get("idle_windows", {}), idle)):
-                target.update({key: row for key, row in original.items() if key not in windows and key not in idle})
+                new = {key: row for key, row in original.items() if key not in windows and key not in idle}
+                target.update(new)
+                provider_used.update({key: snap["provider_used_percent"][key] for key in new})
     if windows or idle:
-        return _snapshot(AGY_OAUTH_SOURCE, windows, idle, None, now)
+        return {**_snapshot(source, windows, idle, None, now), "provider_used_percent": provider_used}
     return unavailable(AGY_OAUTH_SOURCE, "failed", "Antigravity returned no usable quota summary")
 
 
@@ -806,6 +919,13 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
     Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Re-reading
     an export never advances its observation time.
     """
+    keychain = config.get("oauth_cli_keychain") is True
+    if sum((keychain, "oauth_acp_file" in config, "oauth_session_file" in config)) > 1:
+        return unavailable(AGY_OAUTH_SOURCE, "no-auth", "Select only one Antigravity OAuth profile type")
+    if keychain:
+        return _observe_antigravity_oauth(None, timeout, keychain=True)
+    if "oauth_acp_file" in config:
+        return _observe_antigravity_oauth(config["oauth_acp_file"], timeout, acp=True)
     if "oauth_session_file" in config:
         return _observe_antigravity_oauth(config["oauth_session_file"], timeout)
     if config.get("reuse_running") is True:
@@ -865,6 +985,7 @@ def parse_copilot(body: str, observed_at: dt.datetime | None = None) -> dict[str
     minutes = _month_minutes_before(reset) if reset else None
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
+    provider_used: dict[str, float] = {}
     for key, name, label in (("premium_interactions", "premium_monthly", "Premium"),
                              ("chat", "chat_monthly", "Chat")):
         snap = snapshots.get(key)
@@ -873,12 +994,17 @@ def parse_copilot(body: str, observed_at: dt.datetime | None = None) -> dict[str
         remaining = snap.get("percent_remaining")
         if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
             continue
-        _add(windows, idle, name, _percent(100.0 - float(remaining)), reset, minutes, label)
+        used = 100.0 - float(remaining)
+        _add(windows, idle, name, _percent(used), reset, minutes, label)
+        if 0 <= used <= 100:
+            provider_used[name] = round(used, 8)
     if not windows and not idle:
         return None
     plan = payload.get("copilot_plan")
-    return _snapshot(COPILOT_SOURCE, windows, idle,
-                     f"Copilot {plan.capitalize()}" if isinstance(plan, str) and plan else None, observed_at)
+    result = _snapshot(COPILOT_SOURCE, windows, idle,
+                       f"Copilot {plan.capitalize()}" if isinstance(plan, str) and plan else None, observed_at)
+    result["provider_used_percent"] = provider_used  # informational; routing keeps whole percentage points
+    return result
 
 
 def _providers_module():
@@ -934,10 +1060,63 @@ def observe_copilot(config: dict[str, Any], timeout: int = 5, opener: Callable[.
     return parse_copilot(body) or unavailable(COPILOT_SOURCE, "malformed", "Copilot answer carried no metered quota")
 
 
+# Cash telemetry is not a quota window and does not modify the free-only price gate.
+OPENROUTER_SOURCE = "openrouter-account"
+OPENROUTER_BASE = "https://openrouter.ai/api/v1/"
+OPENROUTER_CASH_FIELDS = {
+    "credits": {"total_credits": "account_credits_usd", "total_usage": "account_usage_usd"},
+    "key": {"limit": "key_limit_usd", "limit_remaining": "key_limit_remaining_usd", "usage": "key_usage_usd",
+            "usage_daily": "key_usage_daily_usd", "usage_weekly": "key_usage_weekly_usd",
+            "usage_monthly": "key_usage_monthly_usd"},
+}
+
+
+def openrouter_key_path() -> Path:
+    # Same authority as openrouter-agent.sh, with no environment-token or management-key fallback.
+    return Path(os.environ.get("OPENROUTER_KEY_FILE") or Path.home() / ".config/orchestrator/openrouter_api_key")
+
+
+def observe_openrouter(config: dict[str, Any], timeout: int = 5,
+                       opener: Callable[..., Any] | None = None) -> dict[str, Any]:
+    try:
+        key = _owner_file(openrouter_key_path()).decode("utf-8").strip()
+    except (OSError, ValueError):
+        key = ""
+    if not key or not re.fullmatch(r"[!-~]{1,16000}", key):
+        return unavailable(OPENROUTER_SOURCE, "no-key", "No existing private OpenRouter wrapper key file")
+    cash: dict[str, float] = {}
+    statuses = []
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    per_request = reader_timeout("openrouter", config, timeout) / len(OPENROUTER_CASH_FIELDS)
+    for endpoint, fields in OPENROUTER_CASH_FIELDS.items():
+        try:
+            status, body = _http_get(OPENROUTER_BASE + endpoint, headers, per_request, opener)
+            statuses.append(status)
+            if status != 200:
+                continue
+            data = _mapping(_mapping(_json(body)).get("data"))
+            for field, output in fields.items():
+                amount = _finite_amount(data.get(field))
+                if amount is not None:
+                    cash[output] = amount
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            continue
+    if not cash:
+        if statuses and all(status in (401, 403) for status in statuses):
+            return unavailable(OPENROUTER_SOURCE, "unauthorized", "OpenRouter rejected the existing wrapper key")
+        return unavailable(OPENROUTER_SOURCE, "failed", "No OpenRouter cash telemetry returned")
+    if "account_credits_usd" in cash and "account_usage_usd" in cash:
+        balance = cash["account_credits_usd"] - cash["account_usage_usd"]
+        if math.isfinite(balance):
+            cash["account_balance_usd"] = balance
+    return {**_snapshot(OPENROUTER_SOURCE, {}, {}), "account_usage": cash}
+
+
 OBSERVERS: dict[str, Callable[..., dict[str, Any]]] = {
     "codex": observe_codex,
     "codex-oauth": observe_codex_oauth,
     "claude": observe_claude,
     "antigravity": observe_antigravity,
     "copilot": observe_copilot,
+    "openrouter": observe_openrouter,
 }
