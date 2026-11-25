@@ -158,19 +158,56 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(gemini.note?.hasPrefix("Last reading kept") == true)
     }
 
-    func testGoogleAIProRendersEachAllowanceWithItsOwnModelsAndPolicy() throws {
+    func testLegacyGlanceKeepsGoogleAIProUsageButDoesNotOfferPerPoolWrites() throws {
         let card = try XCTUnwrap(presenter().card(for: "agy"))
         XCTAssertEqual(card.heading, "Google AI Pro")
         let sections = card.allowanceSections
         XCTAssertEqual(sections.map(\.id), ["antigravity-gemini", "antigravity-3p", "antigravity-argon"])
         XCTAssertEqual(sections.map { $0.rows.map(\.title) },
-                       [["Gemini weekly", "Gemini 5-hour"], ["Claude/GPT weekly"], ["Argon weekly"]])
+                       [["Gemini weekly", "Gemini 5-hour"], ["Claude/GPT weekly"], ["Weekly · Argon only"]])
         XCTAssertEqual(sections.map(\.models), [["Gemini 3.8 Flash"], ["Opus 5.5", "Sonnet 5.5"], ["Gemini 4 Argon"]])
-        XCTAssertEqual(sections.map(\.level), [.normal, .normal, .normal])
-        XCTAssertEqual(sections.map { $0.attribution?.actor }, [.agent, .operator_, nil])
+        XCTAssertTrue(sections.allSatisfy { $0.policy == nil })
+        XCTAssertNil(card.subscriptionPolicy, "legacy CLI cannot take the subscription target")
         XCTAssertEqual(sections[0].rows.map(\.usedText), ["1% used", "0% used"])
         XCTAssertEqual(sections[2].rows.first?.usedText, "Not read")
         XCTAssertNil(sections[2].rows.first?.bar, "do not invent usage for an unread allowance")
+    }
+
+    func testGoogleAIProHasOneMixedPolicyAndEachWindowKeepsItsReset() throws {
+        let view = try presenter("glance-round6.json")
+        let card = try XCTUnwrap(view.card(for: "agy"))
+        let rows = card.allowanceSections.flatMap(\.rows)
+        XCTAssertEqual(view.tabs.map(\.id).filter { $0 == "agy" }.count, 1)
+        XCTAssertEqual(rows.map(\.title), ["Gemini weekly", "Gemini 5-hour", "Claude/GPT weekly", "Weekly · Argon only"])
+        XCTAssertEqual(rows.map(\.resetText), ["Resets in 5d 11h", "Reset unknown", "Reset unknown", "Reset unknown"])
+        XCTAssertEqual(rows.map(\.usedText), ["1% used", "0% used", "44% used", "Not read"])
+        XCTAssertNil(rows.last?.bar)
+        XCTAssertTrue(card.allowanceSections.allSatisfy { $0.policy == nil })
+        let policy = try XCTUnwrap(card.subscriptionPolicy)
+        XCTAssertEqual(policy.id, "antigravity")
+        XCTAssertTrue(policy.isMixed)
+        XCTAssertNil(policy.level)
+        XCTAssertEqual(policy.attribution?.line(now: fixtureNow), "Set by an agent · 23 min ago")
+        XCTAssertEqual(view.card(for: "claude")?.sections.first?.policy?.level, .normal)
+        XCTAssertEqual(view.card(for: "claude")?.sections.first?.policy?.attribution?.actor, .operator_)
+    }
+
+    func testModelNamesExcludeArchivesAndKeepCostRankedFamiliesTogether() throws {
+        let card = try XCTUnwrap(presenter("glance-round6.json").card(for: "agy"))
+        XCTAssertEqual(card.allowanceSections.map(\.models),
+                       [["Gemini 4 Neon", "Gemini 4 Hydrogen"], ["Opus 5.5", "Sonnet 5.5", "GPT-6.2 Sol"], ["Gemini 4 Argon"]])
+        let data = json(#"{"schema":1,"pools":[{"pool":"claude","models":[{"name":"A retired","family":"A","typical_cost_usd":100,"archived":true},{"name":"A current","family":"A","typical_cost_usd":1,"archived":false},{"name":"B current","family":"B","typical_cost_usd":2,"archived":false}]}]}"#)
+        let p = Presenter(glance: try Glance.decode(data), loadedAt: fixtureNow, now: fixtureNow)
+        XCTAssertEqual(p.card(for: "other")?.sections.first?.models, ["B current", "A current"])
+    }
+
+    func testUnreadWindowCanStillHaveAKnownReset() throws {
+        let data = json(#"{"schema":1,"pools":[{"pool":"antigravity-argon","limits":[{"kind":"window","title":"Weekly","reset_at":"2026-11-25T10:55:57Z"}]}]}"#)
+        let p = Presenter(glance: try Glance.decode(data), loadedAt: fixtureNow, now: fixtureNow)
+        let row = try XCTUnwrap(p.card(for: "agy")?.allowanceSections.first?.rows.first)
+        XCTAssertEqual(row.usedText, "Not read")
+        XCTAssertNil(row.bar)
+        XCTAssertEqual(row.resetText, "Resets in 1h 2m")
     }
 
     func testMarksFollowProviderIncludingOtherPoolRows() throws {

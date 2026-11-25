@@ -45,13 +45,62 @@ public struct Limit: Decodable, Equatable {
     }
 }
 
+public struct GlanceModel: Decodable, Equatable {
+    public let id: String?
+    public let name: String
+    public let family: String?
+    public let typicalCostUSD: Double?
+    public let archived: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name, model, family, typicalCostUSD = "typical_cost_usd", archived
+    }
+
+    public init(from decoder: Decoder) throws {
+        // Older schema-1 glance sends model names alone.
+        if let name = try? decoder.singleValueContainer().decode(String.self) {
+            self.name = name
+            id = nil
+            family = nil; typicalCostUSD = nil; archived = false
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .model)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? c.decode(String.self, forKey: .model)
+        family = try c.decodeIfPresent(String.self, forKey: .family)
+        typicalCostUSD = try c.decodeIfPresent(Double.self, forKey: .typicalCostUSD)
+        archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
+    }
+}
+
+public struct GlanceSubscription: Decodable, Equatable {
+    public let id: String
+    public var level: String
+    public var levelControl: PolicyAttribution?
+
+    enum CodingKeys: String, CodingKey { case id, level, levelControl = "level_control" }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        level = try c.decode(String.self, forKey: .level)
+        levelControl = (try? PolicyAttribution(from: decoder)) ?? (try? c.decode(PolicyAttribution.self, forKey: .levelControl))
+    }
+}
+
 public struct Pool: Decodable, Equatable {
     public var pool: String
+    public var subscription: String?
     public var name: String
     public var label: String?
     public var level: String?
     public var levelControl: PolicyAttribution?
-    public var models: [String]
+    public var models: [GlanceModel]
+    public var archivedModels: [GlanceModel]
+    public var credits: Credits?
+    public var statusURL: String?
+    public var usageCost: UsageCost?
+    public var perModel: [ModelSpend]
     public var state: String?
     public var measured: Bool
     public var full: Bool
@@ -65,19 +114,26 @@ public struct Pool: Decodable, Equatable {
     public var staleAgeS: Double?
 
     enum CodingKeys: String, CodingKey {
-        case pool, name, label, level, state, measured, full, usedPercent = "used_percent", resets
+        case pool, subscription, name, label, level, state, measured, full, usedPercent = "used_percent", resets
         case resetAt = "reset_at", pace, limits, gaugeError = "gauge_error", staleAgeS = "stale_age_s"
-        case levelControl = "level_control", models
+        case levelControl = "level_control", models, archivedModels = "archived"
+        case credits, statusURL = "status_url", usageCost = "usage_cost", perModel = "per_model"
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         pool = try c.decode(String.self, forKey: .pool)
+        subscription = try? c.decodeIfPresent(String.self, forKey: .subscription)
         name = (try? c.decode(String.self, forKey: .name)) ?? pool
         label = try? c.decodeIfPresent(String.self, forKey: .label)
         level = try? c.decodeIfPresent(String.self, forKey: .level)
-        levelControl = try? c.decodeIfPresent(PolicyAttribution.self, forKey: .levelControl)
-        models = (try? c.decode([String].self, forKey: .models)) ?? []
+        levelControl = (try? PolicyAttribution(from: decoder)) ?? (try? c.decode(PolicyAttribution.self, forKey: .levelControl))
+        models = (try? c.decode([GlanceModel].self, forKey: .models)) ?? []
+        archivedModels = (try? c.decode([GlanceModel].self, forKey: .archivedModels)) ?? []
+        credits = try? c.decode(Credits.self, forKey: .credits)
+        statusURL = try? c.decode(String.self, forKey: .statusURL)
+        usageCost = try? c.decode(UsageCost.self, forKey: .usageCost)
+        perModel = (try? c.decode([ModelSpend].self, forKey: .perModel)) ?? []
         state = try? c.decodeIfPresent(String.self, forKey: .state)
         measured = (try? c.decode(Bool.self, forKey: .measured)) ?? false
         full = (try? c.decode(Bool.self, forKey: .full)) ?? false
@@ -141,11 +197,12 @@ public struct Glance: Decodable, Equatable {
     public var schema: Int
     public var title: String
     public var pools: [Pool]
+    public var subscriptions: [GlanceSubscription]
     public var readings: Readings?
     /// Nil when the key is missing (an older fleetctl): the menu then says spend is unavailable.
     public var spend: Spend?
 
-    enum CodingKeys: String, CodingKey { case schema, title, pools, readings, spend = "subscription_spend" }
+    enum CodingKeys: String, CodingKey { case schema, title, pools, subscriptions, readings, spend = "subscription_spend" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,8 +210,27 @@ public struct Glance: Decodable, Equatable {
         guard schema == 1 else { throw GlanceError.unsupportedSchema(schema) }
         title = (try? c.decode(String.self, forKey: .title)) ?? ""
         pools = try c.decode([Pool].self, forKey: .pools)
+        subscriptions = (try? c.decode([GlanceSubscription].self, forKey: .subscriptions)) ?? []
         readings = try? c.decodeIfPresent(Readings.self, forKey: .readings)
         spend = try? c.decodeIfPresent(Spend.self, forKey: .spend)
+    }
+
+    public func policyLevel(for id: String) -> String? {
+        subscriptions.first { $0.id == id }?.level ?? pools.first { $0.pool == id }?.level
+    }
+
+    /// The command committed, but its readback failed. Keep the confirmed level without inventing an actor.
+    public mutating func applyConfirmed(_ change: PolicyChange) {
+        let subscription = subscriptions.firstIndex { $0.id == change.pool }
+        if let subscription {
+            subscriptions[subscription].level = change.level.rawValue
+            subscriptions[subscription].levelControl = nil
+        }
+        for index in pools.indices where pools[index].pool == change.pool
+            || (subscription != nil && pools[index].subscription == change.pool) {
+            pools[index].level = change.level.rawValue
+            pools[index].levelControl = nil
+        }
     }
 
     /// Decodes fleetctl's stdout. Any other schema, or a body that is not glance JSON, is refused.

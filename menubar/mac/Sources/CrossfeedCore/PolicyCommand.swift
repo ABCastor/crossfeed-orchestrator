@@ -1,6 +1,7 @@
 import Foundation
 
 public struct PolicyChange: Equatable, Hashable {
+    /// A pool or a subscription ID, resolved and audited by fleetctl.
     public let pool: String
     public let level: SpendLevel
 
@@ -17,8 +18,8 @@ public struct PolicyEdits {
 
     public init() {}
 
-    public mutating func begin(_ change: PolicyChange, current: SpendLevel?) -> Bool {
-        guard pending == nil, let current, current != change.level else { return false }
+    public mutating func begin(_ change: PolicyChange, current: SpendLevel?, mixed: Bool = false) -> Bool {
+        guard pending == nil, mixed || (current != nil && current != change.level) else { return false }
         pending = change
         notices[change.pool] = nil
         return true
