@@ -127,7 +127,7 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 
 ## BR-SELECT-010 — Grade included Crossfeed Chat against documented benchmark identities [OPERATOR-DIRECTED 2026-11-25]
 
-- RULE: Use outside grades only for the documented backing model and exact effort of a saved Chat row. Keep the route identity, local checks and caps separate. Charge no incremental dollars for an included Chat route when its allowance has no sourced dollar equivalent; retain its switches, admission, refusal, role and model quota gates.
+- RULE: Use outside grades only for the documented backing model and exact effort of a saved Chat row. Keep the route identity, local checks and caps separate. Charge no incremental dollars for an included native Chat route when its allowance has no sourced dollar equivalent; retain its switches, admission, refusal, role and model quota gates. The separate Pi tool relay keeps its existing fallback policy.
 - Authority: Operator, 25 Nov: “we don't use Crossfeed chat enough, and it's free ... probably because we don't have the benchmarks, and it just doesn't trust it”.
 - implemented-by: `scripts/chatgpt_catalog.py:benchmark_cell` · `scripts/selector.py:option_evidence`, `routing_price` · `scripts/evidence.py:configured_benchmark_rows`.
 - tested-by: `tests/test_business_round6.py::test_chat_uses_exact_effort_benchmark_and_keeps_route_identity`.

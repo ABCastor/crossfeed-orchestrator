@@ -2289,7 +2289,8 @@ def set_model_archive(roster: dict, runtime: dict, pool: str, model: str, archiv
     if not archived and actor != "owner" and record.get("actor") == "owner" and record.get("value") is False:
         raise FleetError(f"{key}: the operator archived this model; restore requires --owner")
     check_control(runtime, control, not archived, actor)
-    if model_archived(roster, runtime, pool, key) != archived:
+    if model_archived(roster, runtime, pool, key) != archived or (
+            archived and actor == "owner" and record.get("actor") != "owner"):
         record_control(runtime, control, record.get("value", True), not archived, actor, reason, restrict=archived)
     return key
 
@@ -5354,11 +5355,11 @@ def model_family(roster: dict, key: str) -> str:
 
 def sort_model_families(rows, *, key="model"):
     high, earliest = {}, {}
-    for row in rows:
+    for ordinal, row in enumerate(rows):
         family, cost = row["family"], row["typical_cost_usd"]
         if cost is not None:
             high[family] = max(high.get(family, 0), cost)
-        earliest[family] = min(earliest.get(family, float("inf")), row.get("_order", float("inf")))
+        earliest[family] = min(earliest.get(family, float("inf")), row.get("_order", ordinal))
     return sorted(rows, key=lambda row: (-high.get(row["family"], -1), earliest[row["family"]]
                                          if row["family"] not in high else 0,
                                          row["family"].casefold(),

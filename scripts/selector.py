@@ -554,9 +554,9 @@ def routing_price(item):
     if cash["funding"] not in {"included", "verified-free"}:
         return None
     cost, binding = item["cost"], item["pool_price"]
-    # BR-SELECT-010: an existing Chat subscription has no per-request bill or
-    # sourced conversion from its separate caps to dollars; cap gates still apply.
-    if cash["funding"] == "included" and item["pool"] == "chatgpt-work":
+    # BR-SELECT-010: native Chat has no incremental bill or sourced conversion
+    # of its caps to dollars. The separately admitted Pi tool relay is still a fallback.
+    if cash["funding"] == "included" and item["pool"] == "chatgpt-work" and item["harness"] == "chatgpt-chat":
         return 0.0
     capacity = item.get("capacity") or {}
     # Relative API-weighted debits lack a specific window. Treat them as
@@ -873,7 +873,7 @@ def comparison_cost(roster, option, row, fleet):
     }.get(basis, "No measured or sourced job debit is available for this route.")
     if option["funding"] == "metered":
         why = "Routing uses estimated incremental cash instead of a subscription debit."
-    elif pool == "chatgpt-work" and option["funding"] == "included":
+    elif pool == "chatgpt-work" and option["funding"] == "included" and option["harness"] == "chatgpt-chat":
         why = "This chat is included at zero incremental cost, but its separate limits are still enforced."
     return {"family": fleet.model_family(roster, option["model_key"]),
             "typical_cost_usd": api, "api_cost_usd": api, "quota_cost_usd": routing_price(option),
