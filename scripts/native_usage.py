@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import calendar
 import datetime as dt
+import fcntl
 import http.client
 import importlib.util
 import json
@@ -36,6 +37,9 @@ import signal
 import ssl
 import stat
 import subprocess
+import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -229,12 +233,15 @@ def parse_codex(result: Any, observed_at: dt.datetime | None = None) -> dict[str
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
     plan = None
+    spend_credits = {}
     for limit_id, bucket in buckets.items():
         if not isinstance(bucket, dict):
             continue
         general = limit_id == "codex"
-        if general and isinstance(bucket.get("planType"), str):
-            plan = bucket["planType"].strip().capitalize() or None
+        if general:
+            if isinstance(bucket.get("planType"), str):
+                plan = bucket["planType"].strip().capitalize() or None
+            spend_credits = _mapping(bucket.get("credits"))
         scope = _label(bucket.get("limitName")) or limit_id
         for slot in ("primary", "secondary"):
             window = bucket.get(slot)
@@ -246,9 +253,12 @@ def parse_codex(result: Any, observed_at: dt.datetime | None = None) -> dict[str
             name = _duration_name(minutes) if general else f"{limit_id}-{_duration_name(minutes)}"
             label = _duration_label(minutes) if general else f"{scope} only"
             _add(windows, idle, name, used, _parse_time(window.get("resetsAt")), minutes, label)
-    if not windows and not idle:
-        return None
-    return _snapshot(CODEX_SOURCE, windows, idle, plan, observed_at)
+    result = _snapshot(CODEX_SOURCE, windows, idle, plan, observed_at)
+    balance = _finite_amount(spend_credits.get("balance")) if spend_credits.get("unlimited") is not True else None
+    if balance is not None:
+        result["credits"] = _credit(balance, "credits", CODEX_SOURCE,
+                                    spend_credits.get("expiresAt"), spend_credits.get("renewsAt"))
+    return result if windows or idle or "credits" in result else None
 
 
 def _codex_exchange(binary: str, timeout: int) -> tuple[str, Any]:
@@ -323,6 +333,8 @@ def observe_codex(config: dict[str, Any], timeout: int = 5,
 # ---- Codex OAuth (CodexBar v0.67.0; see NOTICE) ----------------------------------------------------
 CODEX_OAUTH_SOURCE = "codex-oauth-usage"
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CODEX_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+CODEX_RESET_CREDITS_SOURCE = "codex-oauth-rate-limit-reset-credits"
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -334,8 +346,36 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _credit(balance, unit, source, expires_at=None, renews_at=None):
+    expiry, renewal = _parse_time(expires_at), _parse_time(renews_at)
+    return {"balance": balance, "unit": unit, "source": source,
+            "expires_at": _iso(expiry) if expiry else None, "renews_at": _iso(renewal) if renewal else None}
+
+
+def parse_codex_reset_credits(payload: Any, observed_at: dt.datetime) -> dict[str, Any] | None:
+    """Only available, unexpired credits; never persist redemption identifiers."""
+    root = _mapping(payload)
+    rows = root.get("credits")
+    if not isinstance(rows, list) or type(root.get("available_count")) is not int:
+        return None
+    expirations = []
+    for raw in rows:
+        row = _mapping(raw)
+        if row.get("status") != "available":
+            continue
+        raw_expiry = row.get("expires_at")
+        expiry = _parse_time(raw_expiry)
+        if (raw_expiry is not None and expiry is None) or (expiry and expiry <= observed_at):
+            continue
+        expirations.append(_iso(expiry) if expiry else None)
+    expirations.sort(key=lambda value: (value is None, value))
+    return {**_credit(len(expirations), "limit resets", CODEX_RESET_CREDITS_SOURCE,
+                      expirations[0] if expirations else None, root.get("renews_at")),
+            "expirations": expirations}
+
+
 def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
-    """Map only quota windows; reset credits and spend-control data are not time windows."""
+    """Quota windows and spend credits; reset-credit inventory is a separate read."""
     root = _mapping(payload)
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
@@ -373,6 +413,8 @@ def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> d
                        plan.strip().capitalize() if isinstance(plan, str) else None, observed_at)
     if balance is not None:
         result["account_usage"] = {"credits_balance": balance}
+        result["credits"] = _credit(balance, "credits", CODEX_OAUTH_SOURCE,
+                                    credits.get("expires_at"), credits.get("renews_at"))
     return result
 
 
@@ -401,10 +443,26 @@ def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
     if isinstance(account, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", account):
         headers["ChatGPT-Account-Id"] = account
     try:
-        status, body = _http_get(CODEX_USAGE_URL, headers, reader_timeout("codex-oauth", config, timeout), opener)
+        budget = reader_timeout("codex-oauth", config, timeout)
+        supplemental = config.get("reset_credits") is True
+        extra_timeout = min(4, budget / 3) if supplemental else 0
+        status, body = _http_get(CODEX_USAGE_URL, headers, budget - extra_timeout, opener)
         if status == 200:
-            return parse_codex_oauth(_json(body)) or unavailable(
-                CODEX_OAUTH_SOURCE, "malformed", "Codex reported no OAuth rate-limit windows")
+            observed = parse_codex_oauth(_json(body))
+            if not observed:
+                return unavailable(CODEX_OAUTH_SOURCE, "malformed", "Codex reported no OAuth usage")
+            if supplemental:
+                status, body = _http_get(CODEX_RESET_CREDITS_URL, headers, extra_timeout, opener)
+                if status == 200:
+                    inventory = parse_codex_reset_credits(_json(body), _now())
+                    if inventory is None:
+                        return unavailable(CODEX_OAUTH_SOURCE, "malformed", "Codex reset-credit inventory was unreadable")
+                    if "credits" in observed:
+                        observed["spend_credits"] = observed["credits"]
+                    observed["credits"] = inventory
+                else:
+                    return unavailable(CODEX_OAUTH_SOURCE, "failed", f"Codex reset credits returned HTTP {status}")
+            return observed
         if status in (401, 403):
             return unavailable(CODEX_OAUTH_SOURCE, "unauthorized", "Codex ChatGPT sign-in was rejected; no renewal attempted")
         return unavailable(CODEX_OAUTH_SOURCE, "failed", f"Codex usage endpoint returned HTTP {status}")
@@ -462,9 +520,18 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
             if isinstance(window, dict):
                 _add(windows, idle, name, _percent(window.get("utilization")),
                      _parse_time(window.get("resets_at")), minutes, label)
-    if not windows and not idle:
-        return None
-    return _snapshot(CLAUDE_SOURCE, windows, idle, plan, observed_at)
+    extra = _mapping(payload.get("extra_usage"))
+    cap, spent = (_finite_amount(extra.get(key)) for key in ("monthly_limit", "used_credits"))
+    result = _snapshot(CLAUDE_SOURCE, windows, idle, plan, observed_at)
+    if extra.get("is_enabled") is True and cap is not None and spent is not None and min(cap, spent) >= 0:
+        currency = extra.get("currency") or "USD"
+        if isinstance(currency, str) and re.fullmatch(r"[A-Z]{3}", currency):
+            # Claude OAuth reports currency minor units. This is remaining paid headroom,
+            # not a quota reset or a grant of free spend.
+            result["credits"] = {**_credit(max(0, cap - spent) / 100, currency, CLAUDE_SOURCE,
+                                           extra.get("expires_at"), extra.get("renews_at")),
+                                 "kind": "extra_usage", "used": spent / 100, "limit": cap / 100}
+    return result if windows or idle or "credits" in result else None
 
 
 def _claude_credential_records() -> list[dict[str, Any]]:
@@ -1087,7 +1154,8 @@ def observe_openrouter(config: dict[str, Any], timeout: int = 5,
     cash: dict[str, float] = {}
     statuses = []
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
-    per_request = reader_timeout("openrouter", config, timeout) / len(OPENROUTER_CASH_FIELDS)
+    activity = config.get("activity") is True
+    per_request = reader_timeout("openrouter", config, timeout) / (len(OPENROUTER_CASH_FIELDS) + activity)
     for endpoint, fields in OPENROUTER_CASH_FIELDS.items():
         try:
             status, body = _http_get(OPENROUTER_BASE + endpoint, headers, per_request, opener)
@@ -1101,7 +1169,7 @@ def observe_openrouter(config: dict[str, Any], timeout: int = 5,
                     cash[output] = amount
         except (OSError, ValueError, http.client.HTTPException, RecursionError):
             continue
-    if not cash:
+    if not cash or statuses != [200, 200]:
         if statuses and all(status in (401, 403) for status in statuses):
             return unavailable(OPENROUTER_SOURCE, "unauthorized", "OpenRouter rejected the existing wrapper key")
         return unavailable(OPENROUTER_SOURCE, "failed", "No OpenRouter cash telemetry returned")
@@ -1109,7 +1177,359 @@ def observe_openrouter(config: dict[str, Any], timeout: int = 5,
         balance = cash["account_credits_usd"] - cash["account_usage_usd"]
         if math.isfinite(balance):
             cash["account_balance_usd"] = balance
-    return {**_snapshot(OPENROUTER_SOURCE, {}, {}), "account_usage": cash}
+    result = {**_snapshot(OPENROUTER_SOURCE, {}, {}), "account_usage": cash}
+    if activity:
+        try:
+            status, body = _http_get(OPENROUTER_BASE + "activity", headers, per_request, opener)
+            if status == 200:
+                rows = parse_openrouter_activity(_json(body), _now().date())
+                if rows is not None:
+                    result["per_model"] = rows
+                else:
+                    return unavailable(OPENROUTER_SOURCE, "malformed", "OpenRouter activity response was unreadable")
+            elif status in (401, 403):
+                result["per_model_error"] = "OpenRouter activity requires a management key with Activity read access"
+            else:
+                return unavailable(OPENROUTER_SOURCE, "failed", f"OpenRouter activity returned HTTP {status}")
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            return unavailable(OPENROUTER_SOURCE, "failed", "OpenRouter activity request failed")
+    return result
+
+
+def parse_openrouter_activity(payload: Any, today: dt.date) -> list[dict[str, Any]] | None:
+    """Official Activity rows, grouped by day/endpoint; report the last 30 completed UTC days."""
+    rows = _mapping(payload).get("data")
+    if not isinstance(rows, list):
+        return None
+    start = today - dt.timedelta(days=30)
+    grouped: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        row = _mapping(raw)
+        try:
+            day = dt.date.fromisoformat(str(row.get("date")))
+        except ValueError:
+            return None  # don't pass incomplete account totals as complete
+        if not start <= day < today:
+            continue
+        model, requests = row.get("model"), row.get("requests")
+        amount = _finite_amount(row.get("usage"))
+        if (not isinstance(model, str) or not re.fullmatch(r"[\w./:-]{1,200}", model, re.ASCII)
+                or type(requests) is not int or requests < 0 or amount is None or amount < 0):
+            return None
+        total = grouped.setdefault(model, {"model": model, "usd_30d": 0.0, "requests": 0})
+        total["usd_30d"] += amount
+        total["requests"] += requests
+        if not math.isfinite(total["usd_30d"]):
+            return None
+    return sorted(grouped.values(), key=lambda row: (-row["usd_30d"], row["model"]))
+
+
+STATUS_URLS = {
+    "codex": "https://status.openai.com/", "codex-oauth": "https://status.openai.com/",
+    "chatgpt-work": "https://status.openai.com/", "claude": "https://status.claude.com/",
+    "antigravity": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+    "opencode-go": "https://status.opencode.ai/", "copilot": "https://www.githubstatus.com/",
+    "github-copilot-student": "https://www.githubstatus.com/", "openrouter": "https://status.openrouter.ai/",
+    "openrouter-free": "https://status.openrouter.ai/",
+}
+
+
+def display_observation(snapshot, failure, now, ttl_s):
+    """Age from the stored measurement, not from routing policy or its last failed refresh."""
+    stamp = _parse_time(snapshot.get("observed_at"))
+    if stamp is None:
+        return {}
+    age = max(0, int((now - stamp).total_seconds()))
+    return {"reading_age_s": age, "reading_source": snapshot.get("source") or "unknown",
+            "reading_observed_at": _iso(stamp), "reading_stale": bool(failure) or age > ttl_s}
+
+
+def display_extras(pool, config, snapshot, failure, state_dir, now, *, refresh):
+    reader = _mapping(config.get("quota_refresh"))
+    oracle = reader.get("oracle")
+    ttl_s = _finite_amount(reader.get("ttl_s")) if snapshot.get("account_usage") and not snapshot.get("windows") else None
+    projection = display_observation(snapshot, failure, now, ttl_s or 3600)
+    status = (STATUS_URLS.get(oracle) if isinstance(oracle, str) else None) or STATUS_URLS.get(pool)
+    if status:
+        projection["status_url"] = status
+    for field in ("credits", "spend_credits", "per_model", "per_model_error", "account_usage"):
+        if field in snapshot:
+            projection[field] = snapshot[field]
+    cost = usage_cost(reader, state_dir, now, refresh=refresh)
+    if cost is not None:
+        projection["usage_cost"] = cost
+    return projection
+
+
+# ---- Native CLI log cost (API list-price equivalents, not bills) -------------------------------
+# CodexBar v0.67.0, Sources/CodexBarCore/Vendored/CostUsage/CostUsageScanner.swift
+# and CostUsageScanner+Claude.swift: read Codex token_count and Claude assistant JSONL,
+# account for cached tokens and avoid counting cumulative/streamed entries twice.
+COST_TTL_S = 1800
+COST_LINE_LIMIT = 4_000_000
+COST_PRICING_URL = "https://models.dev/api.json"
+COST_ORACLES = {"codex": "codex", "codex-oauth": "codex", "claude": "claude"}
+
+
+def _token_counts(usage, keys):
+    return tuple(v if type(v) is int and 0 <= v < 10**12 else 0 for v in (usage.get(k) for k in keys))
+
+
+def _cost_events(path, provider, deadline):
+    markers = ((b'"token_count"', b'"turn_context"', b'"session_meta"') if provider == "codex"
+               else (b'"assistant"',))
+    with path.open("rb") as stream:
+        while line := stream.readline(COST_LINE_LIMIT + 1):
+            if time.monotonic() > deadline:
+                raise TimeoutError("local cost scan exceeded its time budget")
+            if len(line) > COST_LINE_LIMIT:
+                while line and not line.endswith(b"\n"):
+                    line = stream.readline(COST_LINE_LIMIT + 1)
+                continue
+            if not any(marker in line for marker in markers) or (provider == "claude" and b'"usage"' not in line):
+                continue
+            try:
+                row = json.loads(line)
+            except (ValueError, RecursionError):
+                continue  # a writer may still be appending a record
+            if isinstance(row, dict):
+                yield row
+
+
+def _codex_cost_rows(events):
+    keys = ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens")
+    old, model, service, inherited = None, None, None, False
+    for row in events:
+        payload = _mapping(row.get("payload"))
+        kind = row.get("type")
+        if kind in {"turn_context", "session_meta"}:
+            # Forked histories can contain replayed events indistinguishable from real turns.
+            # Do not count them as new spend; coverage is explicitly lower when present.
+            inherited |= bool(payload.get("forked_from_id"))
+            model = payload.get("model") or model
+            service = payload.get("service_tier") or service
+        if kind != "event_msg" or payload.get("type") != "token_count":
+            continue
+        info = _mapping(payload.get("info"))
+        total_usage = _mapping(info.get("total_token_usage"))
+        last = _token_counts(_mapping(info.get("last_token_usage")), keys)
+        if total_usage:
+            total = _token_counts(total_usage, keys)
+            previous = old or (0, 0, 0, 0)
+            delta = tuple(max(0, val - base) for val, base in zip(total, previous))
+            if not any(delta) and total == old:
+                continue
+            if sum(total[:2]) < sum(previous[:2]):
+                delta = last  # counter restarted; don't bill its cumulative history again
+            old = total
+        else:
+            delta = last
+        model_evidence = info.get("model") or info.get("model_name") or payload.get("model") or model
+        yield row.get("timestamp"), model_evidence, delta, service, inherited
+
+
+def _usage_rates(models, model, tokens, provider):
+    if not isinstance(model, str):
+        return None
+    key = model.rsplit("/", 1)[-1]
+    entry = models.get(key) or models.get(re.sub(r"[-:]20\d\d-?\d\d-?\d\d$", "", key))
+    price = _mapping(_mapping(entry).get("cost"))
+    if key == "gpt-5.3-codex-spark" and not price:
+        return (0, 0, 0, 0)
+    tiers = price.get("tiers")
+    if isinstance(tiers, list):
+        threshold = -1
+        for raw in tiers:
+            band = _mapping(raw)
+            tier = _mapping(band.get("tier"))
+            size = tier.get("size")
+            if tier.get("type") == "context" and type(size) is int and threshold < size < tokens:
+                price, threshold = band, size
+    inp, out, read, write = (_finite_amount(price.get(key)) for key in ("input", "output", "cache_read", "cache_write"))
+    if inp is None or out is None or inp < 0 or out < 0:
+        return None
+    # Anthropic's 5-minute prompt-cache writes are 1.25x standard input.
+    return inp, out, read, write if write is not None else (inp * 1.25 if provider == "claude" else None)
+
+
+def _local_cost_roots(provider):
+    if provider == "codex":
+        root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        return [root / "sessions", root / "archived_sessions"]
+    # Include active CLI profile allocations but not Pi/OMP mirrored sessions.
+    roots = [Path.home() / ".claude"]
+    profile = os.environ.get("CLAUDE_CONFIG_DIR")
+    if profile:
+        roots.append(Path(profile))
+    return list(dict.fromkeys((root / "projects").resolve() for root in roots))
+
+
+def local_usage_cost(provider, roots, models, now=None):
+    """Thirty local calendar days including today. Unpriced/unfinished rows keep token totals only."""
+    now = now or _now()
+    today = now.astimezone().date()
+    start = today - dt.timedelta(days=29)
+    # Historical append-only files cannot contain today's usage if not modified in the scan window.
+    start_epoch = dt.datetime.combine(start, dt.time()).timestamp()
+    deadline = time.monotonic() + 300
+    existing_roots = [root for root in roots if root.is_dir()]
+    if not existing_roots:
+        return None
+    buckets = [[0, 0.0, 0], [0, 0.0, 0]]  # tokens, known estimate, missing coverage
+    claude_rows = {}
+    visited = set()
+
+    def add(day, model, amounts, service=None, excluded=False, one_hour=0):
+        inp, out, read, write = amounts
+        tokens = inp + out + (read + write if provider == "claude" else 0)
+        if not tokens:
+            return
+        rates = _usage_rates(models, model, tokens - out, provider)
+        regular = inp if provider == "claude" else max(0, inp - read - write)
+        counts = (regular, out, read, write - one_hour)
+        # Exact fast-mode schedules are not in the standard rate card. Don't present a partial
+        # USD number as complete if an extension, fork or model is not supported.
+        unsupported = excluded or service in ("fast", "priority") or rates is None or any(
+            amount and (rate is None or rate < 0) for amount, rate in zip(counts, rates or ()))
+        cost = 0 if unsupported else (sum(amount * (rate or 0) for amount, rate in zip(counts, rates))
+                                      + one_hour * rates[0] * 2) / 1_000_000
+        for bucket in (buckets if day == today else buckets[1:]):
+            bucket[0] += 0 if excluded else tokens
+            bucket[1] += cost
+            bucket[2] += unsupported
+
+    for root in existing_roots:
+        for path in root.rglob("*.jsonl"):
+            if path.is_symlink():
+                continue
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue  # log moved between directory enumeration and stat
+            identity = (info.st_dev, info.st_ino)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or identity in visited or info.st_mtime < start_epoch:
+                continue
+            visited.add(identity)
+            events = _cost_events(path, provider, deadline)
+            if provider == "codex":
+                for timestamp, model, amounts, service, inherited in _codex_cost_rows(events):
+                    stamp = _parse_time(timestamp)
+                    if stamp and start <= (day := stamp.astimezone().date()) <= today:
+                        add(day, model, amounts, service, inherited)
+            else:
+                for row in events:
+                    if row.get("type") != "assistant":
+                        continue
+                    stamp = _parse_time(row.get("timestamp"))
+                    if not stamp or not start <= (day := stamp.astimezone().date()) <= today:
+                        continue
+                    msg = _mapping(row.get("message"))
+                    usage = _mapping(msg.get("usage"))
+                    model = msg.get("model")
+                    if not isinstance(model, str) or model == "<synthetic>":
+                        continue
+                    amounts = _token_counts(usage, ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                                                   "cache_creation_input_tokens"))
+                    if not any(amounts):
+                        continue
+                    one_hour, = _token_counts(_mapping(usage.get("cache_creation")), ("ephemeral_1h_input_tokens",))
+                    one_hour = min(one_hour, amounts[3])
+                    message, scope = msg.get("id"), row.get("requestId") or row.get("sessionId")
+                    if all(isinstance(value, str) and value for value in (message, scope)):
+                        key = (message, scope)
+                        old = claude_rows.get(key)
+                        if old is None or (amounts[1], stamp) >= (old[2][1], old[0]):
+                            claude_rows[key] = (stamp, model, amounts, one_hour)
+                    else:
+                        add(day, model, amounts, one_hour=one_hour)
+    for stamp, model, amounts, one_hour in claude_rows.values():
+        add(stamp.astimezone().date(), model, amounts, one_hour=one_hour)
+    result = {"source": f"{provider}-cli-local-logs", "observed_at": _iso(now), "estimate": "API list price"}
+    for prefix, (tokens, cost, unknown) in zip(("today", "last_30d"), buckets):
+        result[f"{prefix}_tokens"] = tokens
+        result[f"{prefix}_usd"] = round(cost, 8) if not unknown else None
+    return result
+
+
+def _write_owner_json(path, value):
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
+        temp = Path(handle.name)
+        json.dump(value, handle)
+    os.replace(temp, path)
+
+
+def _cached_list_prices(provider, path):
+    try:
+        models = _mapping(json.loads(_owner_file(path)))
+        if models and time.time() - path.stat().st_mtime < 86400:
+            return models
+    except (OSError, ValueError, RecursionError):
+        models = {}
+    # Public pricing only. No local log data, tokens or account identity are sent.
+    try:
+        request = urllib.request.Request(COST_PRICING_URL, headers={"Accept": "application/json",
+                                                                  "User-Agent": "crossfeed-orchestrator/1.0"})
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(request, timeout=8) as response:
+            pricing = _mapping(json.loads(response.read(12_000_000)))
+        vendor = "openai" if provider == "codex" else "anthropic"
+        updated = {key: {"cost": value["cost"]} for key, value in
+                   _mapping(_mapping(pricing.get(vendor)).get("models")).items() if _mapping(value).get("cost")}
+        if updated:
+            _write_owner_json(path, updated)
+            return updated
+    except (OSError, ValueError, http.client.HTTPException, RecursionError):
+        pass
+    return models
+
+
+def _write_usage_cost(provider, cache):
+    try:
+        models = _cached_list_prices(provider, cache.with_name(f"{provider}-cli-list-prices.json"))
+        result = local_usage_cost(provider, _local_cost_roots(provider), models)
+        if result is None:
+            return
+        if result["last_30d_usd"] is None:
+            # A pricing outage can't replace a complete last-good cost with false zero or a subtotal.
+            old = _mapping(json.loads(_owner_file(cache))) if cache.exists() else {}
+            if old.get("last_30d_usd") is not None:
+                return
+        _write_owner_json(cache, result)
+    except (OSError, ValueError, RecursionError):
+        pass  # don't advance the timestamp for a failed scan
+
+
+def usage_cost(config, state_dir, now, *, refresh):
+    """Read immediately; one background scan per stale provider, never on the routing hot path."""
+    oracle = config.get("oracle")
+    provider = COST_ORACLES.get(oracle) if isinstance(oracle, str) else None
+    if not provider or config.get("local_usage_cost") is not True:
+        return None
+    cache = state_dir / f"{provider}-cli-usage-cost.json"
+    try:
+        saved = _mapping(json.loads(_owner_file(cache)))
+    except (OSError, ValueError, RecursionError):
+        saved = {}
+    stamp = _parse_time(saved.get("observed_at"))
+    age = max(0, int((now - stamp).total_seconds())) if stamp else None
+    if refresh and (age is None or age >= COST_TTL_S):
+        fd = None
+        try:
+            state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(cache.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Retry no faster than five minutes even when there are no logs or pricing is down.
+            if not os.fstat(fd).st_size or time.time() - os.fstat(fd).st_mtime >= 300:
+                os.pwrite(fd, b"1", 0)
+                child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--local-cost", provider,
+                                          str(cache.resolve())], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, start_new_session=True, pass_fds=(fd,))
+                threading.Thread(target=child.wait, daemon=True).start()
+        except OSError:
+            pass
+        finally:
+            if fd is not None:
+                os.close(fd)
+    return {**saved, "age_s": age, "stale": age >= COST_TTL_S} if stamp else None
 
 
 OBSERVERS: dict[str, Callable[..., dict[str, Any]]] = {
@@ -1120,3 +1540,8 @@ OBSERVERS: dict[str, Callable[..., dict[str, Any]]] = {
     "copilot": observe_copilot,
     "openrouter": observe_openrouter,
 }
+
+
+if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--local-cost" and sys.argv[2] in COST_ORACLES.values():
+    os.nice(10)
+    _write_usage_cost(sys.argv[2], Path(sys.argv[3]))

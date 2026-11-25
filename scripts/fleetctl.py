@@ -5501,7 +5501,8 @@ def recent_model_runs(state_dir: Path, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def fleet_overview(
-    roster: dict[str, Any], runtime: dict[str, Any], state_dir: Path, now: dt.datetime | None = None
+    roster: dict[str, Any], runtime: dict[str, Any], state_dir: Path, now: dt.datetime | None = None,
+    *, refresh_extras: bool = True,
 ) -> dict[str, Any]:
     now = now or utc_now()
     chatgpt_pro.refresh(roster, state_dir, now=now)
@@ -5586,11 +5587,20 @@ def fleet_overview(
             "lanes": lane_counts.get(pool, 0),
         }
         reading = snapshot or {}
+        entry.update(native_usage.display_extras(
+            pool, config, snapshots.get(pool) or {}, (runtime.get("quota_refresh_errors") or {}).get(pool),
+            state_dir, now, refresh=refresh_extras and not auto_refresh_disabled()))
         idle = (reading.get("idle_windows") or {}) if windows else {}
         if evidence.get("confidence") in {"direct", "aging"}:
             idle = {**idle, **agy_display_windows(reading)}
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, idle, evidence.get("spend_down") or [], now)
+        stored = snapshots.get(pool) or {}
+        last = {name: row for name, row in {
+            **(stored.get("windows") or {}), **(stored.get("idle_windows") or {}),
+        }.items() if name not in windows and name not in idle}
+        if last:
+            entry["last_observed_windows"] = last
         if entry["gauge_error"]:
             # A last-good reading kept through a failed read is older than the clock it would be
             # compared with: usage can only have grown since, so its surplus would be overstated.
@@ -5931,35 +5941,47 @@ def render_brief(
 
 
 def show_usage(
-    state_dir: Path, db_path: Path, as_json: bool, roster: dict[str, Any] | None = None
+    state_dir: Path, db_path: Path, as_json: bool, roster: dict[str, Any] | None = None,
+    *, refresh_extras: bool = True,
 ) -> None:
     runtime = load_json(state_dir / "runtime.json", {}) or {}
     state, evidence = current_pool_state(runtime, "opencode-go", roster=roster)
-    # All non-routing pools with a stored snapshot
+    # Spend levels affect routing, not what was actually read from the provider.
+    measured_runtime = _without_levels(runtime)
+    now = utc_now()
+    configs = (roster or {}).get("quota_pools") or {}
+    snapshots = runtime.get("quota_snapshots") or {}
+    errors = runtime.get("quota_refresh_errors") or {}
     quota_pools: dict[str, Any] = {}
-    for pool, snapshot in sorted((runtime.get("quota_snapshots") or {}).items()):
+    for pool, snapshot in sorted(snapshots.items()):
         if pool == ROUTING_POOL:
             continue
-        pool_state, pool_evidence = current_pool_state(runtime, pool, roster=roster)
+        pool_state, routing_evidence = current_pool_state(runtime, pool, now, roster=roster)
+        if pool_level(runtime, pool) == "normal":
+            pool_evidence = routing_evidence
+        else:
+            _, pool_evidence = current_pool_state(measured_runtime, pool, now, roster=roster)
         windows = pool_evidence.get("windows") or {}
-        observed_only = agy_display_windows(snapshot)
-        confidence = pool_evidence.get("confidence")
+        extras = native_usage.display_extras(pool, configs.get(pool) or {}, snapshot, errors.get(pool),
+                                             state_dir, now, refresh=refresh_extras and not auto_refresh_disabled())
+        observed_only = {**(snapshot.get("idle_windows") or {}), **agy_display_windows(snapshot)}
+        confidence = ("stale" if extras.get("reading_stale") else
+                      "direct" if extras.get("account_usage") and not windows else pool_evidence.get("confidence"))
         display = observed_only if confidence in {"direct", "aging"} else {}
-        last = {}
-        if confidence == "stale" and snapshot.get("source") in AGY_SNAPSHOT_SOURCES:
-            last = {**observed_only, **(snapshot.get("windows") or {})}
-            last = {name: row for name, row in last.items() if name not in windows}
+        last = {name: row for name, row in {**observed_only, **(snapshot.get("windows") or {})}.items()
+                if name not in windows and name not in display}
         quota_pools[pool] = {
             "quota_state": pool_state,
-            "band": task_band(pool_state, pool_evidence),
+            "band": task_band(pool_state, routing_evidence),
             "bottleneck_used_percent": pool_evidence.get("bottleneck_used_percent"),
             "binding_used_percent": pool_evidence.get("binding_used_percent"),
             "non_binding": pool_evidence.get("non_binding") or [],
             "spend_down": pool_evidence.get("spend_down") or [],
-            "confidence": pool_evidence.get("confidence"),
-            "age_seconds": pool_evidence.get("age_seconds"),
-            "observed_at": snapshot.get("observed_at"),
-            "source": snapshot.get("source", "unknown"),
+            "confidence": confidence,
+            "age_seconds": extras.get("reading_age_s"),
+            "observed_at": extras.get("reading_observed_at"),
+            "source": extras.get("reading_source", "unknown"),
+            **extras,
             # The reset clock was reaching this function all along and was being
             # dropped here, which is what made the whole pool look clockless.
             "windows": windows,
@@ -6015,13 +6037,20 @@ def show_usage(
         )
     for pool, info in quota_pools.items():
         pct = info.get("bottleneck_used_percent")
-        pct_s = f"{pct}% used" if pct is not None else "no active window / stale"
+        pct_s = f"{pct}% used" if pct is not None else "no active measured window"
+        age = info.get("age_seconds")
         conf = info.get("confidence")
-        conf_s = f", {conf}, age {info.get('age_seconds')}s" if conf else ""
+        conf_s = (f", {conf}" if conf else "") + (f", age {age}s" if age is not None else "")
         source_label = info.get("source", "unknown")
         display = info.get("display_only_windows") or {}
         if pct is None and display:
             print(f"{pool} ({source_label}): display only — reset unknown{conf_s}")
+        elif info.get("account_usage") and not info.get("windows"):
+            balance = info["account_usage"].get("account_balance_usd")
+            balance_text = f"${balance:.2f} balance" if balance is not None else "balance unknown"
+            print(f"{pool} ({source_label}): account only — {balance_text}; no percentage quota{conf_s}")
+        elif not info.get("windows") and info.get("last_observed_windows"):
+            print(f"{pool} ({source_label}): last reading only — no current measured window{conf_s}")
         else:
             print(f"{pool} ({source_label}): {info['quota_state']} ({info['band']}) — {pct_s}{conf_s}")
         exact = info.get("provider_used_percent") or {}
@@ -6046,8 +6075,16 @@ def show_usage(
         for name, window in sorted((info.get("last_observed_windows") or {}).items()):
             used = exact.get(name, window["used_percent"])
             reset = f"reset reported as {window['reset_at']}" if window.get("reset_at") else "reset unknown"
-            print(f"  {name}: last reading {used:g}% used, {reset} (stale, "
-                  f"{format_duration(info['age_seconds'])} old)")
+            historical = "stale" if info.get("reading_stale") else "not an active window"
+            dated = f", {format_duration(age)} old" if age is not None else ", age unknown"
+            print(f"  {name}: last reading {used:g}% used, {reset} ({historical}{dated})")
+        for field in ("credits", "spend_credits"):
+            if credit := info.get(field):
+                dates = ", ".join(f"{label} {credit[key]}" for key, label in
+                                  (("expires_at", "expires"), ("renews_at", "renews")) if credit.get(key))
+                print(f"  {credit['balance']:g} {credit['unit']} ({credit['source']}{', ' + dates if dates else ''})")
+        if info.get("per_model_error"):
+            print(f"  per-model spend unavailable: {info['per_model_error']}")
     for pool, info in metered_pools.items():
         print(
             f"{pool} (metered): {info['admission']} — "
@@ -6526,6 +6563,10 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
     names = {model["model"]: (model.get("card") or {}).get("name") for model in overview.get("models", [])}
     for row in payload["pools"]:
         pool = pools[row["pool"]]
+        row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "usage_cost", "per_model",
+                                               "per_model_error", "account_usage", "reading_age_s", "reading_source",
+                                               "reading_observed_at", "reading_stale", "last_observed_windows")
+                    if key in pool})
         record = pool.get("control") or {}
         # Glance needs attribution, not free-form reasons, ceilings or history.
         row["level_control"] = {key: record[key] for key in ("actor", "when") if key in record} or None
@@ -6651,7 +6692,7 @@ def main() -> int:
             # Every pool with a declared quota source: `usage` is the read a human
             # or agent waits on, so it is the right place to pay the dashboard fetch.
             refresh(quota_sources(usage_roster), usage_roster)
-            show_usage(state_dir, args.db.expanduser(), args.json, usage_roster)
+            show_usage(state_dir, args.db.expanduser(), args.json, usage_roster, refresh_extras=not args.no_refresh)
             return 0
         if args.command == "snapshot":
             for value in (args.rolling_used, args.weekly_used, args.monthly_used):
@@ -6822,7 +6863,7 @@ def main() -> int:
             roster = read_overlay(args.overlay.expanduser(), state_dir)
             refresh(quota_sources(roster), roster)
             runtime = load_json(state_dir / "runtime.json", {}) or {}
-            overview = fleet_overview(roster, runtime, state_dir)
+            overview = fleet_overview(roster, runtime, state_dir, refresh_extras=not args.no_refresh)
             lead = resolve_lead_pool(roster, args.lead)
             if lead is not None:
                 overview["lead"] = {"pool": lead, "pressure": lead_pressure(runtime, lead, roster)}
@@ -6843,7 +6884,7 @@ def main() -> int:
             except (OSError, ValueError, AttributeError):
                 pass
             runtime = load_json(state_dir / "runtime.json", {}) or {}
-            overview = fleet_overview(roster, runtime, state_dir)
+            overview = fleet_overview(roster, runtime, state_dir, refresh_extras=not args.no_refresh)
             lead = resolve_lead_pool(roster, args.lead)
             if args.format == "json":
                 print(json.dumps(glance_payload(args.overlay, roster, overview, lead), indent=2, sort_keys=True))
