@@ -8,6 +8,8 @@ Always pass `--lane` or `--role`; a bare call uses agy's own settings model, not
 
 The wrapper runs `agy --print` under a PTY because non-TTY stdout can be empty even after successful work. It passes `--add-dir`: changing cwd alone does not add a workspace. Missing workspace can look like file blindness; distinguish wrapper configuration from model capability before recording a limitation. The PTY passes an argv array, not shell-interpolated prompt text. Avoid newest-global-transcript recovery under concurrency; it may identify another run.
 
+`agy --sandbox` lets the agent write its working folder; `--add-dir` only adds folders. For read-only roles, admitted lanes run with `--read-only` in a disposable copy and fail if the original changes.
+
 Flash, Argon and third-party models spend separate pools: antigravity-gemini, antigravity-argon and antigravity-3p. Argon has an individual allowance absent from the shared Gemini gauge. Third-party Claude refusals also override a healthy shared gauge until their stated reset (the pool has a five-hour window). A measured healthy gauge can omit an individual provider limit. Before a multi-task campaign, run a small canary and require actual output. Treat empty output and provider quota refusal as different failures; an exit 0 with nothing is not success.
 
 Keep long analytical writes off this transport until its write-step failure is disproved by current evidence. Wrapper watchdog settings cannot repair a cap inside agy. Use an admitted transport proved for long work, preserving the task's quality floor; do not relabel agy as unable to read/write local files.

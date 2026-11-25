@@ -125,7 +125,7 @@ LMArena is an optional secondary source for the visual/webdev family only. Confi
 
 ## Scoring and admission
 
-Admission checks model switches, retirement, pool-specific older-model retention reasons, refused roles, task mode, input modality, capacity and the CRITICAL quota guard. The Go pool retains its CRITICAL role allowlist. AGY requires write mode because its wrapper has no proven read-only boundary.
+Admission checks model switches, retirement, pool-specific older-model retention reasons, refused roles, task mode, input modality, capacity and the CRITICAL quota guard. The Go pool retains its CRITICAL role allowlist. AGY read-only selection requires a lane admitted to the disposable snapshot path; native sandboxing alone allows edits in the working folder.
 
 ### Operator role refusals
 

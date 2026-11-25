@@ -160,6 +160,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - tested-by: `tests/test_business_model_refresh.py:RefreshTests.test_policy_refuses_private_routing_selector_and_explicit_acquisition`, `test_code_class_ordering_across_lane_policies`, `test_code_ok_lane_routes_code_but_not_private_and_public_only_refuses_code`, `test_wrapper_code_ok_lane_runs_without_direct_and_refuses_private`; permitted controls `test_public_control_and_per_model_owner_override`, `test_public_wrapper_uses_empty_working_root_and_private_is_refused`, and `test_free_promo_candidate_does_not_borrow_operational_admission`.
 - Review when: a transport proves a different public-material confinement boundary, the operator changes a model's data-policy approval, or a code-ok lane is seen reading anything but project code.
 
+## BR-AGY-001 — Antigravity read-only work uses a disposable snapshot [ROUTING LEAD DECISION 2026-11-25]
+
+- RULE: Native AGY sandboxing allows edits in the working folder. A lane needs explicit copy-path admission for read-only selection. The wrapper runs AGY in a fresh snapshot with only that workspace granted, discards the snapshot and withholds the result if the original worktree's tracked or unignored untracked state changes.
+- Admission: Hydrogen High uses the included Antigravity Gemini pool for code (not private material), default, repo-map and simple implementation, including write work. Flash 3.8 stays eligible. Neon High keeps code implementation and is eligible for code review, hard reasoning and debug; BR-SELECT-004 still prefers Opus for hard reasoning.
+- Evidence: The operator's Neon cwd canary changes with native sandboxing alone; the Hydrogen High sandboxed fixture passes its unchanged test. The Gemini quota gauge reads 1% before and after with Google API/Cloud variables removed; neither the exact debit nor serving identity is independently observed. The routing lead accepts the receipt for this scope.
+- implemented-by: `scripts/selector.py:enumerate_options`, `scripts/agy-agent.sh`, `scripts/agy_workspace.py:main`, `scripts/fanout.sh` and the local access overlays.
+- tested-by: `tests/test_agy_workspace.py` (fake writes to the copy and to the original); `tests/test_selector.py:test_agy_has_no_proven_read_only_boundary_but_write_is_admitted` (unadmitted control).
+
 ## BR-OPENCODE-WORKER-001 — Preserve the worker boundary in OpenCode v2 [DECIDED]
 
 - RULE: Read-only OpenCode workers deny writes, shell execution, nested agents and external-directory access. Write workers require explicit --write and a clean git worktree, retain external-directory and nested-agent denials, and run in caller-owned isolation. Direct calls expose no tools or project context. Every run uses a private server and state. Worker isolation leaves the operator's live configuration untouched.

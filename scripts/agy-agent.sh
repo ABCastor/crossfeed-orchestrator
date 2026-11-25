@@ -5,7 +5,7 @@
 # therefore keeps the deliberate Python pty.spawn bridge and captures its PTY.
 #
 # Usage:
-#   agy-agent.sh --prompt "<task>" [--dir <workdir>] [--model <m>] [--sandbox]
+#   agy-agent.sh --prompt "<task>" [--dir <workdir>] [--model <m>] [--sandbox] [--read-only | --write]
 #                [--lane <lane>] [--role <role>] [--effort <level>] [--timeout S]
 #                [--idle-timeout S] [--kill-after S]
 #                [--last <file>] [--raw <file>]
@@ -20,7 +20,7 @@
 main() {
 set -euo pipefail
 
-DIR="$PWD"; PROMPT=""; MODEL=""; SANDBOX=0; LAST=""; RAW=""; LANE=""; ROLE=""
+DIR="$PWD"; PROMPT=""; MODEL=""; SANDBOX=0; LAST=""; RAW=""; LANE=""; ROLE=""; MODE=""
 EFFORT=""
 TIMEOUT=""
 IDLE_TIMEOUT="0"
@@ -44,6 +44,8 @@ while [ "$#" -gt 0 ]; do
     --role)         _require_value "$@"; ROLE="$2"; shift 2;;
     --effort)       _require_value "$@"; EFFORT="$2"; shift 2;;
     --sandbox)      SANDBOX=1; shift;;
+    --read-only)    MODE=read-only; shift;;
+    --write)        MODE=write; shift;;
     --timeout)      _require_value "$@"; TIMEOUT="$2"; shift 2;;
     --idle-timeout) _require_value "$@"; IDLE_TIMEOUT="$2"; shift 2;;
     --kill-after)   _require_value "$@"; KILL_AFTER="$2"; shift 2;;
@@ -93,7 +95,6 @@ if ! command -v agy >/dev/null 2>&1; then
   fi
 fi
 crossfeed_vault_guard   # no worker writes into the operator's notes: refuse (exit 5) or set CROSSFEED_JAIL
-mkdir -p "$DIR"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 _parent_comm="$(ps -o comm= -p "$PPID" 2>/dev/null | tr -d '[:space:]' || true)"
@@ -110,12 +111,27 @@ ptyfile=""
 KILL_STATE=""
 PTY_CHILD_STATE=""
 AGY_SNAPSHOT=""
+COPY_SCRATCH=""
+ORIGINAL_DIR=""
+ORIGINAL_STATE=""
+
+_finish_copy() {
+  [ -n "$COPY_SCRATCH" ] || return 0
+  local rc=0
+  if [ -n "$ORIGINAL_STATE" ]; then
+    python3 "$HERE/agy_workspace.py" verify "$ORIGINAL_DIR" "$COPY_SCRATCH" "$ORIGINAL_STATE" "$LAST" "$RAW" || rc=1
+  fi
+  python3 "$HERE/agy_workspace.py" clean . "$COPY_SCRATCH" || rc=1
+  COPY_SCRATCH=""
+  return "$rc"
+}
 
 _cleanup() {
   local status=$?
   # Only the wrapper's own shell cleans up. With bash 5 a background subshell (the watchdog,
   # a job just forked) can run this inherited EXIT trap and delete the run's files early.
   [ "${BASHPID:-$$}" = "$$" ] || return 0
+  _finish_copy || status=1
   crossfeed_finish "$status" || status=8
   if [ "$CROSSFEED_STARTED" = 1 ] && [ -n "$AGY_SNAPSHOT" ]; then
     python3 "$HERE/session_cleanup.py" agy --snapshot "$AGY_SNAPSHOT" --run-id "$CROSSFEED_RUN_ID" || true
@@ -135,8 +151,10 @@ trap _cleanup EXIT
 # A roster lane resolves the model and takes a quota lease. With no wall limit,
 # keep the pre-contract 600s lease TTL rather than passing an empty value; an
 # explicit --timeout continues to size the lease exactly as it did before.
+AUTO_ROUTED=0
 if [ -z "$LANE" ] && [ -z "$MODEL" ]; then
-  LANE="$("$HERE/fleetctl.py" route --role "${ROLE:-default}" --mode read-only --harness agy)" || {
+  AUTO_ROUTED=1
+  LANE="$("$HERE/fleetctl.py" route --role "${ROLE:-default}" --mode "${MODE:-read-only}" --harness agy)" || {
     echo "agy-agent: no eligible agy lane for role $ROLE" >&2
     exit 5
   }
@@ -170,9 +188,12 @@ if [ -n "$LANE" ]; then
       echo "agy-agent: unknown lane: $LANE (see roster message above; try 'roster.sh list agy')" >&2
       exit 2
   }
+  if [ "$AUTO_ROUTED" = 1 ] && [ -z "$MODE" ] && jq -e '.agy_read_only_copy == true' <<<"$lane_json" >/dev/null; then
+    MODE=read-only
+  fi
   lane_model="$(jq -r '.selector // empty' <<<"$lane_json")"
   [ -n "$lane_model" ] || _usage_error "lane $LANE has no selector"
-  "$HERE/roster.sh" check-lane "$LANE" read-only >/dev/null || _usage_error "AGY lane $LANE is not admitted"
+  "$HERE/roster.sh" check-lane "$LANE" "${MODE:-read-only}" >/dev/null || _usage_error "AGY lane $LANE is not admitted"
   if [ -z "$MODEL" ]; then
     MODEL="$lane_model"
   elif [ "$MODEL" != "$lane_model" ]; then
@@ -206,6 +227,12 @@ case "$MODEL" in
       LANE="$(_model_lane "$MODEL")" || _usage_error "no admitted AGY model family for $MODEL"
     fi;;
 esac
+# BR-AGY-001: effort remapping must not borrow another effort's copy admission.
+if [ "$MODE" = read-only ]; then
+  copy_lane="$("$HERE/roster.sh" lane-json "$LANE")" || _usage_error "unknown AGY lane $LANE"
+  jq -e --arg model "$MODEL" '.agy_read_only_copy == true and .selector == $model' <<<"$copy_lane" >/dev/null ||
+    _usage_error "AGY lane $LANE has no admitted read-only copy path for $MODEL"
+fi
 echo "agy-agent: effort $EFFORT: $_effort_why" >&2
 
 if [ -n "$LANE" ]; then
@@ -226,6 +253,17 @@ AGY_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/agy-agent.sessions.XXXXXX")"
 # Refuse before launch if the ownership snapshot cannot be established.
 python3 "$HERE/session_cleanup.py" agy-snapshot --snapshot "$AGY_SNAPSHOT"
 
+# BR-AGY-001: only the disposable workspace is the cwd and workspace grant.
+if [ "$MODE" = read-only ]; then
+  [ -d "$DIR" ] || _usage_error "read-only workspace must already exist: $DIR"
+  ORIGINAL_DIR="$DIR"
+  COPY_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/agy-agent.workspace.XXXXXX")" || exit 1
+  ORIGINAL_STATE="$(python3 "$HERE/agy_workspace.py" prepare "$ORIGINAL_DIR" "$COPY_SCRATCH" "$LAST" "$RAW")" || exit 1
+  DIR="$COPY_SCRATCH/workspace"
+  SANDBOX=1
+else
+  mkdir -p "$DIR"
+fi
 # --add-dir is the actual workspace grant. Merely changing directory is not.
 agy_args=( ${CROSSFEED_JAIL[@]+"${CROSSFEED_JAIL[@]}"} agy --print "$PROMPT" --add-dir "$DIR" --dangerously-skip-permissions )
 [ -n "$MODEL" ] && agy_args+=( --model "$MODEL" )
@@ -606,6 +644,7 @@ case "$(sed -n '1p' "$KILL_STATE")" in
   idle) rc=125;;
 esac
 
+_finish_copy || exit 1
 [ -n "$RAW" ] && cp "$ptyfile" "$RAW"
 
 # Persist only this run's captured refusal, including its full reset duration.

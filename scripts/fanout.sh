@@ -296,6 +296,9 @@ for index, task in enumerate(raw):
             raise SystemExit(f"fanout preflight: {task_id}: {mode} is not allowed for {lane_id}")
         if modality not in lane.get("capabilities", {}).get("input", ["text"]):
             raise SystemExit(f"fanout preflight: {task_id}: {modality} input is not allowed for {lane_id}")
+        # BR-AGY-001
+        if mode == "read-only" and lane.get("agy_read_only_copy") is not True:
+            raise SystemExit(f"fanout preflight: {task_id}: AGY lane has no admitted read-only copy path")
         # AGY has no wall clock of its own any more; its lane budget must not be smuggled back in
         # as a hidden default. OpenCode keeps its lane value deliberately (lease has no renewal).
         timeout = task.get("timeout", default_timeout)
@@ -375,7 +378,7 @@ for index, task in enumerate(raw):
     elif agent == "agy" and task.get("model_key"):
         raise SystemExit(f"fanout preflight: {task_id}: AGY model_key routing is unsupported; use lane_id")
     elif agent == "agy" and mode == "read-only":
-        raise SystemExit(f"fanout preflight: {task_id}: Antigravity wrapper has no proven read-only boundary")
+        raise SystemExit(f"fanout preflight: {task_id}: AGY read-only requires an explicit lane_id with an admitted copy path")
 
     normalized.append({
         "id": task_id,
@@ -549,6 +552,7 @@ for id in "${IDS[@]}"; do
       agy)
         prompt="$(cat "$OUT/tasks/$id.prompt")"
         args=( --prompt "$prompt" --dir "$dir" --last "$OUT/$id.out" --sandbox )
+        if [ "$mode" = "read-only" ]; then args+=( --read-only ); else args+=( --write ); fi
         args+=( --role "$role" )
         [ -n "$effort" ] && args+=( --effort "$effort" )
         [ -n "$task_timeout" ] && [ "$task_timeout" != "0" ] && args+=( --timeout "$task_timeout" )

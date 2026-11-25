@@ -21,8 +21,7 @@ import sys
 import tempfile
 import time
 
-# Haiku is the fallback when the Go pool is empty (28-29 Oct: 240/240 shadow-judge calls failed); Antigravity has no
-# proven read-only boundary, so it cannot serve here.
+# Haiku is the fallback when the Go pool is empty (28-29 Oct: 240/240 shadow-judge calls failed).
 DEFAULT_LANE = 'opencode-go:deepseek-v4.1-flash:low,claude:claude-haiku-5-5:low'
 HEAD = ('Do not use any tools and do not read files: everything you need is below.\n'
         'Output exactly one line of JSON: {"answer": "<answer>", "confidence": <0-100>, "reason": "<at most 20 words>"}.\n\n')

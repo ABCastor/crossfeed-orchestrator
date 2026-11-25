@@ -172,9 +172,8 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "model switched off or older without retention evidence"
         elif mode not in lane.get("allowed_modes", []):
             why = f"mode {mode}"
-        elif harness == "agy" and mode == "read-only":
-            # The existing fanout guard refuses this combination: native
-            # terminal sandboxing is not a proven read-only workspace boundary.
+        # BR-AGY-001
+        elif harness == "agy" and mode == "read-only" and lane.get("agy_read_only_copy") is not True:
             why = "AGY has no proven read-only boundary"
         elif modality not in lane.get("capabilities", {}).get("input", ["text"]):
             why = f"modality {modality}"
@@ -310,6 +309,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             actual = dict(option, level=level, effort=level, effort_reason=resolved["reason"], stand_in=stand_in)
             if harness == "agy" and re.search(r"-(low|medium|high|xhigh|max)$", actual["run_as"]):
                 actual["run_as"] = re.sub(r"-(low|medium|high|xhigh|max)$", "-" + level, actual["run_as"])
+                # BR-AGY-001: copying does not admit an unverified effort alias.
+                if mode == "read-only" and actual["run_as"] != lane.get("selector"):
+                    continue
             identity = (pool, harness, key, level)
             if identity not in seen:
                 seen.add(identity)
@@ -805,7 +807,8 @@ def _command(option: dict, role: str, receipt: Path, *, fleet: Any = None) -> li
     if harness in {"codex", "claude"}:
         argv += ["--model", option["run_as"], "--role", role]
     elif harness == "agy":
-        argv += ["--lane", option["lane_id"], "--model", option["run_as"], "--role", role]
+        argv += ["--lane", option["lane_id"], "--model", option["run_as"], "--role", role,
+                 "--read-only" if option["mode"] == "read-only" else "--write", "--sandbox"]
     elif harness in {"opencode", "openrouter"}:
         argv += ["--lane", option["lane_id"]]
         if harness == "openrouter" and option.get("funding") == "metered":
