@@ -65,7 +65,9 @@ class CompactBriefTests(unittest.TestCase):
                      patch.object(fleetctl, 'utc_now', return_value=NOW):
                     data = fleetctl.fleet_overview(r, runtime, Path(d), NOW)
                     text = fleetctl.render_brief(data, roster=r, runtime=runtime)
-                self.assertIn(f'{pool} | {level} | weekly | 72% | 3d 15h | 5.93 |', text)
+                    # BR-SELECT-007: ignore pressure without hiding the measurement.
+                    price = '0.00' if level == 'forced' else '5.93'
+                    self.assertIn(f'{pool} | {level} | weekly | 72% | 3d 15h | {price} |', text)
 
     def test_compact_golden_and_no_overview_mutation(self):
         data = overview()

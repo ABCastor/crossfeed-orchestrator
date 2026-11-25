@@ -100,6 +100,8 @@ PRODUCT_NAME = "Crossfeed Orchestrator"
 
 # Older runtime snapshots can retain this provenance after the reader is removed.
 LEGACY_AGY_WIDGET_SOURCE = "antigravity-codexbar-widget"
+AGY_SNAPSHOT_SOURCES = {native_usage.AGY_SOURCE, native_usage.AGY_LOCAL_SOURCE,
+                        native_usage.AGY_OAUTH_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
 SCHEMA = "model-fleet-runtime/v1"
 RUN_SCHEMA = "opencode-run-usage/v2"
 AFK_SCHEMA = "afk-attempt/v1"
@@ -571,13 +573,16 @@ def _claude_lead_window_at_risk(window: dict[str, Any]) -> bool:
     return lead_window_risk(window) is not None
 
 
-# BR-SELECT-006
+# BR-SELECT-006 · BR-SELECT-007
 def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, Any] | None = None,
                          model_key: str | None = None) -> int | None:
     """Soonest projected run-out among a pool's applicable windows; 0 when it is critical or exhausted.
 
     None means no window is projected to run out before its reset (or none can be read).
     """
+    if pool_level(runtime, pool) == "forced":
+        state, _ = current_pool_state(runtime, pool, roster=roster, model_key=model_key)
+        return 0 if state == "EXHAUSTED" else None
     state, evidence = current_pool_state(_without_levels(runtime), pool, roster=roster, model_key=model_key)
     if state in {"CRITICAL", "EXHAUSTED"}:
         return 0
@@ -594,15 +599,17 @@ def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, A
     return min(times) if times else None
 
 
-# BR-SELECT-006
+# BR-SELECT-006 · BR-SELECT-007
 def lead_pressure(runtime: dict[str, Any], pool: str | None,
                   roster: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Lead preservation uses observed pressure, independent of worker spend overrides."""
+    """Reserve lead quota on observed pressure unless the operator ignores estimates."""
     if pool is None:
         return None
-    observed = _without_levels(runtime)
-    state, evidence = current_pool_state(observed, pool, roster=roster)
     level = pool_level(runtime, pool)
+    observed = runtime if level == "forced" else _without_levels(runtime)
+    state, evidence = current_pool_state(observed, pool, roster=roster)
+    if level == "forced" and state != "EXHAUSTED":
+        return None
     scoped = False
 
     def applicable_windows(evidence, *, scoped_only=False):
@@ -820,15 +827,14 @@ def quota_window_applies(roster: dict[str, Any] | None, pool: str, name: str,
     return family_terms <= (words(model_key) - noise)
 
 
+# BR-SELECT-007
 def current_pool_state(
     runtime: dict[str, Any], pool: str, now: dt.datetime | None = None,
     *, roster: dict[str, Any] | None = None, model_key: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     now = now or utc_now()
-    # The operator's hand setting beats every measurement: "off" saves a pool they want kept,
-    # "forced" spends one the gauges say is low. Set with `fleetctl.py level <pool> <level>`
-    # (or the older `switch <pool> off|on|auto`), from the console page, or by an agent on
-    # the operator's word.
+    # Off always denies access. Forced bypasses pressure, not provider refusal
+    # or a provider-reported full window that has not reset.
     level = pool_level(runtime, pool)
     if level == "off":
         return "EXHAUSTED", {"source": "switched-off", "level": "off",
@@ -849,10 +855,10 @@ def current_pool_state(
             "until": circuit_until,
             "limit_name": circuit.get("limit_name"),
         }
-    if level == "forced":
-        return "ABUNDANT", {"source": "forced-on", "level": "forced"}
-
+    forced = ("ABUNDANT", {"source": "forced-on", "level": "forced"})
     if pool_has_no_known_limit(roster, pool):
+        if level == "forced":
+            return forced
         return "UNKNOWN", {"source": "none-known", "confidence": "declared"}
 
     refresh_error = (runtime.get("quota_refresh_errors") or {}).get(pool)
@@ -862,10 +868,13 @@ def current_pool_state(
                        "gauge_error_at": refresh_error["attempted_at"]} if refresh_error else {})
     snapshot = runtime.get("quota_snapshots", {}).get(pool)
     if not snapshot:
+        if level == "forced":
+            return forced
         return "GAUGE_ERROR" if refresh_error else "UNKNOWN", {
             "source": "quota-oracle" if refresh_error else "none", "confidence": "unknown",
             **gauge_evidence}
 
+    source = snapshot.get("source") or "unknown"
     observed = parse_iso(snapshot["observed_at"])
     age_s = max(0, int((now - observed).total_seconds()))
     # Enriched copies, never the stored dicts: the snapshot in runtime.json is
@@ -880,23 +889,25 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
+    stale_agy = (source in {native_usage.AGY_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
                  and age_s > native_usage.AGY_REPORT_MAX_AGE_S)
     confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
     # A console-observed 100% window stays exhausted until its console-stated
     # reset passes, even when the snapshot itself has gone stale: staleness must
     # never fail open into a pool the console last reported as full.
+    # A rounded 100% is not a provider cap if the reader also has the exact value.
+    exact_used = (snapshot.get("provider_used_percent") or {}) if level == "forced" else {}
     exhausted_windows = {
         name: window
         for name, window in applicable_windows.items()
-        if int(window["used_percent"]) >= 100
+        if exact_used.get(name, int(window["used_percent"])) >= 100
     }
     if exhausted_windows:
         until = max(window["reset_at"] for window in exhausted_windows.values())
         return "EXHAUSTED", {
             **gauge_evidence,
-            "source": "opencode-console-dashboard",
+            "source": source,
             "confidence": confidence,
             "precision_percentage_points": 1,
             "observed_at": snapshot["observed_at"],
@@ -910,10 +921,12 @@ def current_pool_state(
             "applicable_windows": sorted(applicable_windows),
             "spend_down": [],
         }
+    if level == "forced":
+        return forced
     if not applicable_windows or age_s > max_age_s:
         return "GAUGE_ERROR" if refresh_error else "UNKNOWN", {
             **gauge_evidence,
-            "source": "opencode-console-dashboard",
+            "source": source,
             "confidence": "stale" if age_s > 3600 else confidence,
             "observed_at": snapshot["observed_at"],
             "age_seconds": age_s,
@@ -960,7 +973,7 @@ def current_pool_state(
         expiring.clear()
     return _state_for_used(max_used), {
         **gauge_evidence,
-        "source": "opencode-console-dashboard",
+        "source": source,
         "confidence": confidence,
         "precision_percentage_points": 1,
         "observed_at": snapshot["observed_at"],
@@ -5003,6 +5016,17 @@ def reset_words(reset_at: str | None, now: dt.datetime | None = None) -> str:
     return f"{date} {clock}" if 0 < days <= 7 else date
 
 
+def agy_display_windows(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """AGY percentages without a reset are observations, never routing windows."""
+    source = snapshot.get("source")
+    if source not in AGY_SNAPSHOT_SOURCES:
+        return {}
+    exact = snapshot.get("provider_used_percent") or {}
+    return {name: {**row, "used_percent": exact.get(name, row["used_percent"]), "reset_unknown": True}
+            for name, row in snapshot.get("idle_windows", {}).items()
+            if source == native_usage.AGY_OAUTH_SOURCE or row.get("reset_unknown")}
+
+
 # BR-SELECT-002
 def pool_limits(
     pool: dict[str, Any], windows: dict[str, Any], idle: dict[str, Any] | None,
@@ -5036,7 +5060,7 @@ def pool_limits(
         limits.append({
             "name": name, "title": title, "scope": scope, "kind": "window",
             "minutes": window.get("window_minutes"),
-            "used_percent": int(window.get("used_percent", 0)),
+            "used_percent": window.get("used_percent", 0),
             "state": _state_for_used(int(window.get("used_percent", 0))).lower(),
             "reset_at": None, "resets_in_s": None, "resets": "", "spend_down": False,
             **({"reset_unknown": True} if window.get("reset_unknown") else {}),
@@ -5407,12 +5431,11 @@ def fleet_overview(
             "lanes": lane_counts.get(pool, 0),
         }
         reading = snapshot or {}
-        display_only_fresh = (reading.get("source") in {
-            native_usage.AGY_LOCAL_SOURCE, native_usage.AGY_OAUTH_SOURCE, LEGACY_AGY_WIDGET_SOURCE,
-        } and evidence.get("confidence") == "direct")
+        idle = (reading.get("idle_windows") or {}) if windows else {}
+        if evidence.get("confidence") in {"direct", "aging"}:
+            idle = {**idle, **agy_display_windows(reading)}
         entry["limits"], entry["renews_at"] = pool_limits(
-            entry, windows, reading.get("idle_windows") if windows or display_only_fresh else None,
-            evidence.get("spend_down") or [], now)
+            entry, windows, idle, evidence.get("spend_down") or [], now)
         if entry["gauge_error"]:
             # A last-good reading kept through a failed read is older than the clock it would be
             # compared with: usage can only have grown since, so its surplus would be overstated.
@@ -5692,7 +5715,7 @@ def render_brief(
             used = "stale"
         display_only = next((w for w in pool.get("limits", []) if w.get("reset_unknown")), None)
         if display_only and used in {"-", "stale"}:
-            window, used, resets = display_only["title"], f"{display_only['used_percent']}% (display only)", "not reported"
+            window, used, resets = display_only["title"], f"{display_only['used_percent']:g}% (display only)", "unknown"
         if pool.get("gauge_error"):
             used = (f"{used} (stale, {format_duration(quota['age_s'])} old)" if quota
                     else f"gauge error: {short_gauge_error(pool['gauge_error'])}")
@@ -5743,6 +5766,14 @@ def show_usage(
         if pool == ROUTING_POOL:
             continue
         pool_state, pool_evidence = current_pool_state(runtime, pool, roster=roster)
+        windows = pool_evidence.get("windows") or {}
+        observed_only = agy_display_windows(snapshot)
+        confidence = pool_evidence.get("confidence")
+        display = observed_only if confidence in {"direct", "aging"} else {}
+        last = {}
+        if confidence == "stale" and snapshot.get("source") in AGY_SNAPSHOT_SOURCES:
+            last = {**observed_only, **(snapshot.get("windows") or {})}
+            last = {name: row for name, row in last.items() if name not in windows}
         quota_pools[pool] = {
             "quota_state": pool_state,
             "band": task_band(pool_state, pool_evidence),
@@ -5756,7 +5787,11 @@ def show_usage(
             "source": snapshot.get("source", "unknown"),
             # The reset clock was reaching this function all along and was being
             # dropped here, which is what made the whole pool look clockless.
-            "windows": pool_evidence.get("windows") or {},
+            "windows": windows,
+            **({"display_only_windows": display} if display else {}),
+            **({"last_observed_windows": last} if last else {}),
+            **({"provider_used_percent": snapshot["provider_used_percent"]}
+               if snapshot.get("source") in AGY_SNAPSHOT_SOURCES and snapshot.get("provider_used_percent") else {}),
         }
     metered_pools = metered_pool_usage(state_dir, roster)
     policy, policy_source = resolve_quota_policy(roster)
@@ -5792,7 +5827,9 @@ def show_usage(
     # Say it out loud when there is no measurement. Routing still runs at full
     # quality (UNKNOWN fails open), but silence would read as "quota is fine"
     # when it actually means "nobody is looking".
-    if not any(info.get("bottleneck_used_percent") is not None for info in quota_pools.values()):
+    if evidence.get("bottleneck_used_percent") is None and not any(
+            info.get("bottleneck_used_percent") is not None or info.get("display_only_windows")
+            for info in quota_pools.values()):
         print(
             "quota data: UNAVAILABLE for every pool — routing at full quality, unthrottled. "
             "No percentage is being observed, so none of the bands below are real. "
@@ -5807,7 +5844,12 @@ def show_usage(
         conf = info.get("confidence")
         conf_s = f", {conf}, age {info.get('age_seconds')}s" if conf else ""
         source_label = info.get("source", "unknown")
-        print(f"{pool} ({source_label}): {info['quota_state']} ({info['band']}) — {pct_s}{conf_s}")
+        display = info.get("display_only_windows") or {}
+        if pct is None and display:
+            print(f"{pool} ({source_label}): display only — reset unknown{conf_s}")
+        else:
+            print(f"{pool} ({source_label}): {info['quota_state']} ({info['band']}) — {pct_s}{conf_s}")
+        exact = info.get("provider_used_percent") or {}
         for name, window in sorted(info.get("windows", {}).items()):
             if name in info.get("spend_down", []):
                 note = " — SPEND DOWN, resets soon with allowance to burn"
@@ -5821,9 +5863,16 @@ def show_usage(
                 f", projects {projected}% at reset]" if projected is not None else "]"
             )
             print(
-                f"  {name}: {window['used_percent']}% used, resets {window['reset_at']} "
+                f"  {name}: {exact.get(name, window['used_percent']):g}% used, resets {window['reset_at']} "
                 f"(in {format_duration(window.get('seconds_to_reset', 0))}){basis}{note}"
             )
+        for name, window in sorted(display.items()):
+            print(f"  {name}: {window['used_percent']:g}% used, reset unknown")
+        for name, window in sorted((info.get("last_observed_windows") or {}).items()):
+            used = exact.get(name, window["used_percent"])
+            reset = f"reset reported as {window['reset_at']}" if window.get("reset_at") else "reset unknown"
+            print(f"  {name}: last reading {used:g}% used, {reset} (stale, "
+                  f"{format_duration(info['age_seconds'])} old)")
     for pool, info in metered_pools.items():
         print(
             f"{pool} (metered): {info['admission']} — "

@@ -2214,7 +2214,7 @@ class EffortTests(unittest.TestCase):
 
 
 class HandSwitchTests(unittest.TestCase):
-    """The operator's hand switch: off beats an abundant gauge, on beats an exhausted one."""
+    """The legacy hand switch: off denies access; on ignores pressure, not exhaustion."""
 
     def test_off_blocks_an_abundant_pool(self):
         runtime = {"quota_snapshots": {"opencode-go": snapshot(10)}, "switches": {"opencode-go": "off"}}
@@ -2223,10 +2223,14 @@ class HandSwitchTests(unittest.TestCase):
         with self.assertRaises(fleetctl.FleetError):
             fleetctl.choose_lane(roster(), runtime, "default", "read-only", "text")
 
-    def test_on_beats_an_exhausted_pool(self):
-        runtime = {"quota_snapshots": {"opencode-go": snapshot(100)}, "switches": {"opencode-go": "on"}}
+    # BR-SELECT-007
+    def test_legacy_on_beats_critical_pressure_not_exhaustion(self):
+        runtime = {"quota_snapshots": {"opencode-go": snapshot(99)}, "switches": {"opencode-go": "on"}}
         selected = fleetctl.choose_lane(roster(), runtime, "default", "read-only", "text")
         self.assertEqual(selected["lane_id"], "k3")
+        runtime["quota_snapshots"]["opencode-go"] = snapshot(100)
+        with self.assertRaisesRegex(fleetctl.FleetError, "opencode-go exhausted"):
+            fleetctl.choose_lane(roster(), runtime, "default", "read-only", "text")
 
     def test_cli_sets_and_clears_the_switch(self):
         with tempfile.TemporaryDirectory() as d:

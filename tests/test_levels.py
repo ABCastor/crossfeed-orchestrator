@@ -136,13 +136,14 @@ class SpendLevelTests(unittest.TestCase):
         # High never exceeds what the provider tolerates.
         self.assertEqual(fleetctl.effective_cap(frontier, "ABUNDANT", None, "high"), 3)
 
-    def test_forced_routes_through_an_exhausted_gauge(self):
-        exhausted = {"quota_snapshots": {"opencode-go": snapshot(100)}}
-        with self.assertRaises(fleetctl.FleetError):
-            fleetctl.choose_lane(tiered_roster(), exhausted, "default", "read-only", "text")
-        forced = at_level({"quota_snapshots": {"opencode-go": snapshot(100)}}, "opencode-go", "forced")
+    # BR-SELECT-007
+    def test_forced_routes_through_critical_pressure_but_not_a_full_window(self):
+        forced = at_level({"quota_snapshots": {"opencode-go": snapshot(99)}}, "opencode-go", "forced")
         self.assertEqual(
             fleetctl.choose_lane(tiered_roster(), forced, "default", "read-only", "text")["lane_id"], "k3")
+        forced["quota_snapshots"]["opencode-go"] = snapshot(100)
+        with self.assertRaisesRegex(fleetctl.FleetError, "opencode-go exhausted"):
+            fleetctl.choose_lane(tiered_roster(), forced, "default", "read-only", "text")
 
     def test_off_never_routes_and_never_leases(self):
         runtime = at_level({"quota_snapshots": {"opencode-go": snapshot(5)}}, "opencode-go", "off")
@@ -287,7 +288,9 @@ class LevelCliTests(unittest.TestCase):
         rows = [line.split(" | ") for line in text[1:1 + len(levels)]]
         self.assertTrue(all(len(row) == 7 for row in rows))
         self.assertEqual({row[0]: row[1] for row in rows}, levels)
-        self.assertTrue(all(row[5] == "~0.50" for row in rows))
+        # BR-SELECT-007: no unknown-gauge premium for Ignore estimates.
+        self.assertEqual({row[0]: row[5] for row in rows},
+                         {pool: "0.00" if level == "forced" else "~0.50" for pool, level in levels.items()})
         self.assertEqual(text[1 + len(levels)], "off: none")
         self.assertEqual(text[2 + len(levels)], "Cash (USD, separate from quota pressure):")
         self.assertEqual({line.strip().split(": ")[0] for line in text[3 + len(levels):-1]}, set(levels))
@@ -372,11 +375,14 @@ class ForcedRespectsCircuitsTests(unittest.TestCase):
         with self.assertRaises(fleetctl.FleetError):
             fleetctl.choose_lane(roster(), runtime, "default", "read-only", "text")
 
-    def test_forced_returns_once_the_circuit_has_passed(self):
+    # BR-SELECT-007
+    def test_forced_returns_once_no_hard_stop_remains(self):
         past = fleetctl.iso(fleetctl.utc_now() - timedelta(minutes=1))
         runtime = {"switches": {"opencode-go": "on"},
                    "quota_snapshots": {"opencode-go": snapshot(100)},
                    "pool_circuits": {"opencode-go": {"until": past}}}
+        self.assertEqual(fleetctl.current_pool_state(runtime, "opencode-go")[0], "EXHAUSTED")
+        runtime["quota_snapshots"]["opencode-go"] = snapshot(99)
         self.assertEqual(fleetctl.current_pool_state(runtime, "opencode-go")[0], "ABUNDANT")
         self.assertEqual(fleetctl.choose_lane(roster(), runtime, "default", "read-only", "text")["lane_id"], "k3")
 

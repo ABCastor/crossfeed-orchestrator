@@ -92,6 +92,7 @@ class AntigravityOAuthTests(unittest.TestCase):
             self.assertEqual(path, native.AGY_OAUTH_QUOTA)
             self.assertEqual(json.loads(body), {"project": "fixture-project"})
             self.assertEqual(headers["Authorization"], "Bearer fixture-grant")
+            self.assertTrue(headers["User-Agent"].startswith("antigravity/hub/"))
             self.assertNotIn("Cookie", headers)
         self.assertEqual(self.file.read_bytes(), original)
         self.assertEqual(set(result["windows"]), {
