@@ -1,4 +1,4 @@
-"""Model-specific request estimates from https://opencode.ai/go (2026-11-19).
+"""Model-specific request estimates and limits from https://opencode.ai/go (2026-11-25).
 
 The numbers are OpenCode's typical-workload estimates, not a fixed number of
 requests included, a provider debit, or cash. Five-hour and weekly budgets are
@@ -6,7 +6,34 @@ requests included, a provider debit, or cash. Five-hour and weekly budgets are
 cost in this meter. Temporary promotions are deliberately not hard-coded.
 """
 
-SOURCE = "https://opencode.ai/go, read 2026-11-19"
+SOURCE = "https://opencode.ai/go and https://opencode.ai/docs/go/#usage-limits, read 2026-11-25"
+# Solo-model monthly USD equivalents (Go, Go Plus), not separate buckets
+# and not bills. Teams adds $5 to each model's base Go monthly limit.
+MONTHLY_USD = {
+    "kimi-k3": (15, 60), "kimi-k3.1-pro": (15, 60),
+    "qwen3.8-max": (15, 60), "grok-4.7": (15, 60),
+    "step-5-preview": (15, 60), "qwen4-max": (15, 60),
+    "gemini-4-argon": (30, 120), "glm-5.2": (60, 180),
+    "kimi-k2.7-code": (60, 180), "deepseek-v4-pro": (15, 60),
+    "hy4-preview": (30, 120), "gpt-5.6-luna": (15, 60),
+    "glm-5.3": (200, 400), "hy4": (60, 240), "minimax-m3": (60, 180),
+    "mimo-v2.6-pro": (15, 60), "claude-haiku-5-5": (15, 60),
+    "minimax-m3.1-flash": (20, 80), "gpt-6-luna": (15, 60), "hy3": (60, 240),
+    "qwen3.7-plus": (60, 180), "qwen3.8-flash": (30, 90),
+    "glm-5.3-flash": (60, 180), "longcat-2.5": (60, 240),
+    "mimo-v2.6-flash": (60, 120), "deepseek-v4.1-flash": (100, 200),
+    "muse-spark-1.2-contributor": (60, 120), "muse-spark-1.3-contributor": (60, 120),
+}
+
+
+def window_limit(plan, model, column):
+    name = str((plan or {}).get("name") or "").strip().casefold()
+    monthly = MONTHLY_USD.get(model)
+    if not monthly or column not in (0, 1, 2):
+        return None
+    value = {"opencode go": monthly[0], "opencode go plus": monthly[1],
+             "opencode go teams": monthly[0] + 5}.get(name)
+    return value * (.2, .5, 1)[column] if value is not None else None
 # Five-hour requests: (Go, Go Plus). Other windows use provider budget ratios.
 FIVE_HOUR = {
     "kimi-k3": (98, 392), "kimi-k3.1-pro": (147, 588),
@@ -15,12 +42,12 @@ FIVE_HOUR = {
     "gemini-4-argon": (566, 2260), "glm-5.2": (792, 2370),
     "kimi-k2.7-code": (994, 2980), "deepseek-v4-pro": (1040, 4180),
     "hy4-preview": (1350, 5410), "gpt-5.6-luna": (2050, 8200),
-    "hy4": (2710, 10800), "minimax-m3": (3210, 9620),
+    "glm-5.3": (2640, 5280), "hy4": (2710, 10800), "minimax-m3": (3210, 9620),
     "mimo-v2.6-pro": (3260, 13000), "claude-haiku-5-5": (3850, 15400),
     "minimax-m3.1-flash": (3880, 15500), "gpt-6-luna": (4230, 16900),
     "hy3": (4300, 17200), "qwen3.7-plus": (4310, 12900),
     "qwen3.8-flash": (5400, 16200), "glm-5.3-flash": (6320, 18900),
-    "longcat-2.0": (11400, 45700), "mimo-v2.6-flash": (30100, 60200),
+    "longcat-2.5": (11400, 45700), "mimo-v2.6-flash": (30100, 60200),
     "deepseek-v4.1-flash": (43300, 86700),
     "muse-spark-1.2-contributor": (45300, 90600), "muse-spark-1.3-contributor": (45300, 90600),
 }

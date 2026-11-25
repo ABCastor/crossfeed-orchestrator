@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import signal
 import threading
 import sqlite3
@@ -71,12 +72,13 @@ except ImportError:
     _native_spec.loader.exec_module(native_usage)
 
 try:
-    from run_identity import canonical_model
+    from run_identity import canonical_model, evidence_index
 except ImportError:
     _identity_spec = importlib.util.spec_from_file_location("fleet_run_identity", Path(__file__).with_name("run_identity.py"))
     _identity_module = importlib.util.module_from_spec(_identity_spec)
     _identity_spec.loader.exec_module(_identity_module)
     canonical_model = _identity_module.canonical_model
+    evidence_index = _identity_module.evidence_index
 
 
 try:
@@ -432,13 +434,14 @@ def _state_for_used(used_percent: int) -> str:
 # existing files keep their meaning and an older reader keeps working: "off" stays "off",
 # "forced" is written as the old "on", "normal" is the absence of an entry, and the two new
 # values ("low", "high") read as "auto" to anything that predates them.
-LEVELS = ("off", "low", "normal", "high", "forced")
+LEVELS = ("off", "low", "normal", "high", "max", "forced")
 # One line each, read by agents in `brief` and by people on the console page.
 LEVEL_MEANING = {
     "off": "never used",
     "low": "cheapest lane first, one call at a time, big model only as a one-shot",
     "normal": "routing follows the quota gauges",
     "high": "strong models freely, full parallel until the pool is critical",
+    "max": "use freely, with a light quota price and a last-stretch lead reserve",
     "forced": "used even when the quota looks low",
 }
 # The same meanings, cut to what an agent needs in a line it reads on every plan.
@@ -447,10 +450,11 @@ LEVEL_BRIEF = {
     "low": "cheapest lane, 1 at a time, big model one-shot only",
     "normal": "follow the quota gauges",
     "high": "strong models, full parallel until critical",
+    "max": "use freely, weigh quota lightly",
     "forced": "use even if quota looks low",
 }
-_LEVEL_STORED = {"off": "off", "low": "low", "high": "high", "forced": "on"}
-_STORED_LEVEL = {"off": "off", "low": "low", "high": "high", "on": "forced", "forced": "forced"}
+_LEVEL_STORED = {"off": "off", "low": "low", "high": "high", "max": "max", "forced": "on"}
+_STORED_LEVEL = {**{value: key for key, value in _LEVEL_STORED.items()}, "forced": "forced"}
 _LEGACY_SWITCH_WORD = {"off": "off", "forced": "on"}
 
 
@@ -516,6 +520,39 @@ def set_pool_level(runtime: dict[str, Any], pool: str, level: str, *, actor: str
         switches[pool] = _LEVEL_STORED[level]
     record_control(runtime, f"level:{pool}", before, level, actor, reason,
                    restrict=level in {"off", "low"} or LEVELS.index(level) < LEVELS.index(before))
+
+
+def control_attribution(record: dict[str, Any]) -> dict[str, Any]:
+    return {"set_by": {"owner": "operator", "agent": "agent"}.get(record.get("actor")),
+            "set_at": record.get("when")}
+
+
+def subscription_controls(roster: dict, runtime: dict) -> list[dict]:
+    rows = []
+    for plan in subscriptions.defaults(roster).values():
+        pools = plan["pools"]
+        levels = {pool_level(runtime, pool) for pool in pools}
+        records = [control_record(runtime, f"level:{pool}") for pool in pools]
+        last = max(records, key=lambda record: record.get("when") or "")
+        rows.append({"id": plan["id"], "pools": pools, "level": next(iter(levels)) if len(levels) == 1 else "mixed",
+                     **control_attribution(last)})
+    return rows
+
+
+# BR-SWITCH-001 · BR-SWITCH-002
+def set_level(roster: dict, runtime: dict, target: str, level: str, *, actor="agent", reason=None) -> None:
+    plan = subscriptions.defaults(roster).get(target)
+    if plan and len(plan["pools"]) > 1:
+        if actor != "owner":
+            raise FleetError("changing the subscription dial requires --owner")
+        before = {pool: pool_level(runtime, pool) for pool in plan["pools"]}
+        for pool in plan["pools"]:
+            set_pool_level(runtime, pool, level, actor=actor, reason=reason)
+        record_control(runtime, f"subscription:{target}", before, level, actor, reason)
+    elif target in (roster.get("quota_pools") or {}):
+        set_pool_level(runtime, target, level, actor=actor, reason=reason)
+    else:
+        raise FleetError(f"unknown pool or subscription {target}")
 
 
 PROFILES = ("save-claude", "save-codex", "balanced", "max-quality", "reset")
@@ -599,7 +636,7 @@ def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, A
     return min(times) if times else None
 
 
-# BR-SELECT-006 · BR-SELECT-007
+# BR-SELECT-006 · BR-SELECT-007 · BR-SELECT-008
 def lead_pressure(runtime: dict[str, Any], pool: str | None,
                   roster: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Reserve lead quota on observed pressure unless the operator ignores estimates."""
@@ -619,7 +656,25 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
                 and (not scoped_only or not quota_window_applies(roster, pool, name, window, None))}
 
     windows = applicable_windows(evidence)
-    if level not in {"low", "off"}:
+    if level == "max" and state != "EXHAUSTED":
+        if not windows and pool == "claude":
+            model = (os.environ.get("PI_MODEL") if (os.environ.get("PI_PROVIDER") == "claude-bridge" or
+                                                     os.environ.get("PI_QUOTA_POOL") == "claude")
+                     else os.environ.get("ANTHROPIC_MODEL")) or ""
+            if model.startswith("claude-"):
+                state, evidence = current_pool_state(observed, pool, roster=roster, model_key=model)
+                windows = applicable_windows(evidence, scoped_only=True)
+                scoped = True
+        def last_stretch(window):
+            eta = funding.number(window.get("eta_seconds"))
+            if eta is None:
+                eta = (window_pace(window) or {}).get("runs_out_in_s")
+            return eta is not None and 0 <= eta < window["seconds_to_reset"] <= spend_down_horizon_s(window)
+
+        windows = {name: window for name, window in windows.items() if last_stretch(window)}
+        if not windows and state != "EXHAUSTED":
+            return None
+    elif level not in {"low", "off"}:
         if pool != "claude":
             if state not in {"CONSERVE", "CRITICAL", "EXHAUSTED"}:
                 return None
@@ -646,7 +701,7 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
                 "used_percent": window.get("used_percent"),
                 "window": (_compact_window_label(name, window) if name else None),
                 **({"scoped_window": name} if scoped and name else {})}
-    if pool == "claude":
+    if pool == "claude" and level != "max":
         # Only a paced run-out can be waived by the selector (BR-SELECT-006); 90%+, critical,
         # exhausted and operator low/off stay tight.
         runs_out = [pace["runs_out_in_s"] for item in windows.values()
@@ -897,7 +952,7 @@ def current_pool_state(
     # reset passes, even when the snapshot itself has gone stale: staleness must
     # never fail open into a pool the console last reported as full.
     # A rounded 100% is not a provider cap if the reader also has the exact value.
-    exact_used = (snapshot.get("provider_used_percent") or {}) if level == "forced" else {}
+    exact_used = (snapshot.get("provider_used_percent") or {}) if level in {"max", "forced"} else {}
     exhausted_windows = {
         name: window
         for name, window in applicable_windows.items()
@@ -1886,8 +1941,8 @@ def effective_cap(
     if policy == "off":
         return cap
     state = gating_state(pool_state, evidence, policy)
-    if level in {"high", "forced"}:
-        if state == "CRITICAL" and lane.get("quality_tier") == "frontier":
+    if level in {"high", "max", "forced"}:
+        if level == "high" and state == "CRITICAL" and lane.get("quality_tier") == "frontier":
             cap = min(cap, 1)
         return cap
     # UNKNOWN FAILS OPEN. Missing measurement is not evidence of exhaustion.
@@ -1956,7 +2011,7 @@ def level_band(level: str, band: str) -> str:
     """
     if level == "low" and band == "quality_first":
         return "conserve"
-    if level == "high" and band == "conserve":
+    if level == "max" or (level == "high" and band == "conserve"):
         return "quality_first"
     return band
 
@@ -2229,6 +2284,35 @@ def choosable_models(roster: dict[str, Any], pool: str) -> dict[str, str]:
     return found
 
 
+# BR-MODEL-001
+def archive_record(roster: dict, runtime: dict, pool: str, model: str) -> dict:
+    return (control_record(runtime, f"archive:{pool}:{model}")
+            or (roster.get("model_archives") or {}).get(pool, {}).get(model, {}))
+
+
+def model_archived(roster: dict, runtime: dict, pool: str, model: str) -> bool:
+    return archive_record(roster, runtime, pool, model).get("value") is False
+
+
+# BR-MODEL-001 · BR-SWITCH-001
+def set_model_archive(roster: dict, runtime: dict, pool: str, model: str, archived: bool, *,
+                      actor="agent", reason=None) -> str:
+    key = named_model(roster, pool, model)
+    if key is None:
+        key = next((row["model"] for row in model_overview(roster, runtime, {pool})
+                    if row["model"] == model and pool in row["pools"]), None)
+    if key is None:
+        raise FleetError(f"unknown model {model} on {pool}")
+    control = f"archive:{pool}:{key}"
+    record = archive_record(roster, runtime, pool, key)
+    if not archived and actor != "owner" and record.get("actor") == "owner" and record.get("value") is False:
+        raise FleetError(f"{key}: the operator archived this model; restore requires --owner")
+    check_control(runtime, control, not archived, actor)
+    if model_archived(roster, runtime, pool, key) != archived:
+        record_control(runtime, control, record.get("value", True), not archived, actor, reason, restrict=archived)
+    return key
+
+
 def model_choice(runtime: dict[str, Any], pool: str) -> str | None:
     """The single choice an older version of the console stored for this pool, if any."""
     value = (runtime.get("model_choices") or {}).get(pool)
@@ -2238,7 +2322,8 @@ def model_choice(runtime: dict[str, Any], pool: str) -> str | None:
 def effective_model_choice(roster: dict[str, Any], runtime: dict[str, Any], pool: str) -> str | None:
     """That older single choice, when the pool can still run it."""
     chosen = model_choice(runtime, pool)
-    return chosen if chosen and chosen in choosable_models(roster, pool) else None
+    return chosen if (chosen and chosen in choosable_models(roster, pool)
+                      and not model_archived(roster, runtime, pool, chosen)) else None
 
 
 def toggled_off(runtime: dict[str, Any], pool: str) -> set[str]:
@@ -2317,7 +2402,8 @@ def pool_switches(roster: dict[str, Any], runtime: dict[str, Any], pool: str) ->
     down = {canonical_model(key, roster) for key in toggled_off(runtime, pool)}
     global_off = {canonical_model(key, roster) for key, value in (runtime.get("model_preferences") or {}).items()
                   if value == "off"}
-    return {model: canonical_model(model, roster) not in (down | global_off)
+    return {model: not model_archived(roster, runtime, pool, model)
+            and canonical_model(model, roster) not in (down | global_off)
             and (chosen is None or model == chosen)
             and (not model_is_older(roster, pool, model) or bool(older_model_reason(roster, pool, model)))
             for model in choosable_models(roster, pool)}
@@ -2460,11 +2546,16 @@ def named_model(roster: dict[str, Any], pool: str, name: str | None) -> str | No
     for lane in roster.get("lanes", []):
         if lane.get("quota_pool") == pool and name in (lane.get("selector"), lane.get("model_key")):
             return lane["model_key"]
+    if name in (roster.get("model_archives") or {}).get(pool, {}):
+        return name
     return None
 
 
+# BR-MODEL-001
 def model_blocked(roster: dict[str, Any], runtime: dict[str, Any], pool: str, key: str) -> str | None:
-    """"retired" or "off" when this model of the pool must not be started, None while it may be."""
+    """The denial reason when this exact model must not start, otherwise None."""
+    if model_archived(roster, runtime, pool, key):
+        return "archived"
     if retired_on(roster, key):
         return "retired"
     if pool_switches(roster, runtime, pool).get(key) is False or model_preference(runtime, key) == "off":
@@ -2498,7 +2589,7 @@ def model_run_as(roster: dict[str, Any], runtime: dict[str, Any], pool: str, req
     direct = pool_is_direct(roster, pool)
     asked = requested or (direct_default_model(pool) if direct else None)
     named = named_model(roster, pool, asked) if direct else None
-    gone = named if named and retired_on(roster, named) else None
+    gone = named if named and model_blocked(roster, runtime, pool, named) in {"retired", "archived"} else None
     if (not switches or all(switches.values())) and not gone:
         return None
     on = [model for model, value in switches.items() if value]
@@ -2873,6 +2964,8 @@ def start_verdict(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
         blocked = model_blocked(roster, runtime, where, model)
         if lane and lane.get("admission_status") == "retired":
             why, text = "retired", f"{name} is retired from the {label} roster and can no longer be run."
+        elif blocked == "archived":
+            why, text = "archived", f"{name} is archived for {label} and cannot be run."
         elif blocked == "retired":
             why, text = "retired", f"{name} was retired by its provider on {retired_on(roster, model)} and can no longer be run."
         elif pool_level(runtime, where) == "off":
@@ -2928,7 +3021,7 @@ def start_verdict(roster: dict[str, Any], runtime: dict[str, Any], name: str, *,
             else f" (or {', '.join(instead[1:])})." if len(instead) > 1 else ".")
     elif first["why"] != "retired":
         message += " Nothing on that provider is switched on to run in its place."
-    if first["why"] in {"off", "provider off"}:
+    if first["why"] in {"off", "archived", "provider off"}:
         # Execution admission and control mutation are separate checks.
         message += " Control changes must respect recorded owner limits (BR-SWITCH-001)."
     return {"model": model, "pool": where, "why": first["why"], "instead": instead, "reason": first["text"],
@@ -3558,6 +3651,15 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
     trial_task_id = getattr(args, "task_id", None) or str(uuid.uuid4())
     first_dispatch_id = str(uuid.uuid4())
     chosen = selection["choice"]
+
+    # BR-MODEL-001: recheck prepared receipts and fallback attempts against current controls.
+    def archived(option):
+        current = load_json(state_dir / "runtime.json", {}) or {}
+        return model_archived(roster or {}, current, option["pool"], option["model_key"])
+
+    if archived(chosen):
+        print("fleetctl: selected model is archived", file=sys.stderr)
+        return 5
     if not args.dry_run:
         chosen = _book_rating_trial(selection, state_dir, trial_task_id, first_dispatch_id)
     options = [chosen]
@@ -3574,6 +3676,11 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
             seen.add(option["selection_file"])
     typical = None
     for index, option in enumerate(options):
+        if archived(option):
+            if index == 0:
+                print("fleetctl: selected model is archived", file=sys.stderr)
+                return 5
+            continue
         # BR-CASH-003: an older or separately prepared receipt cannot relabel today's input.
         if funding.requires_reservation(option) and option.get("data_class") != _data_policy.classification(
                 getattr(args, "data_class", None)):
@@ -5259,6 +5366,45 @@ def model_overview(roster: dict[str, Any], runtime: dict[str, Any],
     return sorted(models.values(), key=lambda model: model["provider"].casefold())
 
 
+def model_family(roster: dict, key: str) -> str:
+    card = model_cards(roster).get(key, {})
+    return card.get("family") or model_line(key, card)[0] or key
+
+
+def sort_model_families(rows, *, key="model"):
+    high, earliest = {}, {}
+    for row in rows:
+        family, cost = row["family"], row["typical_cost_usd"]
+        if cost is not None:
+            high[family] = max(high.get(family, 0), cost)
+        earliest[family] = min(earliest.get(family, float("inf")), row.get("_order", float("inf")))
+    return sorted(rows, key=lambda row: (-high.get(row["family"], -1), earliest[row["family"]]
+                                         if row["family"] not in high else 0,
+                                         row["family"].casefold(),
+                                         -(row["typical_cost_usd"] if row["typical_cost_usd"] is not None else -1),
+                                         row.get("_order", float("inf")), row[key].casefold()))
+
+
+def comparison_evidence(roster, state_dir):
+    # A missing or interrupted evidence rebuild must not break a read-only inventory.
+    try:
+        evidence = load_json(state_dir / "evidence" / "levels.json", {}) or {}
+    except (OSError, ValueError):
+        return {}
+    return evidence_index(roster, evidence.get("rows") or []) if isinstance(evidence, dict) else {}
+
+
+def model_typical_cost(roster, key, rows, rates=None):
+    try:
+        from selector import api_cost
+    except ImportError:
+        from scripts.selector import api_cost
+    identity = canonical_model(key, roster)
+    costs = [cost for (model, _), row in rows.items() if model == identity
+             if (cost := api_cost(row, rates)) is not None]
+    return statistics.median(costs) if costs else api_cost({}, rates)
+
+
 def usual_model(roster: dict[str, Any], runtime: dict[str, Any], pool: str) -> str | None:
     """The model that runs on this pool when nothing more specific is asked of it.
 
@@ -5295,7 +5441,7 @@ def usual_model(roster: dict[str, Any], runtime: dict[str, Any], pool: str) -> s
 
 
 def pool_model_options(roster: dict[str, Any], runtime: dict[str, Any], pool: str,
-                       models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                       models: list[dict[str, Any]], rows=None) -> list[dict[str, Any]]:
     """Every model shown under a provider, in list order: current first, then older.
 
     `current` is what the provider's own app would list at the top: a model the pool can run
@@ -5308,6 +5454,8 @@ def pool_model_options(roster: dict[str, Any], runtime: dict[str, Any], pool: st
     switches = pool_switches(roster, runtime, pool)
     direct = pool_is_direct(roster, pool)
     options = []
+    rates = {lane["model_key"]: lane["price_1m"] for lane in roster.get("lanes", [])
+             if lane.get("quota_pool") == pool and "price_1m" in lane}
     for model in models:
         if pool not in model["pools"]:
             continue
@@ -5319,16 +5467,24 @@ def pool_model_options(roster: dict[str, Any], runtime: dict[str, Any], pool: st
             current = not older
         else:
             current = (pool in model["current_pools"] or bool(choosable.get(model["model"]))) and not older
-        options.append({"model": model["model"], "current": bool(current),
-                        "run_as": choosable.get(model["model"]),
-                        "on": switches.get(model["model"]),
+        key = model["model"]
+        archived = model_archived(roster, runtime, pool, key)
+        record = archive_record(roster, runtime, pool, key)
+        options.append({"model": key, "name": card.get("name") or key,
+                        "family": model_family(roster, key),
+                        "typical_cost_usd": model_typical_cost(roster, key, rows or {}, rates.get(key, card.get("price_1m"))),
+                        "archived": archived, "archive_reason": record.get("reason"),
+                        "archive_control": record, **control_attribution(record),
+                        "current": bool(current) and not archived,
+                        "run_as": choosable.get(key) if not archived else None,
+                        "on": switches.get(key) if not archived else None,
                         "superseded_by": superseded_by(roster, pool, model["model"]),
                         "retired_on": retired_on(roster, model["model"]),
                         "retention_reason": older_model_reason(roster, pool, model["model"]) if older else None,
-                        "order": card.get("order", model["routing_rank"].get(pool, float("inf")))})
-    options.sort(key=lambda o: (not o["current"], o["order"], o["model"].casefold()))
+                        "_order": card.get("order", model["routing_rank"].get(pool, float("inf")))})
+    options = sort_model_families(options)
     for option in options:
-        option.pop("order")
+        del option["_order"]
     return options
 
 
@@ -5355,6 +5511,8 @@ def fleet_overview(
     now = now or utc_now()
     chatgpt_pro.refresh(roster, state_dir, now=now)
     pools_config = roster.get("quota_pools") or {}
+    groups = subscription_controls(roster, runtime)
+    membership = {pool: group["id"] for group in groups for pool in group["pools"]}
     lane_counts: dict[str, int] = {}
     for lane in roster.get("lanes", []):
         if lane.get("admission_status") == "active" and lane.get("quota_pool"):
@@ -5412,7 +5570,9 @@ def fleet_overview(
             "label": pool_label(pool, config),
             "short_label": config.get("short_label") if isinstance(config.get("short_label"), str) else None,
             "level": level,
+            "subscription": membership.get(pool),
             "control": control_record(runtime, f"level:{pool}"),
+            **control_attribution(control_record(runtime, f"level:{pool}")),
             "means": LEVEL_MEANING[level],
             "state": state,
             "until": evidence.get("until") if state == "EXHAUSTED" else None,
@@ -5455,6 +5615,8 @@ def fleet_overview(
     ages = [p["quota"]["age_s"] for p in pools if p["quota"] and p["quota"].get("age_s") is not None]
     sources = sorted({p["quota"]["source"] for p in pools if p["quota"] and p["quota"].get("source")})
     models = model_overview(roster, runtime, {pool["pool"] for pool in pools})
+    rows = comparison_evidence(roster, state_dir)
+    by_model = {}
     try:
         pin_rows = sync_pins(roster, state_dir, write=False)
     except OSError:
@@ -5463,11 +5625,15 @@ def fleet_overview(
         pool = entry["pool"]
         stored = model_choice(runtime, pool)
         switches = pool_switches(roster, runtime, pool)
-        current = current_models(roster, pool)
         entry["direct"] = pool_is_direct(roster, pool)
-        entry["options"] = pool_model_options(roster, runtime, pool, models)
+        options = pool_model_options(roster, runtime, pool, models, rows)
+        entry["archived"] = [option for option in options if option["archived"]]
+        entry["options"] = [option for option in options if not option["archived"]]
+        switches = {key: value for key, value in switches.items() if not model_archived(roster, runtime, pool, key)}
+        current = [option["model"] for option in entry["options"] if option["current"] and option["run_as"]]
         for option in entry["options"]:
             option["control"] = control_record(runtime, f"model:{pool}:{option['model']}")
+            by_model.setdefault(option["model"], []).append(option["typical_cost_usd"])
         entry["models"] = {
             "state": models_state(switches, current),
             "current": current,
@@ -5476,20 +5642,34 @@ def fleet_overview(
             # Report an unavailable saved choice without applying it.
             "unavailable": stored if stored and stored not in switches else None,
             # {model that is off or retired: what a run that asks for it gets instead}, for a direct pool
-            "stand_ins": stand_ins(roster, runtime, pool),
-            "retired": pool_retired(roster, pool),
+            "stand_ins": {key: value for key, value in stand_ins(roster, runtime, pool).items()
+                          if not model_archived(roster, runtime, pool, key)},
+            "retired": {key: value for key, value in pool_retired(roster, pool).items()
+                        if not model_archived(roster, runtime, pool, key)},
         }
         entry["pins"] = [row for row in pin_rows if row["pool"] == pool]
         entry["usual"] = usual_model(roster, runtime, pool)
+    active_models = []
+    for model in models:
+        key = model["model"]
+        visible = [pool for pool in model["pools"] if not model_archived(roster, runtime, pool, key)]
+        if model["pools"] and not visible:
+            continue
+        costs = [cost for cost in by_model.get(key, []) if cost is not None]
+        model.update(pools=visible, current_pools=[pool for pool in model["current_pools"] if pool in visible],
+                     archived=False, family=model_family(roster, key),
+                     typical_cost_usd=max(costs) if costs else model_typical_cost(roster, key, rows))
+        active_models.append(model)
     return {
         "product": PRODUCT_NAME,
+        "subscriptions": groups,
         "generated_at": iso(now),
         "quota_readings": {"sources": sources, "newest_age_s": min(ages) if ages else None,
                            "measured_pools": sum(1 for p in pools if p["quota"])},
         "levels": list(LEVELS),
         "level_meaning": LEVEL_MEANING,
         "pools": sorted(pools, key=lambda pool: pool["label"].casefold()),
-        "models": models,
+        "models": sort_model_families(active_models),
         "lane_cash": lane_cash,
         "effort_problems": effort_problems(roster, state_dir, now),
         "recent_runs": recent_model_runs(state_dir),
@@ -6228,7 +6408,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     level = sub.add_parser(
         "level",
-        help="how much of a pool to spend: off | low | normal | high | forced; no value shows it, no pool lists all",
+        help="how much of a pool to spend: off | low | normal | high | max | forced; accepts a pool or subscription; no value shows it, no pool lists all",
     )
     level.add_argument("pool", nargs="?")
     level.add_argument("value", nargs="?", choices=LEVELS)
@@ -6263,6 +6443,11 @@ def build_parser() -> argparse.ArgumentParser:
     toggle.add_argument("pool")
     toggle.add_argument("model")
     toggle.add_argument("state", nargs="?", choices=("on", "off"))
+
+    archive = sub.add_parser("model-archive", help="archive or restore a model without changing its switch")
+    archive.add_argument("pool")
+    archive.add_argument("model")
+    archive.add_argument("--restore", action="store_true")
 
     older = sub.add_parser("older-models", help="audit older models and persist the no-reason/off rule")
     older.add_argument("action", nargs="?", choices=["list", "apply"], default="list")
@@ -6325,7 +6510,7 @@ def build_parser() -> argparse.ArgumentParser:
                               help="remove benchmark imports by exact stored source path, then rebuild evidence")
     bench_import.add_argument("--measured-on", help="measurement date for legacy undated cells, YYYY-MM-DD")
 
-    for control_parser in (switch, level, toggle, choice, profile, pins):
+    for control_parser in (switch, level, toggle, choice, archive, profile, pins):
         control_parser.add_argument("--owner", action="store_true", help="explicit owner instruction; console actions use owner")
         control_parser.add_argument("--reason", help="short reason recorded with this control change")
     return parser
@@ -6341,6 +6526,7 @@ def menubar_renderer():
 def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None) -> dict:
     ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview)
     payload = menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
+    payload["subscriptions"] = overview.get("subscriptions", [])
     pools = {pool["pool"]: pool for pool in overview["pools"]}
     names = {model["model"]: (model.get("card") or {}).get("name") for model in overview.get("models", [])}
     for row in payload["pools"]:
@@ -6348,6 +6534,11 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
         record = pool.get("control") or {}
         # Glance needs attribution, not free-form reasons, ceilings or history.
         row["level_control"] = {key: record[key] for key in ("actor", "when") if key in record} or None
+        row.update(subscription=pool.get("subscription"), **control_attribution(record))
+        row["options"] = [{key: option[key] for key in ("model", "family", "typical_cost_usd", "archived") if key in option}
+                          for option in pool.get("options", [])]
+        row["archived"] = [{key: option[key] for key in ("model", "family", "typical_cost_usd", "archived", "set_by", "set_at")
+                            if key in option} for option in pool.get("archived", [])]
         row["models"] = list(dict.fromkeys(
             names.get(option["model"]) or option["model"]
             for option in pool.get("options", []) if option.get("current")
@@ -6496,21 +6687,28 @@ def main() -> int:
             print(profile_report(result))
             return 0
         if args.command in {"switch", "level"}:
-            pools = set(read_overlay(args.overlay.expanduser(), state_dir).get("quota_pools", {}))
-            if args.pool and args.pool not in pools:
-                raise FleetError(f"unknown pool {args.pool}; pools: {', '.join(sorted(pools))}")
+            roster = read_overlay(args.overlay.expanduser(), state_dir)
+            pools = set(roster.get("quota_pools", {}))
             legacy = args.command == "switch"
+            targets = pools if legacy else pools | subscriptions.defaults(roster).keys()
+            if args.pool and args.pool not in targets:
+                raise FleetError(f"unknown pool {args.pool} (or subscription); choices: {', '.join(sorted(targets))}")
             wanted = {"off": "off", "on": "forced", "auto": "normal"}.get(args.state) if legacy else args.value
             if wanted and not args.pool:
                 raise FleetError("name the pool to change")
             show = legacy_switch_word if legacy else (lambda value: value)
             if wanted:
                 with locked_runtime(state_dir) as runtime:
-                    set_pool_level(runtime, args.pool, wanted, actor="owner" if args.owner else "agent", reason=args.reason)
+                    actor = "owner" if args.owner else "agent"
+                    if legacy:
+                        set_pool_level(runtime, args.pool, wanted, actor=actor, reason=args.reason)
+                    else:
+                        set_level(roster, runtime, args.pool, wanted, actor=actor, reason=args.reason)
             # Reading never writes: a query must not create or touch the runtime file.
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             if args.pool:
-                print(show(pool_level(runtime, args.pool)))
+                group = next((row for row in subscription_controls(roster, runtime) if row["id"] == args.pool), None)
+                print(show(group["level"] if group and not legacy else pool_level(runtime, args.pool)))
             else:
                 for pool in sorted(pools):
                     print(f"{pool}: {show(pool_level(runtime, pool))}")
@@ -6518,6 +6716,17 @@ def main() -> int:
         if args.command == "pool-slot":
             # No overlay read: the gate must never be the reason a wrapper cannot start.
             return wait_for_pool_slot(state_dir, args.pool, args.pid, args.ttl, args.wait)
+        if args.command == "model-archive":
+            roster = read_overlay(args.overlay.expanduser(), state_dir)
+            if args.pool not in (roster.get("quota_pools") or {}):
+                raise FleetError(f"unknown pool {args.pool}")
+            actor = "owner" if args.owner else "agent"
+            with locked_runtime(state_dir) as runtime:
+                key = set_model_archive(roster, runtime, args.pool, args.model, not args.restore,
+                                        actor=actor, reason=args.reason)
+            pins_after_switch(roster, state_dir, actor=actor, reason=args.reason)
+            print(f"{args.pool}/{key}: " + ("restored" if args.restore else "archived"))
+            return 0
         if args.command in {"model-choice", "model-toggle", "model-run"}:
             roster = read_overlay(args.overlay.expanduser(), state_dir)
             if args.pool not in (roster.get("quota_pools") or {}):

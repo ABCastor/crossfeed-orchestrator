@@ -118,6 +118,13 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/fleetctl.py:lead_window_risk`, `scripts/fleetctl.py:_claude_lead_window_at_risk`, `scripts/fleetctl.py:pool_run_out_seconds`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`, `scripts/selector.py:_reserve_waiver`, `scripts/selector.py:select_option`.
 - tested-by: `tests/test_lead_profiles.py:LeadSelectionTests.test_claude_lead_hard_reasoning_reserves_only_a_tight_window`, `LeadSelectionTests.test_claude_lead_reserve_applies_only_when_it_helps`, `LeadDetectionTests.test_claude_lead_uses_the_at_risk_window_not_the_most_used`, `LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
 
+## BR-SELECT-008 — Max uses quota freely but still prices estimated pressure [OPERATOR-DIRECTED 2026-11-25]
+
+- RULE: `max` sits between `high` and `forced`; it keeps the quality-first band and declared parallelism, pays ordinary plan-value debit plus 10% of the usual quota pressure premium, and reserves lead quota only when projected to run out in the last tenth of its window, capped at one hour before reset. Provider refusals, applicable full windows, cash safeguards and BR-SELECT-004 still apply.
+- Authority: Operator, 25 Nov: “Maybe before ignore estimates, there should be also a max setting, which is the maximum you want to use it, but still takes a little bit into account the quota.” A tenth distinguishes it from High without erasing the incentive to use materially cheaper equal-quality quota; the reserve horizon reuses the existing last-stretch definition.
+- implemented-by: `scripts/fleetctl.py:lead_pressure`, `level_band`, `effective_cap` · `scripts/selector.py:routing_price`.
+- tested-by: `tests/test_business_round6.py::test_max_dial_order_and_real_limits`, `test_max_yields_to_equal_quality_cheaper_quota`, `test_max_reserves_only_in_last_stretch`.
+
 ## BR-SELECT-007 — Ignore estimates until a provider limit [OPERATOR-DECIDED 2026-11-25]
 
 - RULE: A pool at `forced` (Ignore estimates) stays eligible regardless of quota pressure or projected run-out, including for its own lead's workers. Its quota debit is priced at plain plan value without forecast, pace or remaining-headroom premiums. Real provider refusals (including rate-limit circuits), applicable provider-reported 100% windows until reset, cash safeguards and the explicit Opus fallback in BR-SELECT-004 still apply. An `off` pool remains unavailable. Normal and high retain their existing rules.
@@ -183,6 +190,20 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/opencode-agent.sh:main`, `scripts/opencode_v2.py:worker_config`, `scripts/migrate_opencode_v2.py:main`.
 - tested-by: `tests/test-opencode.sh:test_v2_boundary` (read-only prohibition, persisted write control, external denial in build, direct and shared boundaries), `test_write_cleanliness_gate`, `test_v2_account_snapshot`; `tests/test_opencode_v2.py:test_no_external_plugins_skills_or_mcp_in_lean_and_direct`, `test_profile_imports_only_named_instructions_and_shared_skill_paths`, `test_migration_cli_writes_separate_candidates_for_both_config_formats`. Boundary execution uses an independent rule-evaluating test double; native v2 acceptance is explicitly unverified where a sandbox prevents server binding.
 - Review when: OpenCode changes tool names, permissions, discovery, auto-approval or standalone semantics.
+
+## BR-SWITCH-002 — Subscription spend dials set each allowance together [OPERATOR-DIRECTED 2026-11-25]
+
+- RULE: An operator setting a multi-pool subscription dial sets the level of every member in one audited write. The readout is common when all members agree and Mixed otherwise. Individual model switches are independent of the subscription level.
+- Authority: Operator, 25 Nov: Google AI Pro “should be just like Claude ... if you want to switch off the model in the model entries, you do it anyways.”
+- implemented-by: `scripts/fleetctl.py:set_level`, `subscription_controls`.
+- tested-by: `tests/test_business_round6.py::test_subscription_dial_is_atomic_audited_and_independent`.
+
+## BR-MODEL-001 — Archive hides models and prevents dispatch on that pool [OPERATOR-DIRECTED 2026-11-25] (MUST NOT)
+
+- RULE: A model archived on a pool is never selected or started there, and only appears in the archive list. Operator archive requires operator restore; restore removes the archive gate but does not override another eligibility or switch rule. Keep the current admitted model in a family unless there is a measured reason to retain an older model. The operator specifically overrides the earlier retention reason for GPT-5.6 Luna.
+- Authority: Operator, 25 Nov: “There needs to be a button to archive a model. For example, why on earth is GPT 5.6 Luna still there?” and “normally, we will only have only one per family.” Supersession follows the roster-admission release checklist, without claiming provider withdrawal.
+- implemented-by: `scripts/fleetctl.py:set_model_archive`, `archive_record`, `model_blocked`, `_dispatch_selection` · `scripts/selector.py:enumerate_options`, `compare_options`.
+- tested-by: `tests/test_business_round6.py::test_archived_model_is_never_selected_or_dispatched` + control: `test_non_archived_model_is_selected_and_dispatches`.
 
 ## BR-SWITCH-001 — Agents control the fleet within operator limits [DECIDED]
 

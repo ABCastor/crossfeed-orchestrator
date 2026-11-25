@@ -40,6 +40,8 @@ except ModuleNotFoundError:
 
 
 DEFAULTS = {"target": 90.0, "lambda0": 1.0, "uncertainty_weight": 1.0}
+MAX_QUOTA_PREMIUM = .10
+TYPICAL_TOKENS = {"in": 8000, "out": 2000}
 IMPORTANT_ROLES = frozenset({"hard-reasoning", "review", "debug", "implementation"})
 FAMILIES = {"coding-agent", "review", "debug", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
 WRAPPERS = {name: name + "-agent.sh" for name in
@@ -164,6 +166,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "role not declared for refreshed lane"
         elif not lane.get("direct") and not lane.get("roles"):
             why = "explicit-only lane (no routing roles)"
+        # BR-MODEL-001
+        elif fleet.model_archived(roster, runtime, pool, key):
+            why = "model archived"
         elif fleet.retired_on(roster, key):
             why = "model retired"
         elif fleet.model_is_older(roster, pool, key) and not fleet.older_model_reason(roster, pool, key):
@@ -231,6 +236,7 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "model_identity": canonical_model(key, roster),
                   "run_as": lane.get("model") or lane.get("selector") or key,
                   "mode": mode, "band": band, "pool_state": state,
+                  "pool_level": fleet.pool_level(runtime, pool), "archived": False,
                   "provider": lane.get("provider"), "funding": cash_class,
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
         if lane.get("chatgpt_pi"):
@@ -539,7 +545,7 @@ def _cash_band(scored, stakes, policy):
     return preferred, "lower-marginal-cash" if len(preferred) < len(peers) else None
 
 
-# BR-SELECT-003 · BR-SELECT-005
+# BR-SELECT-003 · BR-SELECT-005 · BR-SELECT-008
 def routing_price(item):
     """Use only a debit and sourced capacity, or an actual incremental quote."""
     cash = item["cash"]
@@ -552,17 +558,22 @@ def routing_price(item):
     # Relative API-weighted debits lack a specific window. Treat them as
     # weekly planning proxies instead of shrinking them on a 5-hour gauge.
     minutes = 10080 if cost["basis"] == "relative_proxy" else binding["window_minutes"]
-    if not minutes and cost["basis"] == "measured":
+    if not minutes and cost["basis"] in {"measured", "go_request_estimate", "go_tariff_estimate"}:
         minutes = 10080  # weekly planning proxy when the gauge has no window
     pace = binding["lambda"] + max(0.0, -item["quota_pace"]["value"])
+    scarcity = capacity.get("scarcity_penalty", 0)
+    if item.get("pool_level") == "max":
+        pace *= MAX_QUOTA_PREMIUM
+        scarcity *= MAX_QUOTA_PREMIUM
     return rating.subscription_price(cost["percent"], capacity.get("weekly_usd_equivalent"),
-                                     pace, window_minutes=minutes,
-                                     scarcity=capacity.get("scarcity_penalty", 0))
+                                     pace, window_minutes=minutes, scarcity=scarcity)
 
 
 def _unpriced_rank(item):
     """An unpriced fallback's grade/pressure ordering is not a price quote."""
     pressure = item["pool_price"]["lambda"] + max(0.0, -item["quota_pace"]["value"])
+    if item.get("pool_level") == "max":
+        pressure *= MAX_QUOTA_PREMIUM
     return item["quality"] - pressure * item["cost"]["penalty_percent"] / 2
 
 
@@ -738,6 +749,13 @@ def _planning_row(row):
     return {**row, "tokens_per_task": estimate["tokens_per_task"], "price_1m": estimate["price_1m"]}
 
 
+def _go_window_column(binding):
+    name = str(binding.get("binding_window") or "").lower()
+    minutes = binding.get("window_minutes")
+    return (2 if "month" in name else 1 if "week" in name else 0 if "5h" in name or "five_hour" in name
+            else 0 if minutes and minutes <= 300 else 1 if not minutes or minutes <= 10080 else 2)
+
+
 def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
                median_usd: float | None, *, standardize: bool = True) -> tuple[dict, list[str]]:
     pool = option["pool"]
@@ -769,10 +787,8 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
         estimates = table.get(option["model_key"], table.get(option["run_as"], {}))
         if isinstance(estimates, dict) and option["level"] in estimates:
             estimates = estimates[option["level"]]
-        name = str(binding.get("binding_window") or "").lower()
-        minutes = binding.get("window_minutes")
-        column = 2 if "month" in name else 1 if "week" in name else 0 if "5h" in name or "five_hour" in name else (
-            0 if minutes and minutes <= 300 else 1 if minutes and minutes <= 10080 else 2 if minutes else None)
+        column = _go_window_column(binding)
+        limit = go_quota_tariffs.window_limit(profile.get("plan"), option["model_key"], column)
         count = go_quota_tariffs.typical_requests(profile.get("plan"), option["model_key"], column)
         tariff_source = go_quota_tariffs.SOURCE if count is not None else legacy.get("source")
         if count is None and column is not None:
@@ -784,13 +800,23 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
             requests = _number(own.get("requests_per_task"))
             observed = requests is not None and requests > 0
             requests = requests if observed else 1
-            percent = 100 / count * requests * units
+            # A typical published request consumes one of the model's estimated requests
+            # in this window; when the dollar limit is known, express its debit in that unit too.
+            if limit is not None:
+                allowance = limit
+                debit = limit / count * requests * units
+                percent = 100 * debit / limit
+            else:
+                percent = 100 / count * requests * units
             basis = "go_request_estimate"
             request_model = {"requests_per_task": requests, "typical_requests_in_window": count,
                              "request_count_basis": "observed_median" if observed else "unmeasured_one_request",
                              "request_estimate_source": tariff_source}
             if not observed:
                 flags.append("go_task_request_count_unmeasured")
+        elif limit is not None and usd is not None and "source_price_1m" in option:
+            allowance = limit
+            percent, basis = 100 * usd / limit, "go_tariff_estimate"
     nominal = _number(roster.get("quota_pools", {}).get(pool, {}).get(
         "nominal_percent_per_task", rating.NOMINAL_TASK_PERCENT))
     nominal = nominal if nominal is not None and nominal >= 0 else .5
@@ -808,6 +834,101 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
             "estimated": basis != "measured", "unknown": percent is None, "basis": basis,
             "penalty_percent": percent if percent is not None else nominal * units,
             **request_model, **effort_proxy, **planning}, flags
+
+
+def api_cost(row, source_rates=None):
+    """API awareness is not the price of included allowance."""
+    priced = _planning_row(row)
+    rates = funding.rates(source_rates) or funding.rates(priced.get("price_1m"))
+    if rates is None:
+        return None
+    return _display_usd(priced if _legacy_pair(priced.get("tokens_per_task")) is not None
+                        else {"tokens_per_task": TYPICAL_TOKENS}, rates)
+
+
+def comparison_cost(roster, option, row, fleet):
+    pool, cost, binding = option["pool"], option["cost"], option["pool_price"]
+    plan = roster.get("quota_pools", {}).get(pool, {}).get("plan") or {}
+    capacity = (option.get("capacity") or {}).get("weekly_usd_equivalent")
+    basis = cost["basis"]
+    minutes = 10080 if basis == "relative_proxy" else binding["window_minutes"]
+    window = None if basis == "relative_proxy" else binding.get("binding_window")
+    if not minutes and basis in {"relative_proxy", "measured", "go_request_estimate", "go_tariff_estimate"}:
+        minutes = 10080
+    if not window and minutes:
+        window = {300: "5 hours", 10080: "weekly", 43200: "monthly"}.get(minutes, f"{minutes:g} minutes")
+    limit = cost["allowance_usd"]
+    if pool == "opencode-go":
+        column = _go_window_column(binding)
+        limit = go_quota_tariffs.window_limit(plan, option["model_key"], column)
+        if limit is not None and not window:
+            window = ("5 hours", "weekly", "monthly")[column]
+    api = api_cost(row, option.get("source_price_1m"))
+    why = {
+        "measured": "The share uses observed allowance use for a typical job on this pool.",
+        "api_equivalent_allowance": "The job's estimated model price is divided by this window's allowance.",
+        "go_request_estimate": "OpenCode's typical request estimate converts a job into a share of the shared Go allowance.",
+        "go_tariff_estimate": "The job's estimated Go token debit is divided by the published solo-model window limit.",
+        "relative_proxy": "The share is a weekly estimate based on the job's relative API-equivalent price.",
+        "no_known_limit": "This pool does not publish a comparable allowance limit.",
+    }.get(basis, "No measured or sourced job debit is available for this route.")
+    if option["funding"] == "metered":
+        why = "Routing uses estimated incremental cash instead of a subscription debit."
+    return {"family": fleet.model_family(roster, option["model_key"]),
+            "typical_cost_usd": api, "api_cost_usd": api, "quota_cost_usd": routing_price(option),
+            "quota_basis": {"plan": plan.get("name"), "window": window, "window_limit": limit,
+                            "share_percent": cost["percent"],
+                            "plan_value_usd": rating.quota_price(100, capacity, 0, window_minutes=minutes),
+                            "why": why}}
+
+
+def compare_options(roster, runtime, state_dir, role, *, fleet=None):
+    """Display-only inventory; absence of a rating, permitted role or free slot does not hide a model."""
+    fleet = _fleet(fleet)
+    policy = roster.get("policy", {}).get("selector", {})
+    rows = fleet.comparison_evidence(roster, state_dir)
+    automatic, _ = enumerate_options(roster, runtime, role, fleet=fleet)
+    eligible = {(o["pool"], o["model_key"], o["level"]) for o in automatic}
+    index = {(lane["quota_pool"], lane["model_key"]): lane for lane in roster.get("lanes", [])
+             if fleet._lane_is_admitted(lane)}
+    options = []
+    for pool in roster.get("quota_pools", {}):
+        if fleet.pool_level(runtime, pool) == "off":
+            continue
+        for key, run_as in fleet.choosable_models(roster, pool).items():
+            if fleet.model_archived(roster, runtime, pool, key):
+                continue
+            lane = index.get((pool, key), {})
+            card = fleet.model_cards(roster).get(key, {})
+            if not lane and (card.get("access_status", "verified") != "verified"
+                             or card.get("admission_status", "active") != "active"):
+                continue
+            harness = lane.get("harness") or pool
+            effort = roster.get("effort", {}).get(key, {})
+            levels = effort.get("levels", {}).get(harness) or [effort.get("default") or "unknown"]
+            binding = _pool_price(roster, runtime, pool, policy, fleet, model_key=key)
+            billing = funding.classify(roster, pool, lane or card)
+            reference = _number(policy.get("capacity_reference_usd_equivalent", 2.30)) or 2.30
+            capacity = _capacity_headroom(roster, runtime, pool, key, reference, fleet) if billing == "included" else None
+            pace = pool_pace(roster, runtime, pool, fleet, model_key=key)
+            rates = (lane or card).get("price_1m")
+            identity = canonical_model(key, roster)
+            for level in dict.fromkeys(levels):
+                row = rows.get((identity, level), {})
+                item = {"pool": pool, "harness": harness, "model_key": key, "model_identity": identity,
+                        "model": key, "run_as": lane.get("model") or lane.get("selector") or run_as,
+                        "level": level, "funding": billing, "cash": funding.quote(billing),
+                        "pool_level": fleet.pool_level(runtime, pool), "pool_price": binding, "quota_pace": pace,
+                        "archived": False, "capacity": capacity, "comparison_only": (pool, key, level) not in eligible}
+                if lane.get("lane_id"):
+                    item["lane_id"] = lane["lane_id"]
+                if rates is not None:
+                    item["source_price_1m"] = rates
+                    row = dict(row, price_1m=rates, effort_estimate=None)
+                item["cost"], _ = _task_cost(roster, item, row, binding, None)
+                item.update(comparison_cost(roster, item, row, fleet))
+                options.append(item)
+    return fleet.sort_model_families(options, key="model_key")
 
 
 # BR-DATA-001
@@ -1200,7 +1321,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         no_explore = True
     calibration = SuccessEvidence(rows)
     for item in scored:
-        item.update(estimated_price=routing_price(item), pricing_basis=rating.LIVE_PRICE_BASIS)
+        item.update(comparison_cost(roster, item, evidence_for(item), fleet))
+        item.update(estimated_price=item["quota_cost_usd"], pricing_basis=rating.LIVE_PRICE_BASIS)
         rate, basis, source = calibration.rate(item["model_identity"], item["level"], family)
         prior = rating.success_prior(rate, difficulty)
         item.update(p_success_prior=prior, prior_basis=basis, prior_source=source)
