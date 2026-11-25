@@ -50,6 +50,8 @@ public struct Pool: Decodable, Equatable {
     public var name: String
     public var label: String?
     public var level: String?
+    public var levelControl: PolicyAttribution?
+    public var models: [String]
     public var state: String?
     public var measured: Bool
     public var full: Bool
@@ -65,6 +67,7 @@ public struct Pool: Decodable, Equatable {
     enum CodingKeys: String, CodingKey {
         case pool, name, label, level, state, measured, full, usedPercent = "used_percent", resets
         case resetAt = "reset_at", pace, limits, gaugeError = "gauge_error", staleAgeS = "stale_age_s"
+        case levelControl = "level_control", models
     }
 
     public init(from decoder: Decoder) throws {
@@ -73,6 +76,8 @@ public struct Pool: Decodable, Equatable {
         name = (try? c.decode(String.self, forKey: .name)) ?? pool
         label = try? c.decodeIfPresent(String.self, forKey: .label)
         level = try? c.decodeIfPresent(String.self, forKey: .level)
+        levelControl = try? c.decodeIfPresent(PolicyAttribution.self, forKey: .levelControl)
+        models = (try? c.decode([String].self, forKey: .models)) ?? []
         state = try? c.decodeIfPresent(String.self, forKey: .state)
         measured = (try? c.decode(Bool.self, forKey: .measured)) ?? false
         full = (try? c.decode(Bool.self, forKey: .full)) ?? false

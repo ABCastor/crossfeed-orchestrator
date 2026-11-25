@@ -6284,7 +6284,19 @@ def menubar_renderer():
 
 def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None) -> dict:
     ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview)
-    return menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
+    payload = menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
+    pools = {pool["pool"]: pool for pool in overview["pools"]}
+    names = {model["model"]: (model.get("card") or {}).get("name") for model in overview.get("models", [])}
+    for row in payload["pools"]:
+        pool = pools[row["pool"]]
+        record = pool.get("control") or {}
+        # Glance needs attribution, not free-form reasons, ceilings or history.
+        row["level_control"] = {key: record[key] for key in ("actor", "when") if key in record} or None
+        row["models"] = list(dict.fromkeys(
+            names.get(option["model"]) or option["model"]
+            for option in pool.get("options", []) if option.get("current")
+        ))
+    return payload
 
 
 CONSOLE_OPEN_REQUEST = "console-open-request"
