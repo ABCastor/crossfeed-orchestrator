@@ -1,0 +1,169 @@
+// Crossfeed menu bar: schema 1 of `fleetctl glance --json --no-refresh`.
+//
+// This is the app's only data source. There are no provider readers, cookies or network calls here.
+import Foundation
+
+public enum GlanceError: Error, Equatable {
+    case unsupportedSchema(Int?)
+    case malformed
+}
+
+public struct Pace: Decodable, Equatable {
+    public var deltaPercent: Double?
+    public var elapsedPercent: Double?
+    public var usedPercent: Double?
+    public var points: Int?
+    public var status: String?   // on_pace | surplus | deficit
+    public var early: Bool?
+    public var runsOutInS: Double?
+    public var runOutBasis: String?
+    public var words: String?
+
+    enum CodingKeys: String, CodingKey {
+        case deltaPercent = "delta_percent", elapsedPercent = "elapsed_percent", usedPercent = "used_percent"
+        case points, status, early, runsOutInS = "runs_out_in_s", runOutBasis = "run_out_basis", words
+    }
+}
+
+public struct Limit: Decodable, Equatable {
+    public var kind: String?
+    public var name: String?
+    public var title: String?
+    public var scope: String?
+    public var minutes: Double?
+    public var usedPercent: Double?
+    public var resets: String?
+    public var resetAt: String?
+    public var resetsInS: Double?
+    public var resetUnknown: Bool?
+    public var pace: Pace?
+    public var state: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, name, title, scope, minutes, usedPercent = "used_percent", resets, resetAt = "reset_at"
+        case resetsInS = "resets_in_s", resetUnknown = "reset_unknown", pace, state
+    }
+}
+
+public struct Pool: Decodable, Equatable {
+    public var pool: String
+    public var name: String
+    public var label: String?
+    public var level: String?
+    public var state: String?
+    public var measured: Bool
+    public var full: Bool
+    public var usedPercent: Double?
+    public var resets: String?
+    public var resetAt: String?
+    public var pace: Pace?
+    public var limits: [Limit]
+    /// fleetctl sends null, a string, or an object with a `reason`; only the words survive.
+    public var gaugeError: String?
+    public var staleAgeS: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case pool, name, label, level, state, measured, full, usedPercent = "used_percent", resets
+        case resetAt = "reset_at", pace, limits, gaugeError = "gauge_error", staleAgeS = "stale_age_s"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pool = try c.decode(String.self, forKey: .pool)
+        name = (try? c.decode(String.self, forKey: .name)) ?? pool
+        label = try? c.decodeIfPresent(String.self, forKey: .label)
+        level = try? c.decodeIfPresent(String.self, forKey: .level)
+        state = try? c.decodeIfPresent(String.self, forKey: .state)
+        measured = (try? c.decode(Bool.self, forKey: .measured)) ?? false
+        full = (try? c.decode(Bool.self, forKey: .full)) ?? false
+        usedPercent = try? c.decodeIfPresent(Double.self, forKey: .usedPercent)
+        resets = try? c.decodeIfPresent(String.self, forKey: .resets)
+        resetAt = try? c.decodeIfPresent(String.self, forKey: .resetAt)
+        pace = try? c.decodeIfPresent(Pace.self, forKey: .pace)
+        limits = (try? c.decodeIfPresent([Limit].self, forKey: .limits)) ?? []
+        staleAgeS = try? c.decodeIfPresent(Double.self, forKey: .staleAgeS)
+        if let text = try? c.decodeIfPresent(String.self, forKey: .gaugeError) {
+            gaugeError = text
+        } else if let object = try? c.decodeIfPresent([String: JSONScalar].self, forKey: .gaugeError) {
+            gaugeError = object["reason"]?.text ?? "no reading"
+        } else if (try? c.decodeIfPresent(Bool.self, forKey: .gaugeError)) == true {
+            gaugeError = "no reading"
+        } else {
+            gaugeError = nil
+        }
+    }
+}
+
+/// Just enough of a JSON value to read a `reason` out of an error object.
+struct JSONScalar: Decodable {
+    var text: String?
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        text = try? c.decode(String.self)
+    }
+}
+
+public struct Money: Decodable, Equatable {
+    public var currency: String
+    public var total: String
+    public var operator_: String?
+    enum CodingKeys: String, CodingKey { case currency, total, operator_ = "operator" }
+}
+
+public struct Spend: Decodable, Equatable {
+    public var monthly: [Money]
+    public var unpriced: Int
+    public var unsplit: Int
+    public var unavailable: Bool
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        monthly = (try? c.decode([Money].self, forKey: .monthly)) ?? []
+        unpriced = (try? c.decode(Int.self, forKey: .unpriced)) ?? 0
+        unsplit = (try? c.decode(Int.self, forKey: .unsplit)) ?? 0
+        unavailable = (try? c.decode(Bool.self, forKey: .unavailable)) ?? false
+    }
+    enum CodingKeys: String, CodingKey { case monthly, unpriced, unsplit, unavailable }
+}
+
+public struct Readings: Decodable, Equatable {
+    public var measuredPools: Int?
+    public var newestAgeS: Double?
+    enum CodingKeys: String, CodingKey { case measuredPools = "measured_pools", newestAgeS = "newest_age_s" }
+}
+
+public struct Glance: Decodable, Equatable {
+    public var schema: Int
+    public var title: String
+    public var pools: [Pool]
+    public var readings: Readings?
+    /// Nil when the key is missing (an older fleetctl): the menu then says spend is unavailable.
+    public var spend: Spend?
+
+    enum CodingKeys: String, CodingKey { case schema, title, pools, readings, spend = "subscription_spend" }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try c.decode(Int.self, forKey: .schema)
+        guard schema == 1 else { throw GlanceError.unsupportedSchema(schema) }
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        pools = try c.decode([Pool].self, forKey: .pools)
+        readings = try? c.decodeIfPresent(Readings.self, forKey: .readings)
+        spend = try? c.decodeIfPresent(Spend.self, forKey: .spend)
+    }
+
+    /// Decodes fleetctl's stdout. Any other schema, or a body that is not glance JSON, is refused.
+    public static func decode(_ data: Data) throws -> Glance {
+        do {
+            return try JSONDecoder().decode(Glance.self, from: data)
+        } catch let error as GlanceError {
+            throw error
+        } catch {
+            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let schema = object["schema"] as? Int, schema != 1 {
+                throw GlanceError.unsupportedSchema(schema)
+            }
+            throw GlanceError.malformed
+        }
+    }
+}

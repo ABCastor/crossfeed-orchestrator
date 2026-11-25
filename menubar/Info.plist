@@ -6,6 +6,9 @@
   <key>CFBundleDisplayName</key><string>Crossfeed</string>
   <key>CFBundleExecutable</key><string>Crossfeed</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>CFBundleVersion</key><string>2</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Menu design adapted from CodexBar (MIT).</string>
 </dict></plist>

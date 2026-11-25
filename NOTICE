@@ -37,6 +37,21 @@ Antigravity usage integration; no T3 Code source is redistributed.
 - tests/fixtures/native-usage/agy-local-quota.json uses the upstream test
   response shapes, with synthetic values and a separate Argon bucket.
 
+The macOS menu bar app in menubar/mac/ is adapted from CodexBar v0.67.0 (same commit),
+under the MIT notice below:
+- UsageProgressBar.swift: the Canvas progress bar with its punched-out pace stripe.
+- MenuCardView.swift, UsageMenuCardHeaderAndUsageSectionView.swift and
+  MenuCardMetricRow.swift: card header, labelled usage rows with "% used" and reset
+  line; UsagePaceText.swift: the pace line; MenuCardView layout metrics.
+- ProviderSwitcherButtons.swift and StatusItemController+SwitcherViews.swift:
+  provider tiles (icon over title, filled when selected, mini usage bar under each),
+  and StatusItemController+Menu.swift: the 310 pt card width and hosted-card menu.
+- IconRenderer.swift: the idea of a two-bar usage icon in the menu bar.
+Each ported Swift file keeps CodexBar's copyright in its header. The menu text and colours
+are Crossfeed's; the CodexBar name and logo are not used. The bundled fonts in
+menubar/mac/Resources/Fonts (Commissioner, Martian Mono) are under the SIL Open Font
+License 1.1; the licence files sit next to them.
+
 MIT License
 
 Copyright (c) 2026 Peter Steinberger
