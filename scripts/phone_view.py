@@ -141,6 +141,19 @@ class PhoneServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
 
 
+class LoopbackPhoneServer(socketserver.ThreadingTCPServer):
+    # The macOS Tailscale app cannot reach a user's Unix socket, so Serve can proxy to loopback.
+    # Any local process can already run fleetctl, so loopback exposes nothing new.
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def open_loopback_server(port: int, login: str, snapshot):
+    if not 1024 <= port <= 65535:
+        raise ValueError('loopback port must be 1024-65535')
+    return LoopbackPhoneServer(('127.0.0.1', port), make_handler(login, snapshot))
+
+
 def open_server(path: Path, login: str, snapshot):
     if not path.is_absolute():
         raise ValueError('socket path must be absolute')
@@ -161,14 +174,18 @@ def main() -> int:
 
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument('--config', required=True, type=Path)
-    args.add_argument('--socket', required=True, type=Path)
+    where = args.add_mutually_exclusive_group(required=True)
+    where.add_argument('--socket', type=Path)
+    where.add_argument('--loopback-port', type=int)
     args.add_argument('--overlay', type=Path, default=fleetctl.DEFAULT_OVERLAY)
     args.add_argument('--state-dir', type=Path, default=fleetctl.DEFAULT_STATE_DIR)
     cfg = args.parse_args()
     overlay, state = cfg.overlay.expanduser(), cfg.state_dir.expanduser()
     try:
         login = operator_login(cfg.config.expanduser())
-        server = open_server(cfg.socket, login, lambda: cached_snapshot(fleetctl, overlay, state))
+        view = lambda: cached_snapshot(fleetctl, overlay, state)
+        server = (open_loopback_server(cfg.loopback_port, login, view) if cfg.loopback_port
+                  else open_server(cfg.socket, login, view))
     except (ValueError, OSError, RecursionError):
         print('Crossfeed phone view needs a private mode-600 config and an unused socket in a mode-700 directory.')
         return 2
@@ -183,7 +200,8 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        cfg.socket.unlink(missing_ok=True)
+        if cfg.socket:
+            cfg.socket.unlink(missing_ok=True)
     return 0
 
 

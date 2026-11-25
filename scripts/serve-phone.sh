@@ -31,29 +31,45 @@ except ValueError:
   echo "Cannot verify that tailnet HTTPS port $port is unused. No route was changed." >&2
   exit 1
 fi
+# CROSSFEED_PHONE_LOOPBACK=<port> proxies to 127.0.0.1 instead of a Unix socket:
+# the macOS Tailscale app cannot reach a user's socket (Serve answers 502).
+loopback=${CROSSFEED_PHONE_LOOPBACK:-}
+[[ -z $loopback || $loopback =~ ^[0-9]+$ ]] || { echo 'CROSSFEED_PHONE_LOOPBACK must be a port number.' >&2; exit 2; }
 # Keep this path short enough for the macOS Unix socket pathname limit.
 private=$(mktemp -d /tmp/crossfeed-phone.XXXXXXXX)
 chmod 700 "$private"
 socket="$private/phone.sock"
-"$python" -B "$base/phone_view.py" --config "$config" --socket "$socket" &
+if [[ -n $loopback ]]; then
+  "$python" -B "$base/phone_view.py" --config "$config" --loopback-port "$loopback" &
+else
+  "$python" -B "$base/phone_view.py" --config "$config" --socket "$socket" &
+fi
 backend=$!
 cleanup() {
   kill -TERM "$backend" 2>/dev/null || true
   wait "$backend" 2>/dev/null || true
+  rm -f "$socket" 2>/dev/null || true
   rmdir "$private" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+ready() {
+  if [[ -n $loopback ]]; then (exec 3<>"/dev/tcp/127.0.0.1/$loopback") 2>/dev/null; else [[ -S "$socket" ]]; fi
+}
 for ((i=0; i<50; i++)); do
-  [[ -S "$socket" ]] && break
+  ready && break
   kill -0 "$backend" 2>/dev/null || break
   sleep 0.1
 done
-[[ -S "$socket" ]] || { echo 'Crossfeed phone view could not start.' >&2; exit 1; }
+ready || { echo 'Crossfeed phone view could not start.' >&2; exit 1; }
 # Tailscale Serve adds Tailscale-User-Login and strips a client-supplied value.
-# The target is not reachable over TCP, and the signed console is never a target.
-tailscale serve --https="$port" --set-path=/crossfeed "unix:$socket"
+# The signed console is never a target.
+if [[ -n $loopback ]]; then
+  tailscale serve --https="$port" --set-path=/crossfeed "http://127.0.0.1:$loopback"
+else
+  tailscale serve --https="$port" --set-path=/crossfeed "unix:$socket"
+fi
 }
 
 main "$@"; exit $?

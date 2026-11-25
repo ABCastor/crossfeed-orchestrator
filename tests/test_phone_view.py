@@ -82,6 +82,24 @@ class PhoneTests(unittest.TestCase):
                 self.assertNotIn(login, body)
                 self.assertNotIn('Set-Cookie', headers)
 
+    def test_loopback_backend_applies_the_same_identity_rule(self):
+        login = 'operator@example.invalid'
+        snapshot = Mock(return_value={'pools': [], 'subscription_spend': {'monthly': [], 'unpriced': 0,
+                                                                          'unavailable': False}})
+        probe = socket.socket()
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        server = phone.open_loopback_server(port, login, snapshot)
+        self.assertEqual(server.server_address[0], '127.0.0.1')
+        with serving(server):
+            conn = lambda: http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=5)
+            self.assertEqual(request(conn(), 'GET', '/crossfeed/', [('Tailscale-User-Login', 'other@example.invalid')])[0], 403)
+            self.assertEqual(request(conn(), 'GET', '/settings', [('Tailscale-User-Login', login)])[0], 404)
+            self.assertEqual(request(conn(), 'GET', '/crossfeed/', [('Tailscale-User-Login', login)])[0], 200)
+        with self.assertRaises(ValueError):
+            phone.open_loopback_server(80, login, snapshot)
+
     def test_operator_login_is_local_private_config(self):
         with tempfile.TemporaryDirectory(prefix='cf-') as root:
             path = Path(root) / 'phone.json'
