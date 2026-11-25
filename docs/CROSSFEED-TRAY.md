@@ -13,3 +13,13 @@ Crossfeed reads the existing quota cache once a minute. It does not poll provide
 The signed-in console creates `subscriptions.json` next to the access overlay (default `~/.config/orchestrator/subscriptions.json`, mode 600) on the first Save. It learns plan names from the overlay, not the price anyone pays. Enter a plan's price, currency, period, renewal and your percent share. Enter 100 if you pay it all; leave a field blank if unknown. The other payer's label is optional and the console shows the remaining share. Antigravity's separate quotas count as one bill. Retired subscriptions do not contribute to the total.
 
 Weekly service-value estimates multiply each pool's declared weekly USD-equivalent capacity by a fresh, unscoped weekly usage percentage. They are not charges; the console shows the whole plan's recorded monthly price alongside each pool, without dividing it among windows or converting currencies. The ledger cannot change routing, pool settings or paid spending limits.
+
+## Build and run
+
+Requires Go 1.23+, and the macOS Command Line Tools on macOS. From the repository, run `bash menubar/build.sh /absolute/build-dir`. This creates `Crossfeed.app` on macOS or a `Crossfeed` binary on Linux. Build assets do not need provider credentials.
+
+- **macOS login:** `bash menubar/install-macos.sh /absolute/build-dir/Crossfeed.app /absolute/path/to/fleetctl.py /absolute/path/to/python3`. This copies to `~/Applications`, registers a per-user LaunchAgent and runs Crossfeed now and at future logins. Use the deployed orchestrator's `fleetctl.py`, not a temporary checkout. The menu opens `~/Applications/Crossfeed Orchestrator.app` when present, otherwise the local console URL.
+- **Linux desktop:** `/absolute/build-dir/Crossfeed -fleetctl /absolute/path/to/fleetctl.py`. Requires a D-Bus session and an AppIndicator (StatusNotifierItem) compatible panel. Add that command to the desktop session's autostart if desired. **Open console** uses `xdg-open` at `http://127.0.0.1:8768/`; start the signed console with `fleetctl.py console` and use its sign-in link once.
+- **Headless Linux:** use `fleetctl.py glance` and the signed loopback console; no tray is required.
+
+The tray only displays cached state; keep the orchestrator's normal quota refresh job running. Development check: `cd menubar && go test ./...`.
