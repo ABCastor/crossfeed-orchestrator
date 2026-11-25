@@ -824,7 +824,7 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, native_usage.AGY_WIDGET_SOURCE}
+    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, "antigravity-codexbar-widget"}
                  and age_s > native_usage.AGY_REPORT_MAX_AGE_S)
     confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
@@ -1233,8 +1233,7 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "antigravity":
         # Multiple quota pools can consume different windows from the same export.
         try:
-            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True,
-                    config.get("codexbar_widget") is True)
+            return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
     if oracle in native_usage.OBSERVERS:
@@ -5341,7 +5340,7 @@ def fleet_overview(
             "lanes": lane_counts.get(pool, 0),
         }
         reading = snapshot or {}
-        display_only_fresh = (reading.get("source") == native_usage.AGY_WIDGET_SOURCE
+        display_only_fresh = (reading.get("source") in {native_usage.AGY_LOCAL_SOURCE, "antigravity-codexbar-widget"}
                               and evidence.get("confidence") == "direct")
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, reading.get("idle_windows") if windows or display_only_fresh else None,

@@ -31,8 +31,6 @@ Portions of scripts/native_usage.py are adapted from CodexBar v0.67.0
   fields, read-only WHAM usage request, general and additional window fields.
 - AntigravityStatusProbe.swift and AntigravityQuotaSummaryParser.swift: existing
   local quota-summary RPC and quota-bucket decoding. No launch or OAuth flow.
-- AppGroupSupport.swift and UsageStore+WidgetSnapshot.swift: Antigravity
-  app-group widget snapshot location and published quota row fields.
 - tests/fixtures/native-usage/agy-local-quota.json uses the upstream test
   response shapes, with synthetic values and a separate Argon bucket.
 

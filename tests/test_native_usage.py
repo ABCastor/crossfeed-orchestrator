@@ -313,34 +313,21 @@ class CodexBarPortTests(unittest.TestCase):
             self.assertEqual(snap["source"], "antigravity-local")
             self.assertNotIn("fixture-csrf", json.dumps(snap))
 
-    def test_widget_cache_recovers_gemini_and_argon_without_claiming_3p_or_missing_clocks(self):
-        payload = json.loads(fixture("agy-codexbar-widget.json"))
-        captured = fleetctl.parse_iso(payload["entries"][0]["updatedAt"])
-        now = captured + dt.timedelta(seconds=3)
-        summary = native.parse_antigravity_widget(payload, now)
-        self.assertEqual(summary["observed_at"], fleetctl.iso(captured))
-        prefix = "antigravity-quota-summary-"
-        self.assertEqual(set(summary["windows"]), {prefix + "gemini-weekly"})
-        self.assertEqual(summary["windows"][prefix + "gemini-weekly"]["reset_at"], "2026-11-26T10:42:14Z")
-        self.assertEqual(set(summary["idle_windows"]), {prefix + "gemini-5h", prefix + "argon-weekly"})
-        self.assertTrue(summary["idle_windows"][prefix + "argon-weekly"]["reset_unknown"])
-        self.assertIsNone(native.parse_antigravity_widget(payload, now + dt.timedelta(minutes=16)))
-        # Another row with the same use and duration makes a representative slot ambiguous.
-        payload["entries"][0]["usageRows"].append({"id": prefix+"other-weekly", "percentLeft": 99.9372124671936})
-        self.assertFalse(native.parse_antigravity_widget(payload, now)["windows"])
-        with patch.object(native, "_observe_antigravity_widget", return_value=summary), \
-                patch.object(native.subprocess, "run") as spawn:
-            self.assertIs(native.observe_antigravity({"codexbar_widget": True, "reuse_running": True}), summary)
-        spawn.assert_not_called()
+    def test_legacy_widget_flag_never_opens_codexbar(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(native.os, "open", wraps=os.open) as opened:
+            report = Path(tmp) / "missing.json"
+            snap = native.observe_antigravity({"codexbar_widget": True, "path": str(report)})
+        self.assertFalse(snap["available"])
+        self.assertEqual([call.args[0] for call in opened.call_args_list], [report])
 
     def test_display_only_argon_is_not_a_routing_signal_or_a_reset_clock(self):
-        payload = json.loads(fixture("agy-codexbar-widget.json"))
-        captured = fleetctl.parse_iso(payload["entries"][0]["updatedAt"])
+        payload = {"groups": [{"buckets": [{"id": "gemini-argon-wtu-weekly", "remainingFraction": .999}]}]}
+        captured = NOW
         pool = "antigravity-argon"
         config = {"oracle": "antigravity", "windows": ["antigravity-quota-summary-argon-weekly"]}
         roster = {"quota_pools": {pool: {"quota_refresh": config}}, "lanes": []}
         runtime = {"quota_snapshots": {}}
-        observed = fleetctl._filtered_observation(native.parse_antigravity_widget(payload, captured), config)
+        observed = fleetctl._filtered_observation(native.parse_antigravity_local(payload, captured), config)
         self.assertEqual(fleetctl._commit_gauge(runtime, pool, observed, fleetctl.iso(captured),
                                                 recover_circuit=False), "refreshed")
         self.assertEqual(fleetctl.current_pool_state(runtime, pool, captured, roster=roster)[0], "UNKNOWN")
