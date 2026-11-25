@@ -253,12 +253,17 @@ func (m *menu) paint(lines []row, spendRows int) {
 	}
 }
 
-func run(ctx context.Context, c config) {
+func start(ctx context.Context, c config) {
 	systray.SetTemplateIcon(icon(color.Black), icon(color.NRGBA{R: 94, G: 135, B: 255, A: 255}))
 	systray.SetTitle("Crossfeed")
 	systray.SetTooltip("Crossfeed · quotas and subscriptions")
-	var menu menu
-	menu.paint([]row{{title: "Reading quotas…"}}, 0)
+	var m menu
+	m.paint([]row{{title: "Reading quotas…"}}, 0)
+	// D-Bus GetLayout waits for this ready callback to return. Poll separately.
+	go m.run(ctx, c)
+}
+
+func (menu *menu) run(ctx context.Context, c config) {
 	type update struct {
 		data snapshot
 		err  error
@@ -318,5 +323,5 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	systray.Run(func() { run(ctx, c) }, cancel)
+	systray.Run(func() { start(ctx, c) }, cancel)
 }
