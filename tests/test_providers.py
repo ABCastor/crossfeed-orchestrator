@@ -247,26 +247,26 @@ class ProviderTests(unittest.TestCase):
     def test_console_provider_posts_share_all_door_rules(self):
         fields = {'kind':'openai-compatible','id':'lab','base_url':'https://example.com/v1','key':KEY}
         origin = {'Origin':'http://127.0.0.1:8768'}
-        # Session varies per launch: use a deterministic synthetic secret, never live auth.
-        with patch.object(console.secrets, 'token_urlsafe', return_value='synthetic-session'):
-            valid = {**origin,'Cookie': console.COOKIE+'=synthetic-session','Accept':'application/json'}
-            for path in ('/provider/probe','/provider/add','/provider/remove'):
-                self.assertEqual(self.post(path,fields,valid|{'Origin':'https://evil.example'})[0],403)
-                self.assertEqual(self.post(path,fields,origin)[0],401)
-                self.assertEqual(self.post(path,fields|{'t':'bad'},valid)[0],403)
-            self.catalog(CATALOG)
-            status, payload, *_ = self.post('/provider/probe',fields,valid)
-            self.assertEqual(status,200)
-            self.assertNotIn(KEY,payload.decode())
-            self.assertEqual(self.path.read_bytes(),self.original)
-            self.catalog(CATALOG)
-            self.assertEqual(self.post('/provider/add',fields,valid)[0],200)
-            page = console.render_page(console.Console(self.path,self.state,8768).overview(refresh=False),'synthetic-session')
-            self.assertIn('Add provider',page)
-            self.assertIn('type="password"',page)
-            self.assertIn('/provider/remove',page)
-            self.assertNotIn(KEY,page)
-            self.assertEqual(self.post('/provider/remove',{'id':'lab'},valid)[0],200)
+        # Read credentials from this temporary installation. post() constructs a new console for each call.
+        app = console.Console(self.path, self.state, 8768)
+        valid = {**origin, 'Cookie': f'{console.COOKIE}={app.session}', 'Accept': 'application/json'}
+        for path in ('/provider/probe','/provider/add','/provider/remove'):
+            self.assertEqual(self.post(path,fields,valid|{'Origin':'https://evil.example'})[0],403)
+            self.assertEqual(self.post(path,fields,origin)[0],401)
+            self.assertEqual(self.post(path,fields|{'t':'bad'},valid)[0],403)
+        self.catalog(CATALOG)
+        status, payload, *_ = self.post('/provider/probe',fields,valid)
+        self.assertEqual(status,200)
+        self.assertNotIn(KEY,payload.decode())
+        self.assertEqual(self.path.read_bytes(),self.original)
+        self.catalog(CATALOG)
+        self.assertEqual(self.post('/provider/add',fields,valid)[0],200)
+        page = console.render_page(app.overview(refresh=False), app.form_token)
+        self.assertIn('Add provider',page)
+        self.assertIn('type="password"',page)
+        self.assertIn('/provider/remove',page)
+        self.assertNotIn(KEY,page)
+        self.assertEqual(self.post('/provider/remove',{'id':'lab'},valid)[0],200)
 
     def test_saved_api_reaches_existing_pi_supervisor_and_receipt(self):
         self.add(models='test-model', daily_cap='1')
