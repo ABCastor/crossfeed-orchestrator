@@ -55,6 +55,20 @@ class UsageWindowTests(unittest.TestCase):
                         self.assertIn(name, evidence["limit_names"])
                     self.assertEqual(runtime, original)
 
+    def test_pool_state_preserves_snapshot_provenance_in_every_gauge_state(self):
+        for pool, source in (("codex", "codex-oauth-usage"), ("claude", "codexbar"),
+                             ("antigravity-gemini", "antigravity-oauth-usage"),
+                             ("opencode-go", "opencode-console-dashboard")):
+            for used, age_hours, expected in ((10, 0, "ABUNDANT"), (100, 2, "EXHAUSTED"),
+                                              (10, 2, "UNKNOWN")):
+                with self.subTest(pool=pool, used=used, age_hours=age_hours):
+                    runtime = self.runtime(used, used, pool)
+                    runtime["quota_snapshots"][pool].update(
+                        source=source, observed_at=fleetctl.iso(self.now - dt.timedelta(hours=age_hours)))
+                    state, evidence = fleetctl.current_pool_state(runtime, pool, roster=self.roster)
+                    self.assertEqual(state, expected)
+                    self.assertEqual(evidence["source"], source)
+
     def test_low_usage_forecast_still_relaxes_conservation(self):
         runtime = self.runtime(short=80, weekly=5)
         state, evidence = fleetctl.current_pool_state(runtime, "claude", roster=self.roster)

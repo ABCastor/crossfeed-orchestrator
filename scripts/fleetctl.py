@@ -873,6 +873,7 @@ def current_pool_state(
             "source": "quota-oracle" if refresh_error else "none", "confidence": "unknown",
             **gauge_evidence}
 
+    source = snapshot.get("source") or "unknown"
     observed = parse_iso(snapshot["observed_at"])
     age_s = max(0, int((now - observed).total_seconds()))
     # Enriched copies, never the stored dicts: the snapshot in runtime.json is
@@ -887,7 +888,7 @@ def current_pool_state(
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
-    stale_agy = (snapshot.get("source") in {native_usage.AGY_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
+    stale_agy = (source in {native_usage.AGY_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
                  and age_s > native_usage.AGY_REPORT_MAX_AGE_S)
     confidence = "stale" if refresh_error or stale_agy else "direct" if age_s <= 900 else "aging" if age_s <= 3600 else "stale"
     max_age_s = GAUGE_ERROR_MAX_STALE_S if refresh_error else 3600
@@ -903,7 +904,7 @@ def current_pool_state(
         until = max(window["reset_at"] for window in exhausted_windows.values())
         return "EXHAUSTED", {
             **gauge_evidence,
-            "source": "opencode-console-dashboard",
+            "source": source,
             "confidence": confidence,
             "precision_percentage_points": 1,
             "observed_at": snapshot["observed_at"],
@@ -922,7 +923,7 @@ def current_pool_state(
     if not applicable_windows or age_s > max_age_s:
         return "GAUGE_ERROR" if refresh_error else "UNKNOWN", {
             **gauge_evidence,
-            "source": "opencode-console-dashboard",
+            "source": source,
             "confidence": "stale" if age_s > 3600 else confidence,
             "observed_at": snapshot["observed_at"],
             "age_seconds": age_s,
@@ -969,7 +970,7 @@ def current_pool_state(
         expiring.clear()
     return _state_for_used(max_used), {
         **gauge_evidence,
-        "source": "opencode-console-dashboard",
+        "source": source,
         "confidence": confidence,
         "precision_percentage_points": 1,
         "observed_at": snapshot["observed_at"],
