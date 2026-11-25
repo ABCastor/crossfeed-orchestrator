@@ -1291,8 +1291,9 @@ def _source_identity(config: dict[str, Any]) -> Any:
         try:
             selected = tuple((key, str(Path(config[key]).expanduser()))
                              for key in ("oauth_session_file", "oauth_acp_file") if key in config)
-            if selected:
-                return (oracle, "oauth", selected)
+            keychain = config.get("oauth_cli_keychain") is True
+            if selected or keychain:
+                return (oracle, "oauth", selected, keychain)
             return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools

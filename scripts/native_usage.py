@@ -20,6 +20,7 @@ A rejected sign-in, a missing tool and an unreadable answer stay distinct and ne
 """
 from __future__ import annotations
 
+import base64
 import calendar
 import datetime as dt
 import http.client
@@ -796,16 +797,38 @@ def _agy_acp_access(doc: dict[str, Any], timeout: float) -> tuple[str | None, st
     return token, project, ""
 
 
-def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False) -> dict[str, Any]:
+def _agy_cli_keychain(timeout: float) -> dict[str, Any]:
+    """Antigravity CLI's own macOS go-keyring entry, captured without a shell or logs."""
+    if timeout <= 0 or not Path("/usr/bin/security").is_file():
+        return {}
+    found = subprocess.run(
+        ["/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"],
+        capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
+    )
+    body = found.stdout.strip()
+    if found.returncode != 0 or len(body) > MAX_BODY_BYTES:
+        return {}
+    if body.startswith(b"go-keyring-base64:"):
+        body = base64.b64decode(body.partition(b":")[2], validate=True)
+    elif body.startswith(b"go-keyring-encoded:"):
+        body = bytes.fromhex(body.partition(b":")[2].decode("ascii"))
+    return _mapping(_json(body.decode("utf-8")))
+
+
+def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False,
+                                keychain: bool = False) -> dict[str, Any]:
     """Use one explicitly selected profile. No account discovery or fallback."""
     deadline = time.monotonic() + max(1, min(timeout, 10))
     source = AGY_OAUTH_SOURCE
     try:
-        path = Path(path).expanduser()
-        if not path.is_absolute():
-            raise ValueError
-        doc = _mapping(_json(_owner_file(path).decode("utf-8")))
-    except (TypeError, OSError, ValueError, RuntimeError):
+        if keychain:
+            doc = _agy_cli_keychain(min(3, deadline - time.monotonic()))
+        else:
+            path = Path(path).expanduser()
+            if not path.is_absolute():
+                raise ValueError
+            doc = _mapping(_json(_owner_file(path).decode("utf-8")))
+    except (TypeError, OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         return unavailable(source, "no-auth", "No readable Antigravity OAuth session")
     project = None
     if acp:
@@ -865,9 +888,12 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
     Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Re-reading
     an export never advances its observation time.
     """
+    keychain = config.get("oauth_cli_keychain") is True
+    if sum((keychain, "oauth_acp_file" in config, "oauth_session_file" in config)) > 1:
+        return unavailable(AGY_OAUTH_SOURCE, "no-auth", "Select only one Antigravity OAuth profile type")
+    if keychain:
+        return _observe_antigravity_oauth(None, timeout, keychain=True)
     if "oauth_acp_file" in config:
-        if "oauth_session_file" in config:
-            return unavailable(AGY_OAUTH_SOURCE, "no-auth", "Select only one Antigravity OAuth profile type")
         return _observe_antigravity_oauth(config["oauth_acp_file"], timeout, acp=True)
     if "oauth_session_file" in config:
         return _observe_antigravity_oauth(config["oauth_session_file"], timeout)

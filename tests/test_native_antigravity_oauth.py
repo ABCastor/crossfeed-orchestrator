@@ -1,4 +1,5 @@
 """Fixture tests of the optional signed-in Antigravity quota-only endpoint."""
+import base64
 import datetime as dt
 import json
 from pathlib import Path
@@ -114,6 +115,34 @@ class AntigravityOAuthTests(unittest.TestCase):
             self.assertEqual(native.observe_antigravity(config)["kind"], "no-auth")
             request.assert_not_called()
         running.assert_not_called()
+
+    def test_only_asked_for_cli_keychain_entry_is_read_and_never_renewed(self):
+        config = {"oracle": "antigravity", "oauth_cli_keychain": True}
+        token = json.dumps({"token": {"access_token": "fixture-only",
+                                     "expiry": (NOW + dt.timedelta(minutes=12)).isoformat()}}).encode()
+        buckets = {"buckets": [{"bucketId": "3p-5h", "remainingFraction": 1}]}
+        with patch.object(native.Path, "is_file", return_value=True), \
+                patch.object(native, "_now", return_value=NOW), \
+                patch.object(native.subprocess, "run") as security, \
+                patch.object(native, "_agy_google_post", return_value=(200, buckets)) as rpc:
+            security.return_value.returncode = 0
+            for raw in (token, b"go-keyring-base64:" + base64.b64encode(token),
+                        b"go-keyring-encoded:" + token.hex().encode()):
+                security.reset_mock()
+                rpc.reset_mock()
+                security.return_value.stdout = raw
+                result = native.observe_antigravity(config)
+                self.assertIn("antigravity-quota-summary-3p-5h", result["idle_windows"])
+                security.assert_called_once()
+                self.assertEqual(security.call_args.args[0], [
+                    "/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w",
+                ])
+                self.assertEqual([call.args[0] for call in rpc.call_args_list], list(native.AGY_OAUTH_HOSTS))
+            rpc.reset_mock()
+            security.return_value.stdout = b"go-keyring-base64:?"
+            self.assertEqual(native.observe_antigravity(config)["kind"], "no-auth")
+            rpc.assert_not_called()
+        self.assertNotEqual(fleetctl._source_identity(config), fleetctl._source_identity(self.config))
 
     def test_https_summary_post_has_no_redirect_cookie_or_refresh_fallback(self):
         connection = MagicMock()
