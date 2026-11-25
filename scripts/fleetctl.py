@@ -1305,7 +1305,7 @@ def _source_identity(config: dict[str, Any]) -> Any:
 
 
 def quota_sources(roster: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    """Which pools have a fetchable quota percentage, from where, and how often.
+    """Which pools have a fetchable usage reading, from where, and how often.
 
     Declared per pool in the overlay as `quota_pools.<pool>.quota_refresh`.
     Returns only what the overlay declares, and `{}` for an absent or unreadable overlay.
@@ -1314,14 +1314,14 @@ def quota_sources(roster: dict[str, Any] | None = None) -> dict[str, dict[str, A
     for pool, config in ((roster or {}).get("quota_pools") or {}).items():
         if not isinstance(config, dict) or "quota_refresh" not in config:
             continue
-        if pool_has_no_known_limit(roster, pool):
-            continue
         declared = config["quota_refresh"]
         if not declared or not isinstance(declared, dict):
             continue
         oracle = declared.get("oracle")
         if not oracle or not isinstance(oracle, str) or oracle not in ORACLE_REGISTRY:
             continue
+        if pool_has_no_known_limit(roster, pool) and oracle != "openrouter":
+            continue  # quota readers do not attach a borrowed window; OpenRouter is cash-only
         try:
             ttl = int(declared.get("ttl_s", REFRESH_NETWORK_TTL_S))
         except (TypeError, ValueError):

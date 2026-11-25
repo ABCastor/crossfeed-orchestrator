@@ -427,6 +427,19 @@ class OpenRouterAccountTests(unittest.TestCase):
         self.assertEqual(fleetctl.current_pool_state({"quota_snapshots": {"openrouter-free": snap}},
                                                     "openrouter-free")[0], "UNKNOWN")
 
+    def test_account_only_oracle_refreshes_without_using_quota_for_routing(self):
+        pool = "openrouter-free"
+        roster = {"quota_pools": {pool: {"plan": {"limit": "none-known"},
+                                         "quota_refresh": {"oracle": "openrouter", "ttl_s": 1800}}}}
+        snap = {**native._snapshot(native.OPENROUTER_SOURCE, {}, {}), "account_usage": {"account_balance_usd": 1.5}}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(native.OBSERVERS, {"openrouter": lambda *_a, **_k: snap}):
+            path = Path(temp)
+            self.assertEqual(fleetctl.refresh_stale_pools(path, [pool], roster=roster, force=True), {pool: "refreshed"})
+            runtime = json.loads((path / "runtime.json").read_text())
+            self.assertEqual(runtime["quota_snapshots"][pool]["account_usage"], snap["account_usage"])
+            self.assertEqual(fleetctl.current_pool_state(runtime, pool, roster=roster)[0], "UNKNOWN")
+
     def test_an_env_token_is_never_used_as_a_fallback(self):
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": TOKEN}), \
                 patch.object(native, "_owner_file", side_effect=OSError), \
