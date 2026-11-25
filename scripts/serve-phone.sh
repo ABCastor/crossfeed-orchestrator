@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Foreground Tailscale Serve route for the read-only phone page. Never uses Funnel.
+# Bash parses the complete body before starting, so an install cannot change it in flight.
+main() {
 set -euo pipefail
 if [[ $# != 1 || $1 != /* ]]; then
   echo 'Usage: bash scripts/serve-phone.sh /absolute/path/to/phone.json' >&2; exit 2
@@ -49,3 +51,6 @@ done
 # Tailscale Serve adds Tailscale-User-Login and strips a client-supplied value.
 # The target is not reachable over TCP, and the signed console is never a target.
 tailscale serve --https=8443 --set-path=/crossfeed "unix:$socket"
+}
+
+main "$@"; exit $?
