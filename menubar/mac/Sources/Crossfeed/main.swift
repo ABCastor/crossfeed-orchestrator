@@ -1,5 +1,5 @@
-// Crossfeed menu bar app for macOS. It shows what `fleetctl glance --json --no-refresh` says and nothing
-// else: no provider readers, cookies, tokens or network calls live in this process.
+// Crossfeed menu bar app for macOS. It reads fleetctl glance and saves operator spend changes through
+// fleetctl level: no provider readers, cookies, tokens or network calls live in this process.
 //
 // The menu is CodexBar's structure (MIT, Copyright (c) 2026 Peter Steinberger): a status item whose
 // NSMenu holds one hosted SwiftUI card (provider tiles, usage bars, pace marker) above native action rows.
@@ -16,6 +16,7 @@ struct Config {
     var fixture = ""
     var fonts = ""
     var selftest = false
+    var selftestTab: String?
 }
 
 /// Accepts the LaunchAgent's Go-style flags (-python ...) and their double-dash forms.
@@ -33,6 +34,7 @@ func parse(_ args: [String]) -> Config {
         case "fixture": c.fixture = next; i += 1
         case "fonts": c.fonts = next; i += 1
         case "selftest": c.selftest = true
+        case "tab": c.selftestTab = next; i += 1
         default: break
         }
         i += 1
@@ -68,8 +70,7 @@ enum Reader {
     }
 }
 
-/// Routes a click on a provider tile. A menu's tracking loop hands mouse events to the view itself;
-/// the frames SwiftUI reported say which tile was hit.
+/// A menu's tracking loop hands mouse events to the host; SwiftUI reports which tile or segment was hit.
 final class MenuHostingView: NSHostingView<CrossfeedMenuView> {
     let model: MenuState
 
@@ -86,11 +87,7 @@ final class MenuHostingView: NSHostingView<CrossfeedMenuView> {
     override func mouseUp(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         let point = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
-        if let hit = model.tileFrames.first(where: { $0.value.contains(point) }) {
-            model.onSelect(hit.key)
-        } else {
-            super.mouseUp(with: event)
-        }
+        if !model.routeClick(at: point) { super.mouseUp(with: event) }
     }
 }
 
@@ -102,6 +99,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var glance: Glance?
     var loadedAt = Date()
     var loading = false
+    var revision = 0
+    let io = DispatchQueue(label: "crossfeed.fleetctl", qos: .utility)
     var timers: [Timer] = []
     static let tabKey = "crossfeed.tab"
 
@@ -109,11 +108,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
+        state.canEditPolicy = config.fixture.isEmpty || config.selftest
+        state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
         state.onOpenConsole = { Self.openConsole() }
         state.onReload = { [weak self] in self?.reload() }
         state.onAbout = { Self.about() }
         state.onQuit = { NSApp.terminate(nil) }
         state.failure = "Reading quotas…"
+        if config.selftest { state.selected = config.selftestTab }
         menu.delegate = self
         menu.autoenablesItems = false
         rebuildMenu()
@@ -130,17 +132,46 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Data
 
     func reload() {
-        guard !loading else { return }
+        guard !loading, state.edits.pending == nil else { return }
         loading = true
-        let c = config
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        let c = config, readingRevision = revision
+        io.async { [weak self] in
             let result = Reader.load(c)
-            DispatchQueue.main.async { self?.loaded(result) }
+            RunLoop.main.perform(inModes: [.common, .eventTracking]) {
+                guard let self else { return }
+                self.loading = false
+                if self.revision == readingRevision { self.acceptReading(result); self.tick() }
+            }
         }
     }
 
-    func loaded(_ result: Result<Glance, Error>) {
-        loading = false
+    func changePolicy(_ change: PolicyChange) {
+        guard config.fixture.isEmpty, !config.selftest,
+              let pool = glance?.pools.first(where: { $0.pool == change.pool }),
+              state.edits.begin(change, current: pool.level.flatMap(SpendLevel.init(rawValue:))) else { return }
+        revision += 1 // do not paint a pre-write poll over this transaction
+        let c = config
+        let command = PolicyCommand(python: c.python, fleetctl: c.fleetctl, overlay: c.overlay, stateDir: c.state)
+        io.async { [weak self] in
+            let result = command.save(change)
+            let refreshed: Glance? = (try? result.get()) != nil ? try? Reader.load(c).get() : nil
+            // NSMenu has its own tracking run loop; publish the result while the menu is still open.
+            RunLoop.main.perform(inModes: [.common, .eventTracking]) {
+                guard let self else { return }
+                if let refreshed {
+                    self.acceptReading(.success(refreshed))
+                } else if case .success = result, let index = self.glance?.pools.firstIndex(where: { $0.pool == change.pool }) {
+                    // The CLI committed but the readback failed. Keep the saved selection without inventing attribution.
+                    self.glance?.pools[index].level = change.level.rawValue
+                    self.glance?.pools[index].levelControl = nil
+                }
+                self.state.edits.finish(result, readingAvailable: refreshed != nil)
+                self.tick()
+            }
+        }
+    }
+
+    func acceptReading(_ result: Result<Glance, Error>) {
         switch result {
         case .success(let data):
             glance = data
@@ -150,7 +181,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Keep showing the last reading: its age grows in the header instead of vanishing.
             if glance == nil { state.failure = "Quotas unavailable" }
         }
-        tick()
     }
 
     /// Rebuilds the presenter against the clock so countdowns and ages move without a new reading.
@@ -174,7 +204,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// A new reading can change the card's height while the menu is open; AppKit does not resize a custom
     /// view, so swap the item for one of the right size when (and only when) the height changed.
     func remeasure() {
-        DispatchQueue.main.async { [weak self] in
+        RunLoop.main.perform(inModes: [.common, .eventTracking]) { [weak self] in
             guard let self, let host = self.host else { return }
             if abs(ceil(host.fittingSize.height) - host.frame.height) > 0.5 { self.rebuildMenu() }
         }
@@ -258,7 +288,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     static func about() {
-        let credits = NSAttributedString(string: "Reads fleetctl glance only; no provider logins, cookies or network.\nMenu design adapted from CodexBar (MIT, Peter Steinberger).")
+        let credits = NSAttributedString(string: "Reads quotas and saves spend policy through fleetctl. No provider logins, cookies or network.\nMenu design adapted from CodexBar (MIT, Peter Steinberger). Provider marks from Lobe Icons (MIT).")
         NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Crossfeed", .credits: credits])
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -279,8 +309,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.async {
             let tiles = self.state.tileFrames.count
             let fonts = NSFont(name: "Commissioner-Medium", size: 13) != nil && NSFont(name: "MartianMono-Regular", size: 13) != nil
-            let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1) && self.menu.items.count == 7
-            print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), menu items \(self.menu.items.count), tiles \(tiles), card height \(Int(host.frame.height))")
+            let policyFrames = self.state.policyFrames
+            let policyPools = self.state.selected.flatMap { self.state.presenter?.card(for: $0) }?
+                .sections.filter { $0.level != nil }.count ?? 0
+            var hit: PolicyChange?
+            self.state.onPolicyChange = { hit = $0 }
+            var routeOK = policyPools == 0 && policyFrames.isEmpty
+            if let (change, rect) = policyFrames.first {
+                routeOK = self.state.routeClick(at: CGPoint(x: rect.midX, y: rect.midY)) && hit == change
+            }
+            let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1)
+                && self.menu.items.count == 7 && routeOK && policyFrames.count == policyPools * SpendLevel.allCases.count
+                && providerAssetCount == ProviderLogo.allCases.count
+            print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), policy segments \(policyFrames.count), card height \(Int(host.frame.height))")
             exit(ok ? 0 : 1)
         }
     }
@@ -291,10 +332,11 @@ if !config.selftest && config.fixture.isEmpty && !config.fleetctl.hasPrefix("/")
     FileHandle.standardError.write(Data("Set -fleetctl to the absolute path to fleetctl.py\n".utf8))
     exit(2)
 }
-let bundled = Bundle.main.resourceURL?.appendingPathComponent("Fonts")
-CF.registerFonts(in: config.fonts.isEmpty ? (bundled ?? URL(fileURLWithPath: "/nonexistent")) : URL(fileURLWithPath: config.fonts))
+let resources = Bundle.main.resourceURL ?? URL(fileURLWithPath: "/nonexistent")
+CF.registerFonts(in: config.fonts.isEmpty ? resources.appendingPathComponent("Fonts") : URL(fileURLWithPath: config.fonts))
+let providerAssetCount = ProviderAssets.load(from: resources.appendingPathComponent("ProviderLogos"))
 let application = NSApplication.shared
-application.setActivationPolicy(.accessory)
+application.setActivationPolicy(config.selftest ? .prohibited : .accessory)
 let delegate = App(config: config)
 application.delegate = delegate
 application.run()

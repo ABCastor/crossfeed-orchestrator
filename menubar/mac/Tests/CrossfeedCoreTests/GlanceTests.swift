@@ -158,6 +158,27 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(gemini.note?.hasPrefix("Last reading kept") == true)
     }
 
+    func testGoogleAIProRendersEachAllowanceWithItsOwnModelsAndPolicy() throws {
+        let card = try XCTUnwrap(presenter().card(for: "agy"))
+        XCTAssertEqual(card.heading, "Google AI Pro")
+        let sections = card.allowanceSections
+        XCTAssertEqual(sections.map(\.id), ["antigravity-gemini", "antigravity-3p", "antigravity-argon"])
+        XCTAssertEqual(sections.map { $0.rows.map(\.title) },
+                       [["Gemini weekly", "Gemini 5-hour"], ["Claude/GPT weekly"], ["Argon weekly"]])
+        XCTAssertEqual(sections.map(\.models), [["Gemini 3.8 Flash"], ["Opus 5.5", "Sonnet 5.5"], ["Gemini 4 Argon"]])
+        XCTAssertEqual(sections.map(\.level), [.normal, .normal, .normal])
+        XCTAssertEqual(sections.map { $0.attribution?.actor }, [.agent, .operator_, nil])
+        XCTAssertEqual(sections[0].rows.map(\.usedText), ["1% used", "0% used"])
+        XCTAssertEqual(sections[2].rows.first?.usedText, "Not read")
+        XCTAssertNil(sections[2].rows.first?.bar, "do not invent usage for an unread allowance")
+    }
+
+    func testMarksFollowProviderIncludingOtherPoolRows() throws {
+        let view = try presenter()
+        XCTAssertEqual(view.tabs.map(\.logo), [.claude, .openai, .copilot, .antigravity, .opencode, nil])
+        XCTAssertEqual(view.card(for: "other")?.sections.map(\.logo), [.openai, .gemini, .openrouter])
+    }
+
     func testPoolsWithoutQuotaWindowsLandInOther() throws {
         let card = try XCTUnwrap(presenter().card(for: "other"))
         XCTAssertEqual(card.sections.count, 3)

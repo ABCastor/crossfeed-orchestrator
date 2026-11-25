@@ -26,10 +26,11 @@ case "$platform" in
     [[ -x $bin ]] || { echo "SwiftPM did not produce $bin" >&2; exit 1; }
     staged="$out/Crossfeed.staging.app"
     rm -rf -- "$staged"
-    mkdir -p -- "$staged/Contents/MacOS" "$staged/Contents/Resources/Fonts"
+    mkdir -p -- "$staged/Contents/MacOS" "$staged/Contents/Resources/Fonts" "$staged/Contents/Resources/ProviderLogos"
     cp -- "$bin" "$staged/Contents/MacOS/Crossfeed"
     cp -- "$here/Info.plist" "$staged/Contents/Info.plist"
     cp -- Resources/Fonts/*.ttf Resources/Fonts/OFL-*.txt "$staged/Contents/Resources/Fonts/"
+    cp -- Resources/ProviderLogos/*.svg Resources/ProviderLogos/LICENSE-lobe-icons.txt "$staged/Contents/Resources/ProviderLogos/"
     cp -- THIRD_PARTY_NOTICES.md "$staged/Contents/Resources/"
     /usr/bin/plutil -lint "$staged/Contents/Info.plist" >&2
     /usr/bin/codesign --force --sign - --identifier org.crossfeed.tray "$staged" >&2

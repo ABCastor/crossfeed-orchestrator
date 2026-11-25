@@ -13,6 +13,9 @@ public final class MenuState: ObservableObject {
     @Published public var presenter: Presenter?
     @Published public var selected: String?
     @Published public var failure: String?
+    @Published public var edits = PolicyEdits()
+    public var canEditPolicy = true
+    public var onPolicyChange: (PolicyChange) -> Void = { _ in }
     public var onSelect: (String) -> Void = { _ in }
     public var onOpenConsole: () -> Void = {}
     public var onReload: () -> Void = {}
@@ -21,6 +24,20 @@ public final class MenuState: ObservableObject {
     /// Tile rectangles in the menu view's own coordinates, so the host can route a click that the
     /// menu's tracking loop delivers to the view instead of to SwiftUI's button.
     public var tileFrames: [String: CGRect] = [:]
+    public var policyFrames: [PolicyChange: CGRect] = [:]
+
+    @discardableResult
+    public func routeClick(at point: CGPoint) -> Bool {
+        if let hit = policyFrames.first(where: { $0.value.contains(point) }) {
+            if canEditPolicy, edits.pending == nil { onPolicyChange(hit.key) }
+            return true
+        }
+        if let hit = tileFrames.first(where: { $0.value.contains(point) }) {
+            onSelect(hit.key)
+            return true
+        }
+        return false
+    }
 
     public init(presenter: Presenter? = nil, selected: String? = nil, failure: String? = nil) {
         self.presenter = presenter
@@ -54,7 +71,7 @@ public struct CrossfeedMenuView: View {
                     .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 6)
                 MenuDivider()
                 if let tab = state.selected, let card = presenter.card(for: tab) {
-                    UsageCard(card: card).padding(.top, 6)
+                    UsageCard(card: card, state: state, now: presenter.now).padding(.top, 6)
                 }
                 MenuDivider(inset: true)
                 if let share = presenter.spend.share {
@@ -82,6 +99,7 @@ public struct CrossfeedMenuView: View {
         .frame(width: MenuMetrics.width, alignment: .leading)
         .coordinateSpace(name: MenuMetrics.space)
         .onPreferenceChange(TileFrames.self) { state.tileFrames = $0 }
+        .onPreferenceChange(PolicyFrames.self) { state.policyFrames = $0 }
         .background(CF.paper.opacity(0.9))
         .foregroundStyle(CF.ink)
     }
@@ -113,13 +131,13 @@ struct ProviderTile: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: tab.symbol).font(.system(size: 14, weight: .medium)).frame(height: 17)
-                Text(tab.title).font(CF.face(10.5, .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                if let logo = tab.logo { ProviderMark(logo: logo, size: 17) }
+                Text(tab.title).font(CF.face(10.5, isSelected ? .semibold : .medium)).lineLimit(1).minimumScaleFactor(0.8)
             }
-            .foregroundStyle(isSelected ? Color.white : CF.quiet)
-            .frame(maxWidth: .infinity).padding(.top, 5).padding(.bottom, 9)
+            .foregroundStyle(isSelected ? CF.machineText : CF.quiet)
+            .frame(maxWidth: .infinity, minHeight: 30).padding(.top, 5).padding(.bottom, 9)
             .background(RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? CF.machine : (hovering ? CF.ink.opacity(0.07) : Color.clear)))
+                .fill(isSelected ? CF.machine.opacity(0.13) : (hovering ? CF.ink.opacity(0.07) : Color.clear)))
             .background(GeometryReader { geo in
                 Color.clear.preference(key: TileFrames.self, value: [tab.id: geo.frame(in: .named(MenuMetrics.space))])
             })
@@ -128,7 +146,7 @@ struct ProviderTile: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .accessibilityLabel(tab.title)
+        .accessibilityLabel(tab.id == "agy" ? "Google AI Pro (Antigravity)" : tab.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
@@ -148,9 +166,9 @@ struct QuotaTick: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(onFill ? Color.white.opacity(0.28) : CF.ink.opacity(0.16))
+                Capsule().fill(onFill ? CF.machine.opacity(0.28) : CF.ink.opacity(0.16))
                 if let used = tab.used, used > 0 {
-                    Capsule().fill(onFill ? Color.white : (tab.hot ? CF.human : CF.machine))
+                    Capsule().fill(tab.hot ? CF.human : CF.machine)
                         .frame(width: max(2, geo.size.width * min(1, used / 100)))
                 }
             }
@@ -163,22 +181,25 @@ struct QuotaTick: View {
 
 struct UsageCard: View {
     let card: CardModel
+    @ObservedObject var state: MenuState
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(card.title).font(CF.face(16, .semibold)).lineLimit(1).layoutPriority(1)
+                    Text(card.heading).font(CF.face(16, .semibold)).lineLimit(1).layoutPriority(1)
                     Spacer(minLength: 4)
                     if let badge = card.badge { StateBadge(text: badge) }
                 }
-                Text(card.subtitle).font(CF.face(11)).foregroundStyle(CF.quiet).lineLimit(1)
+                Text(card.isAntigravity ? "Antigravity · " + card.subtitle : card.subtitle)
+                    .font(CF.face(11)).foregroundStyle(CF.quiet).lineLimit(1)
             }
             .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 8)
             MenuDivider(inset: true).padding(.bottom, 6)
-            ForEach(Array(card.sections.enumerated()), id: \.element.id) { index, section in
-                if index > 0 { MenuDivider(inset: true).padding(.vertical, 4) }
-                SectionView(section: section, multi: card.sections.count > 1)
+            ForEach(Array(card.allowanceSections.enumerated()), id: \.element.id) { index, section in
+                if index > 0 { MenuDivider(inset: true).padding(.vertical, 5) }
+                SectionView(section: section, state: state, now: now, showModels: card.isAntigravity)
             }
         }
         .padding(.bottom, 6)
@@ -207,21 +228,35 @@ struct StateBadge: View {
 
 struct SectionView: View {
     let section: SectionModel
-    let multi: Bool
+    @ObservedObject var state: MenuState
+    let now: Date
+    let showModels: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: section.rows.isEmpty ? 4 : 14) {
+        VStack(alignment: .leading, spacing: 5) {
             if let title = section.title {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(title).font(CF.face(14, .semibold)).lineLimit(1).truncationMode(.tail).layoutPriority(0)
+                HStack(spacing: 6) {
+                    if let logo = section.logo { ProviderMark(logo: logo, size: 13) }
+                    Text(title).font(CF.face(14, .semibold)).lineLimit(1)
                     Spacer(minLength: 4)
                     if let badge = section.badge { StateBadge(text: badge).layoutPriority(1) }
                 }
             }
-            ForEach(section.rows) { row in MetricRow(row: row) }
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(section.rows) { row in MetricRow(row: row) }
+            }
             if let note = section.note {
-                Text(note).font(CF.face(11)).foregroundStyle(CF.quiet)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Text(showModels && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
+                    .font(CF.face(11)).foregroundStyle(CF.quiet)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true).help(note)
+            }
+            if showModels, !section.models.isEmpty {
+                Text(section.models.joined(separator: " · ")).font(CF.face(11)).foregroundStyle(CF.quiet)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Models: " + section.models.joined(separator: ", "))
+            }
+            if section.level != nil {
+                PolicyControl(section: section, state: state, now: now)
             }
         }
         .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 4)
