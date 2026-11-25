@@ -571,7 +571,7 @@ def _claude_lead_window_at_risk(window: dict[str, Any]) -> bool:
     return lead_window_risk(window) is not None
 
 
-# BR-SELECT-006
+# BR-SELECT-006 · BR-SELECT-007
 def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, Any] | None = None,
                          model_key: str | None = None) -> int | None:
     """Soonest projected run-out among a pool's applicable windows; 0 when it is critical or exhausted.
@@ -579,7 +579,11 @@ def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, A
     None means no window is projected to run out before its reset (or none can be read).
     """
     state, evidence = current_pool_state(_without_levels(runtime), pool, roster=roster, model_key=model_key)
-    if state in {"CRITICAL", "EXHAUSTED"}:
+    if state == "EXHAUSTED":
+        return 0
+    if pool_level(runtime, pool) == "forced":
+        return None
+    if state == "CRITICAL":
         return 0
     windows = evidence.get("windows") or {}
     times = []
@@ -594,15 +598,17 @@ def pool_run_out_seconds(runtime: dict[str, Any], pool: str, roster: dict[str, A
     return min(times) if times else None
 
 
-# BR-SELECT-006
+# BR-SELECT-006 · BR-SELECT-007
 def lead_pressure(runtime: dict[str, Any], pool: str | None,
                   roster: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Lead preservation uses observed pressure, independent of worker spend overrides."""
+    """Reserve lead quota on observed pressure unless the operator ignores estimates."""
     if pool is None:
         return None
     observed = _without_levels(runtime)
     state, evidence = current_pool_state(observed, pool, roster=roster)
     level = pool_level(runtime, pool)
+    if level == "forced" and state != "EXHAUSTED":
+        return None
     scoped = False
 
     def applicable_windows(evidence, *, scoped_only=False):
@@ -820,15 +826,14 @@ def quota_window_applies(roster: dict[str, Any] | None, pool: str, name: str,
     return family_terms <= (words(model_key) - noise)
 
 
+# BR-SELECT-007
 def current_pool_state(
     runtime: dict[str, Any], pool: str, now: dt.datetime | None = None,
     *, roster: dict[str, Any] | None = None, model_key: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     now = now or utc_now()
-    # The operator's hand setting beats every measurement: "off" saves a pool they want kept,
-    # "forced" spends one the gauges say is low. Set with `fleetctl.py level <pool> <level>`
-    # (or the older `switch <pool> off|on|auto`), from the console page, or by an agent on
-    # the operator's word.
+    # Off always denies access. Forced bypasses pressure, not provider refusal
+    # or a provider-reported full window that has not reset.
     level = pool_level(runtime, pool)
     if level == "off":
         return "EXHAUSTED", {"source": "switched-off", "level": "off",
@@ -849,10 +854,10 @@ def current_pool_state(
             "until": circuit_until,
             "limit_name": circuit.get("limit_name"),
         }
-    if level == "forced":
-        return "ABUNDANT", {"source": "forced-on", "level": "forced"}
-
+    forced = ("ABUNDANT", {"source": "forced-on", "level": "forced"})
     if pool_has_no_known_limit(roster, pool):
+        if level == "forced":
+            return forced
         return "UNKNOWN", {"source": "none-known", "confidence": "declared"}
 
     refresh_error = (runtime.get("quota_refresh_errors") or {}).get(pool)
@@ -862,6 +867,8 @@ def current_pool_state(
                        "gauge_error_at": refresh_error["attempted_at"]} if refresh_error else {})
     snapshot = runtime.get("quota_snapshots", {}).get(pool)
     if not snapshot:
+        if level == "forced":
+            return forced
         return "GAUGE_ERROR" if refresh_error else "UNKNOWN", {
             "source": "quota-oracle" if refresh_error else "none", "confidence": "unknown",
             **gauge_evidence}
@@ -910,6 +917,8 @@ def current_pool_state(
             "applicable_windows": sorted(applicable_windows),
             "spend_down": [],
         }
+    if level == "forced":
+        return forced
     if not applicable_windows or age_s > max_age_s:
         return "GAUGE_ERROR" if refresh_error else "UNKNOWN", {
             **gauge_evidence,

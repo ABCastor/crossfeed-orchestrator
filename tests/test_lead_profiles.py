@@ -60,8 +60,9 @@ class LeadDetectionTests(unittest.TestCase):
             self.assertEqual(text.splitlines()[-2], expected)
             self.assertEqual(text.count("lead:"), 1)
             self.assertNotIn("lead:", fleetctl.render_brief(data, runtime=runtime))
+            # BR-SELECT-007: the legacy stored "on" is Ignore estimates, for Claude too.
             runtime["switches"] = {"claude": "on"}
-            self.assertEqual(fleetctl.lead_directive(fleetctl.lead_pressure(runtime, "claude")), expected)
+            self.assertIsNone(fleetctl.lead_directive(fleetctl.lead_pressure(runtime, "claude")))
 
     # BR-SELECT-004 / BR-SELECT-006
     def test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus(self):

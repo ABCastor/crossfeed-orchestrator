@@ -118,6 +118,13 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/fleetctl.py:lead_window_risk`, `scripts/fleetctl.py:_claude_lead_window_at_risk`, `scripts/fleetctl.py:pool_run_out_seconds`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`, `scripts/selector.py:_reserve_waiver`, `scripts/selector.py:select_option`.
 - tested-by: `tests/test_lead_profiles.py:LeadSelectionTests.test_claude_lead_hard_reasoning_reserves_only_a_tight_window`, `LeadSelectionTests.test_claude_lead_reserve_applies_only_when_it_helps`, `LeadDetectionTests.test_claude_lead_uses_the_at_risk_window_not_the_most_used`, `LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
 
+## BR-SELECT-007 — Ignore estimates until a provider limit [OPERATOR-DECIDED 2026-11-25]
+
+- RULE: A pool at `forced` (Ignore estimates) stays eligible regardless of quota pressure or projected run-out, including for its own lead's workers. Its quota debit is priced at plain plan value without forecast, pace or remaining-headroom premiums. Real provider refusals (including rate-limit circuits), applicable provider-reported 100% windows until reset, cash safeguards and the explicit Opus fallback in BR-SELECT-004 still apply. An `off` pool remains unavailable. Normal and high retain their existing rules.
+- Authority: Operator: “I told it to ignore estimates for GPT ... IGNORE ESTIMATES MEAN!!!!” This takes precedence over estimate-based lead reserves in BR-SELECT-006 and quota price premiums in BR-SELECT-005 only while the dial is `forced`.
+- implemented-by: `scripts/fleetctl.py:current_pool_state`, `lead_pressure`, `pool_run_out_seconds`; `scripts/selector.py:_pool_price`, `pool_pace`, `_capacity_headroom`.
+- tested-by: `tests/test_business_forced_quota.py:ForcedQuotaTests.test_forced_codex_ignores_estimates_not_hard_stops`; control: `test_normal_and_high_still_reserve_and_price_pressure`.
+
 ## BR-EVIDENCE-001 — Local fit trials update outside priors with provenance [DECIDED]
 
 - RULE: Mechanically checked fit-only benchmark passes and failures enter the selector's local ledger once per trial, retaining source and measurement date. Each trial contributes one Beta observation alongside the existing weighted external prior. Imports preserve other ledger observations and reject conflicting reimports. Held-out and excluded cells never train selector quality or telemetry; mixed fit/held-out quota batches supply no inferred fit cost. Missing measurements remain unknown. Artificial Analysis values remain host-local runtime data and must never be copied into published source files.

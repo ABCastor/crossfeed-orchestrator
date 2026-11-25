@@ -358,13 +358,14 @@ def _opus_quota_refusal(roster, runtime, fleet):
     return None
 
 
+# BR-SELECT-007
 def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any,
                 *, model_key: str | None = None) -> dict:
     """Price the greatest applicable pressure, with actual usage flooring forecasts.
 
     Pool summaries exclude model-only windows. Option prices also include windows
     naming that model's family, using the oracle label or its scoped window id.
-    Spend levels govern admission, not the measured price or displayed quota.
+    Forced pricing uses the longest applicable window as a unit, without pressure.
     """
     if fleet.pool_has_no_known_limit(roster, pool):
         state, _ = fleet.current_pool_state(runtime, pool, roster=roster)
@@ -375,6 +376,15 @@ def _pool_price(roster: dict, runtime: dict, pool: str, policy: dict, fleet: Any
     state, _ = fleet.current_pool_state(runtime, pool, roster=roster, model_key=model_key)
     measured_state, evidence = fleet.current_pool_state(fleet._without_levels(runtime), pool,
                                                         roster=roster, model_key=model_key)
+    if fleet.pool_level(runtime, pool) == "forced":
+        name, window = max(
+            ((name, window) for name, window in evidence.get("windows", {}).items()
+             if name in evidence.get("applicable_windows", []) and window.get("window_minutes")),
+            key=lambda item: (item[1]["window_minutes"], item[0]), default=(None, {}))
+        return {"lambda": 0.0, "state": state, "binding_window": name, "window": window,
+                "window_minutes": window.get("window_minutes", 10080), "pressure_percent": None,
+                "projected_used_percent_at_reset": None, "projection_unknown": False,
+                "projection_basis": "forced"}
     priced = []
     target = policy.get("target", DEFAULTS["target"])
     lambda0 = policy.get("lambda0", DEFAULTS["lambda0"])
@@ -450,7 +460,7 @@ def window_routing_pace(window: dict, fleet: Any) -> dict | None:
     return dict(pace, value=max(-1.0, min(1.0, value)), projected=projected_basis)
 
 
-# BR-SELECT-002
+# BR-SELECT-002 · BR-SELECT-007
 def pool_pace(roster: dict, runtime: dict, pool: str, fleet: Any, *,
               model_key: str | None = None) -> dict:
     """One signed pace for a pool, in allowance fractions: + surplus, - deficit.
@@ -458,6 +468,7 @@ def pool_pace(roster: dict, runtime: dict, pool: str, fleet: Any, *,
     A task spends from every applicable window at once, so any window running out before its
     reset makes the pool one to avoid: the worst deficit is the pool's pace. Otherwise the
     largest surplus is, since that is the allowance the next reset destroys. Deficits under 5% count as on pace. Unknown, stale or unlimited pools are neutral (0).
+    Forced ignores deficit penalties; usable surplus still matters to cash routing.
     """
     if fleet.pool_has_no_known_limit(roster, pool):
         return {"value": 0.0, "basis": "none-known", "window": None}
@@ -474,6 +485,8 @@ def pool_pace(roster: dict, runtime: dict, pool: str, fleet: Any, *,
         return {"value": 0.0, "basis": "unknown", "window": None}
     deficits = [(name, pace) for name, pace in readings if pace["value"] <= -0.05]
     if deficits:
+        if fleet.pool_level(runtime, pool) == "forced":
+            return {"value": 0.0, "basis": "forced", "window": None}
         name, pace = min(deficits, key=lambda row: row[1]["value"])
         value = pace["value"]
     else:
@@ -618,7 +631,7 @@ def _recent_working_pools(roster: dict, state_dir: Path,
     return working
 
 
-# BR-SELECT-003 · BR-SELECT-005
+# BR-SELECT-003 · BR-SELECT-005 · BR-SELECT-007
 def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
                        reference: float, fleet: Any,
                        recently_worked: Callable[[str], bool] | None = None) -> dict | None:
@@ -646,7 +659,8 @@ def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
     remaining = capacity * (1 - used / 100) if used is not None else None
     basis = "observed" if remaining is not None else "unknown"
     estimate = None
-    if remaining is None and recently_worked is not None:
+    forced = fleet.pool_level(runtime, pool) == "forced"
+    if not forced and remaining is None and recently_worked is not None:
         snapshot = runtime.get("quota_snapshots", {}).get(pool) or {}
         idle = snapshot.get("idle_windows", {})
         windows = snapshot.get("windows", {})
@@ -664,7 +678,7 @@ def _capacity_headroom(roster: dict, runtime: dict, pool: str, model: str,
             "window": window, "used_percent": used, "source": profile["source"],
             "reference_usd_equivalent": reference, "headroom_basis": basis,
             **({"estimated_remaining_usd_equivalent": estimate} if estimate is not None else {}),
-            "scarcity_penalty": reference / (reference + (priced_remaining or 0.))}
+            "scarcity_penalty": 0.0 if forced else reference / (reference + (priced_remaining or 0.))}
 
 
 def _allowance_usd(roster: dict, pool: str, binding: dict) -> float | None:
