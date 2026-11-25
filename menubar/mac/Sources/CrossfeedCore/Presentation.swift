@@ -59,11 +59,20 @@ public struct CardModel: Equatable {
     public var sections: [SectionModel]
 }
 
+/// CodexBar's "Extra usage" card, for the ledger: how much of the month's subscriptions is the operator's.
+public struct ShareModel: Equatable {
+    public var title: String          // "Your share"
+    public var fraction: Double       // 0...1
+    public var left: String           // "EUR 10.00 of EUR 20.00"
+    public var right: String          // "50% yours"
+}
+
+/// CodexBar's "Cost" card, for the ledger: what the month's subscriptions come to.
 public struct SpendModel: Equatable {
     public var title: String          // "Subscriptions"
-    public var lines: [String]        // "This month: EUR 20.00", "Your share: EUR 10.00"
+    public var lines: [String]        // "This month: EUR 20.00"
     public var note: String?          // "2 plans have no price yet"
-    public var share: Double?         // your share of the month, 0...1, for the thin bar
+    public var share: ShareModel?
 }
 
 /// The two tanks of the menu bar mark plus the number beside them.
@@ -280,17 +289,16 @@ public struct Presenter {
         guard let spend = glance.spend, !spend.unavailable else {
             return SpendModel(title: "Subscriptions", lines: ["Spend unavailable"], note: nil, share: nil)
         }
-        var lines: [String] = []
-        var share: Double?
-        for m in spend.monthly {
-            lines.append("This month: \(m.currency) \(m.total)")
-            if let own = m.operator_ {
-                lines.append("Your share: \(m.currency) \(own)")
-                if spend.monthly.count == 1, let t = Double(m.total), t > 0, let o = Double(own) {
-                    share = min(1, max(0, o / t))
-                }
-            } else {
-                lines.append("Your share: not set")
+        var lines = spend.monthly.map { "This month: \($0.currency) \($0.total)" }
+        var share: ShareModel?
+        if spend.monthly.count == 1, let m = spend.monthly.first, let own = m.operator_,
+           let total = Double(m.total), total > 0, let mine = Double(own) {
+            let fraction = min(1, max(0, mine / total))
+            share = ShareModel(title: "Your share", fraction: fraction, left: "\(m.currency) \(own) of \(m.currency) \(m.total)",
+                               right: "\(Int((fraction * 100).rounded()))% yours")
+        } else {
+            for m in spend.monthly {
+                lines.append(m.operator_.map { "Your share: \(m.currency) \($0)" } ?? "Your share: not set")
             }
         }
         var note: String?

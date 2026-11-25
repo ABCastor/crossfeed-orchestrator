@@ -59,8 +59,8 @@ final class GlanceDecodingTests: XCTestCase {
     func testPricedSpendShowsTheOperatorsShare() throws {
         let body = #"{"schema":1,"pools":[],"subscription_spend":{"monthly":[{"currency":"EUR","total":"20.00","operator":"10.00"}],"unpriced":2,"unsplit":0,"unavailable":false}}"#
         let spend = Presenter(glance: try Glance.decode(json(body)), loadedAt: fixtureNow, now: fixtureNow).spend
-        XCTAssertEqual(spend.lines, ["This month: EUR 20.00", "Your share: EUR 10.00"])
-        XCTAssertEqual(spend.share, 0.5)
+        XCTAssertEqual(spend.lines, ["This month: EUR 20.00"])
+        XCTAssertEqual(spend.share, ShareModel(title: "Your share", fraction: 0.5, left: "EUR 10.00 of EUR 20.00", right: "50% yours"))
         XCTAssertEqual(spend.note, "2 plans have no price yet")
     }
 
@@ -68,6 +68,13 @@ final class GlanceDecodingTests: XCTestCase {
         let body = #"{"schema":1,"pools":[],"subscription_spend":{"monthly":[{"currency":"EUR","total":"20.00","operator":null}],"unpriced":0,"unsplit":1,"unavailable":false}}"#
         let spend = Presenter(glance: try Glance.decode(json(body)), loadedAt: fixtureNow, now: fixtureNow).spend
         XCTAssertEqual(spend.lines, ["This month: EUR 20.00", "Your share: not set"])
+        XCTAssertNil(spend.share)
+    }
+
+    func testTwoCurrenciesListEachShare() throws {
+        let body = #"{"schema":1,"pools":[],"subscription_spend":{"monthly":[{"currency":"EUR","total":"20.00","operator":"10.00"},{"currency":"USD","total":"200.00","operator":null}],"unpriced":0,"unsplit":1,"unavailable":false}}"#
+        let spend = Presenter(glance: try Glance.decode(json(body)), loadedAt: fixtureNow, now: fixtureNow).spend
+        XCTAssertEqual(spend.lines, ["This month: EUR 20.00", "This month: USD 200.00", "Your share: EUR 10.00", "Your share: not set"])
         XCTAssertNil(spend.share)
     }
 

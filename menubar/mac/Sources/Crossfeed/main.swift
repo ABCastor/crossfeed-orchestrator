@@ -168,7 +168,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             state.presenter = nil
         }
         paintStatusItem()
-        if !menuIsOpen { rebuildMenu() }
+        if menuIsOpen { remeasure() } else { rebuildMenu() }
+    }
+
+    /// A new reading can change the card's height while the menu is open; AppKit does not resize a custom
+    /// view, so swap the item for one of the right size when (and only when) the height changed.
+    func remeasure() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let host = self.host else { return }
+            if abs(ceil(host.fittingSize.height) - host.frame.height) > 0.5 { self.rebuildMenu() }
+        }
     }
 
     func select(_ id: String) {
@@ -194,6 +203,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     var menuIsOpen = false
+    var host: MenuHostingView?
 
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
@@ -209,6 +219,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         let host = MenuHostingView(model: state)
         host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
+        self.host = host
         let card = NSMenuItem()
         card.view = host
         menu.addItem(card)

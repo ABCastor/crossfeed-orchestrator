@@ -57,6 +57,10 @@ public struct CrossfeedMenuView: View {
                     UsageCard(card: card).padding(.top, 6)
                 }
                 MenuDivider(inset: true)
+                if let share = presenter.spend.share {
+                    ShareCard(model: share).padding(.top, 4)
+                    MenuDivider(inset: true).padding(.top, 4)
+                }
                 SpendCard(model: presenter.spend).padding(.vertical, 4)
             } else {
                 EmptyCard(text: state.failure ?? "Reading quotas…")
@@ -171,6 +175,7 @@ struct UsageCard: View {
                 Text(card.subtitle).font(CF.face(11)).foregroundStyle(CF.quiet).lineLimit(1)
             }
             .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 8)
+            MenuDivider(inset: true).padding(.bottom, 6)
             ForEach(Array(card.sections.enumerated()), id: \.element.id) { index, section in
                 if index > 0 { MenuDivider(inset: true).padding(.vertical, 4) }
                 SectionView(section: section, multi: card.sections.count > 1)
@@ -205,7 +210,7 @@ struct SectionView: View {
     let multi: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: section.rows.isEmpty ? 4 : 10) {
+        VStack(alignment: .leading, spacing: section.rows.isEmpty ? 4 : 14) {
             if let title = section.title {
                 HStack(alignment: .firstTextBaseline) {
                     Text(title).font(CF.face(14, .semibold)).lineLimit(1).truncationMode(.tail).layoutPriority(0)
@@ -257,18 +262,34 @@ struct MetricRow: View {
 
 // MARK: Spend and actions
 
-/// CodexBar's Extra usage / Cost cards, for the subscription ledger: this month and the operator's share.
+/// CodexBar's Extra usage card: a labelled bar, what it holds on the left and how much on the right.
+struct ShareCard: View {
+    let model: ShareModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(model.title).font(CF.face(13, .medium))
+            ShareBar(share: model.fraction, label: model.title)
+            HStack(alignment: .firstTextBaseline) {
+                Measure(model.left, size: 11.5)
+                Spacer(minLength: 8)
+                Measure(model.right, size: 11.5).foregroundStyle(CF.quiet)
+            }
+        }
+        .padding(.horizontal, MenuMetrics.horizontal).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// CodexBar's Cost card: the month's subscriptions as plain lines.
 struct SpendCard: View {
     let model: SpendModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(model.title).font(CF.face(13, .medium))
-            if let share = model.share {
-                ShareBar(share: share)
-            }
             ForEach(model.lines, id: \.self) { line in
-                Measure(line, size: 12)
+                Measure(line, size: 11.5)
             }
             if let note = model.note {
                 Text(note).font(CF.face(11)).foregroundStyle(CF.quiet)
@@ -281,15 +302,16 @@ struct SpendCard: View {
 
 struct ShareBar: View {
     let share: Double
+    let label: String
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule().fill(CF.ink.opacity(0.14))
-                Capsule().fill(CF.machine).frame(width: geo.size.width * share)
+                Capsule().fill(CF.machine).frame(width: max(6, geo.size.width * share))
             }
         }
         .frame(height: 6)
-        .accessibilityLabel("Your share of this month")
+        .accessibilityLabel(label)
         .accessibilityValue("\(Int((share * 100).rounded())) percent")
     }
 }

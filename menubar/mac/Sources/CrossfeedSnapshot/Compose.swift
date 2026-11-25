@@ -101,23 +101,27 @@ enum Compose {
         }
     }
 
-    /// Two screenshots at the same scale (2 px per point), titled, top aligned.
-    static func sideBySide(left: NSImage, right: NSImage, leftTitle: String, rightTitle: String, scale: CGFloat) -> NSImage {
-        let leftPoints = NSSize(width: (left.representations.first.map { CGFloat($0.pixelsWide) } ?? left.size.width) / scale,
-                                height: (left.representations.first.map { CGFloat($0.pixelsHigh) } ?? left.size.height) / scale)
+    /// Screenshots at the same scale (2 px per point), titled, top aligned. Pixel size / scale = points.
+    static func row(_ panels: [(title: String, image: NSImage)], scale: CGFloat) -> NSImage {
+        let sizes = panels.map { panel -> NSSize in
+            let rep = panel.image.representations.first
+            return NSSize(width: (rep.map { CGFloat($0.pixelsWide) } ?? panel.image.size.width * scale) / scale,
+                          height: (rep.map { CGFloat($0.pixelsHigh) } ?? panel.image.size.height * scale) / scale)
+        }
         let title: CGFloat = 36, gap: CGFloat = 20, pad: CGFloat = 16
-        let size = NSSize(width: pad * 2 + leftPoints.width + gap + right.size.width,
-                          height: pad * 2 + title + max(leftPoints.height, right.size.height))
+        let size = NSSize(width: pad * 2 + sizes.map(\.width).reduce(0, +) + gap * CGFloat(panels.count - 1),
+                          height: pad * 2 + title + (sizes.map(\.height).max() ?? 0))
         return bitmap(points: size, scale: scale) {
             NSColor(white: 0.93, alpha: 1).setFill()
             NSRect(origin: .zero, size: size).fill()
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.black]
             let top = size.height - pad
-            (leftTitle as NSString).draw(at: NSPoint(x: pad, y: top - 20), withAttributes: attrs)
-            (rightTitle as NSString).draw(at: NSPoint(x: pad + leftPoints.width + gap, y: top - 20), withAttributes: attrs)
-            left.draw(in: NSRect(x: pad, y: top - title - leftPoints.height, width: leftPoints.width, height: leftPoints.height))
-            right.draw(in: NSRect(x: pad + leftPoints.width + gap, y: top - title - right.size.height,
-                                  width: right.size.width, height: right.size.height))
+            var x = pad
+            for (panel, box) in zip(panels, sizes) {
+                (panel.title as NSString).draw(at: NSPoint(x: x, y: top - 20), withAttributes: attrs)
+                panel.image.draw(in: NSRect(x: x, y: top - title - box.height, width: box.width, height: box.height))
+                x += box.width + gap
+            }
         }
     }
 }

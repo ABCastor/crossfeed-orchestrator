@@ -28,15 +28,23 @@ MainActor.assumeIsolated {
 do {
     let glance = try Glance.decode(Data(contentsOf: URL(fileURLWithPath: fixture)))
     let presenter = Presenter(glance: glance, loadedAt: now, now: now)
-    let state = MenuState(presenter: presenter, selected: argument("--tab"))
     let scale: CGFloat = 2
-    let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale)
-    var final = Compose.screen(menu: menu, summary: presenter.summary, appearance: appearance, scale: scale)
+    let tabs = (argument("--tabs") ?? argument("--tab") ?? "").split(separator: ",").map(String.init)
+    var panels: [(title: String, image: NSImage)] = []
+    for tab in tabs.isEmpty ? [presenter.defaultTab ?? ""] : tabs {
+        let state = MenuState(presenter: presenter, selected: tab.isEmpty ? nil : tab)
+        let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale)
+        let screen = Compose.screen(menu: menu, summary: presenter.summary, appearance: appearance, scale: scale)
+        let name = presenter.tabs.first { $0.id == state.selected }?.title ?? "menu"
+        panels.append(("Crossfeed, \(name) tab, fixture glance JSON", screen))
+    }
+    var all: [(title: String, image: NSImage)] = []
     if let reference = argument("--side-by-side") {
         guard let other = NSImage(contentsOfFile: reference) else { throw GlanceError.malformed }
-        final = Compose.sideBySide(left: other, right: final, leftTitle: "CodexBar 0.67.0 (MIT), README screenshot",
-                                   rightTitle: "Crossfeed, fixture glance JSON", scale: scale)
+        all.append(("CodexBar 0.67.0 (MIT), README screenshot", other))
     }
+    all += panels
+    let final = all.count == 1 ? all[0].image : Compose.row(all, scale: scale)
     guard let tiff = final.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
           let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
     try png.write(to: URL(fileURLWithPath: out))
