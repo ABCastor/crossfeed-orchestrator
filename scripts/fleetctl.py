@@ -1609,6 +1609,8 @@ def _filtered_observation(observed: dict[str, Any], config: dict[str, Any]) -> d
     result = dict(observed)
     for key in ("windows", "idle_windows"):
         result[key] = {k: v for k, v in observed.get(key, {}).items() if k in allowed}
+    if "provider_used_percent" in observed:
+        result["provider_used_percent"] = {k: v for k, v in observed["provider_used_percent"].items() if k in allowed}
     if not result["windows"] and not result["idle_windows"]:
         result.update(available=False, reason="no matching rate windows")
     return result

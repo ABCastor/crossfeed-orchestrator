@@ -32,7 +32,7 @@ class AntigravityOAuthTests(unittest.TestCase):
         def bucket(id, fraction):
             return {'bucketId': id, 'window': 'weekly', 'remainingFraction': fraction,
                     'resetTime': (NOW + dt.timedelta(days=2)).isoformat()}
-        first = {'buckets': [star, bucket('gemini-weekly', .92), bucket('gemini-unrelated-weekly', .75)]}
+        first = {'buckets': [star, bucket('gemini-weekly', .9182), bucket('gemini-unrelated-weekly', .75)]}
         second = {'groups': [{'buckets': [bucket('gemini-weekly', .75), bucket('3p-weekly', .82),
                                          bucket('gemini-argon-wtu-weekly', .5)]}]}
         with patch.object(native, '_now', return_value=NOW), patch.object(native.subprocess, 'run') as spawn, \
@@ -45,6 +45,9 @@ class AntigravityOAuthTests(unittest.TestCase):
         self.assertEqual({k.removeprefix(prefix): row['used_percent'] for k, row in result['windows'].items()},
                          {'gemini-weekly': 8, '3p-weekly': 18, 'argon-weekly': 50})
         self.assertIn(prefix + 'gemini-5h', result['idle_windows'])
+        self.assertEqual(result["provider_used_percent"][prefix + "gemini-weekly"], 8.18)
+        filtered = fleetctl._filtered_observation(result, {"windows": [prefix + "gemini-weekly"]})
+        self.assertEqual(filtered["provider_used_percent"], {prefix + "gemini-weekly": 8.18})
         self.assertNotIn('fixture-only', json.dumps(result))
         other = {**self.config, 'oauth_session_file': str(self.file.with_name('second.json'))}
         self.assertNotEqual(fleetctl._source_identity(self.config), fleetctl._source_identity(other))
@@ -155,6 +158,7 @@ class AntigravityOAuthTests(unittest.TestCase):
         self.assertEqual(connection.request.call_args.args[:3], ('POST', native.AGY_OAUTH_QUOTA, b'{}'))
         self.assertEqual(connection.request.call_args.args[3]['Authorization'], 'Bearer fixture-only')
         self.assertNotIn('Cookie', connection.request.call_args.args[3])
+        self.assertEqual(connection.request.call_args.args[3]["User-Agent"], "antigravity/hub/2.24.0")
         connection.request.assert_called_once()
         reply.read.assert_not_called()
         connection.close.assert_called_once()

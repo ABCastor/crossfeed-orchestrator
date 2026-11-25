@@ -611,6 +611,9 @@ AGY_OAUTH_SOURCE = "antigravity-oauth-usage"
 AGY_OAUTH_HOSTS = ("daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com")
 AGY_OAUTH_QUOTA = "/v1internal:retrieveUserQuotaSummary"
 AGY_OAUTH_TOKEN_HOST = "oauth2.googleapis.com"
+# This quota response is client-version dependent. A generic "antigravity" UA omits Gemini
+# windows even with a valid sign-in. Use the verified T3 Hub protocol/version prefix.
+AGY_OAUTH_USER_AGENT = "antigravity/hub/2.24.0"
 AGY_LOCAL_QUOTA = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
 _AGY_BUCKET = re.compile(r"(gemini|3p|argon)-(5h|weekly|daily)\Z")
 _AGY_PREFIX = "antigravity-quota-summary-"
@@ -650,6 +653,7 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
     observed = observed_at or _now()
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
+    provider_used: dict[str, float] = {}
     for raw in groups:
         buckets = _mapping(raw).get("buckets")
         if not isinstance(buckets, list):
@@ -680,10 +684,18 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
             if (source == AGY_OAUTH_SOURCE and fraction == 1 and not bucket.get("description")
                     and reset and abs((reset - observed).total_seconds() - AGY_WINDOW_MINUTES[cadence] * 60) <= 60):
                 reset = None  # an unused window's synthetic near-now + duration clock
-            _agy_store(windows, idle, family, cadence, 100 * (1 - fraction), reset)
+            used = 100 * (1 - fraction)
+            _agy_store(windows, idle, family, cadence, used, reset)
+            if source == AGY_OAUTH_SOURCE:
+                provider_used[name] = round(used, 8)
             if name in idle and fraction != 1:
                 idle[name]["reset_unknown"] = True
-    return _snapshot(source, windows, idle, None, observed) if windows or idle else None
+    if not windows and not idle:
+        return None
+    snap = _snapshot(source, windows, idle, None, observed)
+    if provider_used:
+        snap["provider_used_percent"] = provider_used
+    return snap
 
 
 def _agy_reuse_target(deadline: float) -> list[tuple[int, str]]:
@@ -785,7 +797,7 @@ def _agy_google_post(host: str, path: str, data: bytes, headers: dict[str, str],
 def _agy_oauth_request(host: str, token: str, timeout: float, project: str | None = None) -> Any:
     body = json.dumps({"project": project} if project else {}, separators=(",", ":")).encode()
     _, payload = _agy_google_post(host, AGY_OAUTH_QUOTA, body, {
-        "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "antigravity",
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": AGY_OAUTH_USER_AGENT,
     }, timeout)
     return payload
 
@@ -870,7 +882,7 @@ def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False,
         if (expires - _now()).total_seconds() <= 60:
             return unavailable(source, "expired", "Antigravity's session has expired; renew it in Antigravity")
     now = _now()
-    windows, idle = {}, {}
+    windows, idle, provider_used = {}, {}, {}
     for host in AGY_OAUTH_HOSTS:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -884,9 +896,11 @@ def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False,
             continue
         if snap:
             for original, target in ((snap.get("windows", {}), windows), (snap.get("idle_windows", {}), idle)):
-                target.update({key: row for key, row in original.items() if key not in windows and key not in idle})
+                new = {key: row for key, row in original.items() if key not in windows and key not in idle}
+                target.update(new)
+                provider_used.update({key: snap["provider_used_percent"][key] for key in new})
     if windows or idle:
-        return _snapshot(AGY_OAUTH_SOURCE, windows, idle, None, now)
+        return {**_snapshot(source, windows, idle, None, now), "provider_used_percent": provider_used}
     return unavailable(AGY_OAUTH_SOURCE, "failed", "Antigravity returned no usable quota summary")
 
 

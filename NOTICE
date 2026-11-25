@@ -37,7 +37,7 @@ The optional Antigravity OAuth summary reader interoperates with the provider's
 existing sign-in and Google quota-summary endpoint, observed in T3 Code's
 Antigravity usage integration (v0.1.12, apps/server/src/provider/antigravityUsageLimits.ts),
 including the standard Google OAuth refresh grant for a selected ACP profile and the
-Antigravity CLI's macOS Keychain service and encoding.
+Antigravity CLI's macOS Keychain service and encoding and the Hub client version prefix.
 No T3 Code source is redistributed.
 - tests/fixtures/native-usage/agy-local-quota.json uses the upstream test
   response shapes, with synthetic values and a separate Argon bucket.
