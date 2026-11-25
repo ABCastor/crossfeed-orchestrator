@@ -577,6 +577,9 @@ def parse_antigravity(stdout: str, observed_at: dt.datetime | None = None) -> di
 
 # CodexBar v0.67.0 local quota summary RPC and JSON decoder; see NOTICE.
 AGY_LOCAL_SOURCE = "antigravity-local"
+AGY_OAUTH_SOURCE = "antigravity-oauth-usage"
+AGY_OAUTH_HOSTS = ("daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com")
+AGY_OAUTH_QUOTA = "/v1internal:retrieveUserQuotaSummary"
 AGY_LOCAL_QUOTA = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
 _AGY_BUCKET = re.compile(r"(gemini|3p|argon)-(5h|weekly|daily)\Z")
 _AGY_PREFIX = "antigravity-quota-summary-"
@@ -600,12 +603,17 @@ def _agy_store(windows, idle, family, cadence, used, reset):
     return name
 
 
-def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
+def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None, *,
+                            source: str = AGY_LOCAL_SOURCE) -> dict[str, Any] | None:
     """A known shared-bucket ID is required; per-model quotas cannot substitute for it."""
     root = _mapping(payload)
     if root.get("code") not in (None, 0, "0", "OK"):
         return None
-    groups = _mapping(root.get("response") or root.get("summary") or root).get("groups")
+    summary = _mapping(root.get("response") or root.get("summary") or root)
+    groups = summary.get("groups")
+    if source == AGY_OAUTH_SOURCE and isinstance(summary.get("buckets"), list):
+        if not isinstance(groups, list) or not any(_mapping(g).get("buckets") for g in groups):
+            groups = [summary]
     if not isinstance(groups, list):
         return None
     observed = observed_at or _now()
@@ -623,6 +631,8 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
             if not family_cadence:
                 continue
             family, cadence = family_cadence
+            if source == AGY_OAUTH_SOURCE and bucket.get("window") not in (None, cadence):
+                continue
             name = f"{_AGY_PREFIX}{family}-{cadence}"
             # Duplicate IDs make the selected quota ambiguous; never let one silently win.
             if name in windows or name in idle:
@@ -636,10 +646,13 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
             if type(fraction) not in (int, float) or not 0 <= fraction <= 1:
                 continue
             reset = _parse_time(bucket.get("resetTime"))
+            if (source == AGY_OAUTH_SOURCE and fraction == 1 and not bucket.get("description")
+                    and reset and abs((reset - observed).total_seconds() - AGY_WINDOW_MINUTES[cadence] * 60) <= 60):
+                reset = None  # an unused window's synthetic near-now + duration clock
             _agy_store(windows, idle, family, cadence, 100 * (1 - fraction), reset)
             if name in idle and fraction != 1:
                 idle[name]["reset_unknown"] = True
-    return _snapshot(AGY_LOCAL_SOURCE, windows, idle, None, observed) if windows or idle else None
+    return _snapshot(source, windows, idle, None, observed) if windows or idle else None
 
 
 def _agy_reuse_target(deadline: float) -> list[tuple[int, str]]:
@@ -727,6 +740,57 @@ def _observe_running_antigravity(timeout: int) -> dict[str, Any] | None:
     return None
 
 
+def _agy_oauth_request(host: str, token: str, timeout: float) -> Any:
+    # Use the existing provider sign-in only with the fixed, Google TLS endpoints.
+    # http.client does not use proxies, redirects or cookies.
+    conn = http.client.HTTPSConnection(host, timeout=timeout)
+    try:
+        conn.request("POST", AGY_OAUTH_QUOTA, b"{}", {
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "antigravity",
+        })
+        with conn.getresponse() as reply:
+            if reply.status == 200:
+                return _json(reply.read(MAX_BODY_BYTES + 1).decode("utf-8"))
+        return None
+    finally:
+        conn.close()
+
+
+def _observe_antigravity_oauth(path: Any, timeout: int) -> dict[str, Any]:
+    """Borrow an explicitly selected AGY OAuth session. Never refresh it or use T3's state APIs."""
+    now = _now()
+    try:
+        path = Path(path).expanduser()
+        if not path.is_absolute():
+            raise ValueError
+        doc = _mapping(_json(_owner_file(path).decode("utf-8")))
+        fields = _mapping(doc.get("token"))
+        token, expires = fields.get("access_token"), _parse_time(fields.get("expiry"))
+    except (TypeError, OSError, ValueError, OverflowError, RecursionError):
+        token = expires = None
+    if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,16000}", token) or not expires:
+        return unavailable(AGY_OAUTH_SOURCE, "no-auth", "No readable Antigravity OAuth session")
+    if (expires - now).total_seconds() <= 60:
+        return unavailable(AGY_OAUTH_SOURCE, "expired", "Antigravity's session has expired; renew it in Antigravity")
+    deadline = time.monotonic() + max(1, min(timeout, 10))
+    windows, idle = {}, {}
+    for host in AGY_OAUTH_HOSTS:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            snap = parse_antigravity_local(_agy_oauth_request(host, token, remaining / 2), now,
+                                           source=AGY_OAUTH_SOURCE)
+        except (OSError, ValueError, TypeError, http.client.HTTPException, RecursionError):
+            continue
+        if snap:
+            for original, target in ((snap.get("windows", {}), windows), (snap.get("idle_windows", {}), idle)):
+                target.update({key: row for key, row in original.items() if key not in windows and key not in idle})
+    if windows or idle:
+        return _snapshot(AGY_OAUTH_SOURCE, windows, idle, None, now)
+    return unavailable(AGY_OAUTH_SOURCE, "failed", "Antigravity returned no usable quota summary")
+
+
 def agy_report_path(config: dict[str, Any]) -> Path:
     configured = config.get("path")
     if configured is not None:
@@ -742,6 +806,8 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
     Neither a forced refresh nor legacy `binary`/`AGY_BIN` can start the CLI. Re-reading
     an export never advances its observation time.
     """
+    if "oauth_session_file" in config:
+        return _observe_antigravity_oauth(config["oauth_session_file"], timeout)
     if config.get("reuse_running") is True:
         result = _observe_running_antigravity(timeout)
         if result:

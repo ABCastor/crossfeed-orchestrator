@@ -1240,8 +1240,10 @@ def _source_identity(config: dict[str, Any]) -> Any:
     if oracle == "opencode-go":
         return ("opencode-go", config.get("url"), config.get("key"))
     if oracle == "antigravity":
-        # Multiple quota pools can consume different windows from the same export.
+        # Multiple pools can filter the same reading; distinct sign-ins never share a claim.
         try:
+            if "oauth_session_file" in config:
+                return (oracle, "oauth", str(Path(config["oauth_session_file"]).expanduser()))
             return (oracle, str(native_usage.agy_report_path(config)), config.get("reuse_running") is True)
         except (TypeError, ValueError, RuntimeError):
             return (oracle, None)  # the observer reports the malformed path, not other pools
@@ -1648,7 +1650,9 @@ def _commit_gauge(runtime: dict[str, Any], pool: str, observed: dict[str, Any],
         except (KeyError, TypeError, ValueError):
             pass
     active = observed.get("windows") or {}
-    if existing and observed.get("source") in {native_usage.AGY_LOCAL_SOURCE, LEGACY_AGY_WIDGET_SOURCE}:
+    if existing and observed.get("source") in {
+        native_usage.AGY_LOCAL_SOURCE, native_usage.AGY_OAUTH_SOURCE, LEGACY_AGY_WIDGET_SOURCE,
+    }:
         # A percentage without a reset clock cannot supersede an unexpired full window.
         # Preserve the original snapshot so we do not restamp its provenance.
         for name, window in existing.get("windows", {}).items():
@@ -5349,8 +5353,9 @@ def fleet_overview(
             "lanes": lane_counts.get(pool, 0),
         }
         reading = snapshot or {}
-        display_only_fresh = (reading.get("source") in {native_usage.AGY_LOCAL_SOURCE, LEGACY_AGY_WIDGET_SOURCE}
-                              and evidence.get("confidence") == "direct")
+        display_only_fresh = (reading.get("source") in {
+            native_usage.AGY_LOCAL_SOURCE, native_usage.AGY_OAUTH_SOURCE, LEGACY_AGY_WIDGET_SOURCE,
+        } and evidence.get("confidence") == "direct")
         entry["limits"], entry["renews_at"] = pool_limits(
             entry, windows, reading.get("idle_windows") if windows or display_only_fresh else None,
             evidence.get("spend_down") or [], now)
