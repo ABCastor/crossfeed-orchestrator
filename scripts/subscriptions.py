@@ -173,7 +173,10 @@ def view(path: Path, roster: dict, overview: dict) -> dict:
     totals: dict[str, list[Decimal | None]] = {}
     values = _values(roster, overview)
     unpriced = unsplit = 0
+    controls = {row["id"]: row for row in overview.get("subscriptions", [])}
     for entry in entries:
+        control = controls.get(entry["id"], {})
+        entry.update({key: control[key] for key in ("level", "set_by", "set_at") if key in control})
         entry.update(monthly=None, operator_monthly=None, other_share_percent=None,
                      pool_value={k: values[k] for k in entry["pools"] if k in values})
         share = entry["operator_share_percent"]

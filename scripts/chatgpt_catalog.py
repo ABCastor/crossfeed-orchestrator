@@ -1,4 +1,4 @@
-"""Expand one gateway template from current capability evidence, never aliases."""
+"""Expand saved gateway labels, keeping benchmark identities separate from transport identity."""
 from __future__ import annotations
 
 import copy
@@ -10,6 +10,19 @@ except ImportError:
     from scripts.chatgpt_transport import Rejected, catalog_models, contacts, request, settings
 
 STATES = {"sleeping", "probed-ok", "unavailable"}
+
+# BR-SELECT-010 · The saved row, not its arbitrary label or whether it is
+# today's default, identifies the documented backing model.
+BENCHMARK_SOURCE = "https://help.openai.com/en/articles/20001354-gpt-56-and-gpt-6-pro-in-chatgpt"
+
+
+def benchmark_cell(row, level):
+    if row == "GPT-6" and level == "pro":
+        return "gpt-6-astra", "pro"
+    if row in {"GPT-6", "GPT-6.2"} and level in {"instant", "medium", "high", "xhigh"}:
+        model = {"GPT-6": "gpt-6-sol", "GPT-6.2": "gpt-6.2-sol"}[row]
+        return model, "none" if level == "instant" else level
+    return None
 
 
 def expand(roster, state_dir, *, persist=False):
@@ -116,11 +129,17 @@ def _expand(roster, state_dir, *, persist=False):
             "name": "ChatGPT media · Images and video · Unattended" if selector == "chatgpt:media-unattended" else row["name"],
             "lineage": "openai", "status": "older" if row.get("older") else "current", "best_for": "Read-only text through the Chat picker"}
         level = row["worker_level"]
+        if selector != "chatgpt:media-unattended" and (cell := benchmark_cell(row["row"], level)):
+            lane.update(benchmark_identity=cell[0], benchmark_effort=cell[1])
+            result["model_cards"][lane_id].update(family="gpt-chat", benchmark_identity=cell[0],
+                                                 benchmark_effort=cell[1], benchmark_source=BENCHMARK_SOURCE)
         result.setdefault("effort", {})[lane_id] = {"levels": {"chatgpt-chat": [level]}, "default": level, "knee": level,
             "by_role": {}, "by_band": {}, "refuse_roles": {}, "control": "selector",
             "recheck": "Every saved model and gateway status read",
             "evidence": {"status": "unmeasured", "source": "Gateway /v1/models saved settings; underlying model unconfirmed",
                          "read_on": iso()[:10]}}
+        if "benchmark_identity" in lane:
+            result["effort"][lane_id]["evidence"]["source"] = BENCHMARK_SOURCE
         # Pi's local tools are a different measured route from a plain chat.
         # Its provider-default cell never borrows native-chat level evidence.
         if gateway.get("pi_coding") is True and active and not row["older"] and level in {"high", "xhigh"}:
@@ -137,6 +156,8 @@ def _expand(roster, state_dir, *, persist=False):
                            roles=[role for role, family in FAMILY_BY_ROLE.items() if family == "coding-agent"],
                            allowed_modes=["read-only", "write"],
                            transport={**lane["transport"], "api": "openai-completions"})
+            pi_lane.pop("benchmark_identity", None)
+            pi_lane.pop("benchmark_effort", None)
             generated.append(pi_lane)
             result["effort"][lane_id]["levels"]["pi"] = ["provider-default"]
     result.setdefault("lanes", []).extend(generated)

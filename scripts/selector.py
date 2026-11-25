@@ -40,6 +40,7 @@ except ModuleNotFoundError:
 
 
 DEFAULTS = {"target": 90.0, "lambda0": 1.0, "uncertainty_weight": 1.0}
+TYPICAL_TOKENS = {"in": 8000, "out": 2000}
 IMPORTANT_ROLES = frozenset({"hard-reasoning", "review", "debug", "implementation"})
 FAMILIES = {"coding-agent", "review", "debug", "repo-qa", "reasoning", "extraction", "research", "visual", "writing"}
 WRAPPERS = {name: name + "-agent.sh" for name in
@@ -164,6 +165,9 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
             why = "role not declared for refreshed lane"
         elif not lane.get("direct") and not lane.get("roles"):
             why = "explicit-only lane (no routing roles)"
+        # BR-MODEL-001
+        elif fleet.model_archived(roster, runtime, pool, key):
+            why = "model archived"
         elif fleet.retired_on(roster, key):
             why = "model retired"
         elif fleet.model_is_older(roster, pool, key) and not fleet.older_model_reason(roster, pool, key):
@@ -231,10 +235,12 @@ def enumerate_options(roster: dict, runtime: dict, role: str, *, mode: str | Non
                   "model_identity": canonical_model(key, roster),
                   "run_as": lane.get("model") or lane.get("selector") or key,
                   "mode": mode, "band": band, "pool_state": state,
+                  "pool_level": fleet.pool_level(runtime, pool), "archived": False,
                   "provider": lane.get("provider"), "funding": cash_class,
                   "data_class": data_class or os.environ.get("FLEET_DATA_CLASS", "private")}
         if lane.get("chatgpt_pi"):
             option["chatgpt_pi"] = True
+        option.update({field: lane[field] for field in ("benchmark_identity", "benchmark_effort") if field in lane})
         if lane_level != "normal":
             option["spend_level"] = lane_level
         if "price_1m" in lane:
@@ -548,16 +554,20 @@ def routing_price(item):
     if cash["funding"] not in {"included", "verified-free"}:
         return None
     cost, binding = item["cost"], item["pool_price"]
+    # BR-SELECT-010: native Chat has no incremental bill or sourced conversion
+    # of its caps to dollars. The separately admitted Pi tool relay is still a fallback.
+    if cash["funding"] == "included" and item["pool"] == "chatgpt-work" and item["harness"] == "chatgpt-chat":
+        return 0.0
     capacity = item.get("capacity") or {}
     # Relative API-weighted debits lack a specific window. Treat them as
     # weekly planning proxies instead of shrinking them on a 5-hour gauge.
     minutes = 10080 if cost["basis"] == "relative_proxy" else binding["window_minutes"]
-    if not minutes and cost["basis"] == "measured":
+    if not minutes and cost["basis"] in {"measured", "go_request_estimate", "go_tariff_estimate"}:
         minutes = 10080  # weekly planning proxy when the gauge has no window
     pace = binding["lambda"] + max(0.0, -item["quota_pace"]["value"])
+    scarcity = capacity.get("scarcity_penalty", 0)
     return rating.subscription_price(cost["percent"], capacity.get("weekly_usd_equivalent"),
-                                     pace, window_minutes=minutes,
-                                     scarcity=capacity.get("scarcity_penalty", 0))
+                                     pace, window_minutes=minutes, scarcity=scarcity)
 
 
 def _unpriced_rank(item):
@@ -738,6 +748,13 @@ def _planning_row(row):
     return {**row, "tokens_per_task": estimate["tokens_per_task"], "price_1m": estimate["price_1m"]}
 
 
+def _go_window_column(binding):
+    name = str(binding.get("binding_window") or "").lower()
+    minutes = binding.get("window_minutes")
+    return (2 if "month" in name else 1 if "week" in name else 0 if "5h" in name or "five_hour" in name
+            else 0 if minutes and minutes <= 300 else 1 if not minutes or minutes <= 10080 else 2)
+
+
 def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
                median_usd: float | None, *, standardize: bool = True) -> tuple[dict, list[str]]:
     pool = option["pool"]
@@ -769,10 +786,8 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
         estimates = table.get(option["model_key"], table.get(option["run_as"], {}))
         if isinstance(estimates, dict) and option["level"] in estimates:
             estimates = estimates[option["level"]]
-        name = str(binding.get("binding_window") or "").lower()
-        minutes = binding.get("window_minutes")
-        column = 2 if "month" in name else 1 if "week" in name else 0 if "5h" in name or "five_hour" in name else (
-            0 if minutes and minutes <= 300 else 1 if minutes and minutes <= 10080 else 2 if minutes else None)
+        column = _go_window_column(binding)
+        limit = go_quota_tariffs.window_limit(profile.get("plan"), option["model_key"], column)
         count = go_quota_tariffs.typical_requests(profile.get("plan"), option["model_key"], column)
         tariff_source = go_quota_tariffs.SOURCE if count is not None else legacy.get("source")
         if count is None and column is not None:
@@ -784,13 +799,23 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
             requests = _number(own.get("requests_per_task"))
             observed = requests is not None and requests > 0
             requests = requests if observed else 1
-            percent = 100 / count * requests * units
+            # A typical published request consumes one of the model's estimated requests
+            # in this window; when the dollar limit is known, express its debit in that unit too.
+            if limit is not None:
+                allowance = limit
+                debit = limit / count * requests * units
+                percent = 100 * debit / limit
+            else:
+                percent = 100 / count * requests * units
             basis = "go_request_estimate"
             request_model = {"requests_per_task": requests, "typical_requests_in_window": count,
                              "request_count_basis": "observed_median" if observed else "unmeasured_one_request",
                              "request_estimate_source": tariff_source}
             if not observed:
                 flags.append("go_task_request_count_unmeasured")
+        elif limit is not None and usd is not None and "source_price_1m" in option:
+            allowance = limit
+            percent, basis = 100 * usd / limit, "go_tariff_estimate"
     nominal = _number(roster.get("quota_pools", {}).get(pool, {}).get(
         "nominal_percent_per_task", rating.NOMINAL_TASK_PERCENT))
     nominal = nominal if nominal is not None and nominal >= 0 else .5
@@ -808,6 +833,167 @@ def _task_cost(roster: dict, option: dict, row: dict, binding: dict,
             "estimated": basis != "measured", "unknown": percent is None, "basis": basis,
             "penalty_percent": percent if percent is not None else nominal * units,
             **request_model, **effort_proxy, **planning}, flags
+
+
+def api_cost(row, source_rates=None):
+    """API awareness is not the price of included allowance."""
+    priced = _planning_row(row)
+    rates = funding.rates(source_rates) or funding.rates(priced.get("price_1m"))
+    if rates is None:
+        return None
+    return _display_usd(priced if _legacy_pair(priced.get("tokens_per_task")) is not None
+                        else {"tokens_per_task": TYPICAL_TOKENS}, rates)
+
+
+def comparison_cost(roster, option, row, fleet):
+    pool, cost, binding = option["pool"], option["cost"], option["pool_price"]
+    plan = roster.get("quota_pools", {}).get(pool, {}).get("plan") or {}
+    capacity = (option.get("capacity") or {}).get("weekly_usd_equivalent")
+    basis = cost["basis"]
+    minutes = 10080 if basis == "relative_proxy" else binding["window_minutes"]
+    window = None if basis == "relative_proxy" else binding.get("binding_window")
+    if not minutes and basis in {"relative_proxy", "measured", "go_request_estimate", "go_tariff_estimate"}:
+        minutes = 10080
+    if not window and minutes:
+        window = {300: "5 hours", 10080: "weekly", 43200: "monthly"}.get(minutes, f"{minutes:g} minutes")
+    limit = cost["allowance_usd"]
+    if pool == "opencode-go":
+        column = _go_window_column(binding)
+        limit = go_quota_tariffs.window_limit(plan, option["model_key"], column)
+        if limit is not None and not window:
+            window = ("5 hours", "weekly", "monthly")[column]
+    api = api_cost(row, option.get("source_price_1m"))
+    why = {
+        "measured": "The share uses observed allowance use for a typical job on this pool.",
+        "api_equivalent_allowance": "The job's estimated model price is divided by this window's allowance.",
+        "go_request_estimate": "OpenCode's typical request estimate converts a job into a share of the shared Go allowance.",
+        "go_tariff_estimate": "The job's estimated Go token debit is divided by the published solo-model window limit.",
+        "relative_proxy": "The share is a weekly estimate based on the job's relative API-equivalent price.",
+        "no_known_limit": "This pool does not publish a comparable allowance limit.",
+    }.get(basis, "No measured or sourced job debit is available for this route.")
+    if option["funding"] == "metered":
+        why = "Routing uses estimated incremental cash instead of a subscription debit."
+    elif pool == "chatgpt-work" and option["funding"] == "included" and option["harness"] == "chatgpt-chat":
+        why = "This chat is included at zero incremental cost, but its separate limits are still enforced."
+    return {"family": fleet.model_family(roster, option["model_key"]),
+            "typical_cost_usd": api, "api_cost_usd": api, "quota_cost_usd": routing_price(option),
+            "quota_basis": {"plan": plan.get("name"), "window": window, "window_limit": limit,
+                            "share_percent": cost["percent"],
+                            "plan_value_usd": rating.quota_price(100, capacity, 0, window_minutes=minutes),
+                            "why": why}}
+
+
+def benchmark_cell(item):
+    return item.get("benchmark_identity"), item.get("benchmark_effort")
+
+
+def option_evidence(rows, option):
+    local = rows.get((option["model_identity"], option["level"]), {})
+    external = rows.get(benchmark_cell(option), {})
+    if not external.get("sources"):
+        return local
+    # Preserve route-specific cost, latency and checked outcomes. The exact
+    # outside model+effort fills missing grade strata, not a different route's telemetry.
+    q = dict(external.get("q", {}))
+    q.update({family: grade for family, grade in local.get("q", {}).items()
+              if not grade.get("unknown") and (grade.get("n_sources") or local.get("own", {}).get(family, {}).get("trials"))})
+    return {**external, **{key: val for key, val in local.items()
+                           if key not in {"q", "q_by_stakes", "sources", "flags", "price_1m", "effort_estimate",
+                                          "tokens_per_task"}}, "q": q}
+
+
+# BR-SELECT-009
+def efficient_efforts(scored):
+    """Best expected successes per quota-plus-failure dollar, per pool and model."""
+    scored = list(scored)
+    best = {}
+    group = lambda item: (item["pool"], item.get("benchmark_identity") or item["model_key"])
+    for item in scored:
+        cost, success = _number(item.get("expected_cost")), _number(item.get("p_success"))
+        if cost is None or success is None or item["q"]["unknown"]:
+            continue
+        if cost <= 0 and success <= 0:
+            continue
+        score = (success / cost if cost else math.inf, success)
+        key = group(item)
+        if key not in best or score > best[key][0]:
+            best[key] = (score, {"effort": item["level"],
+                                 "why": f"Estimated {success:.0%} success at ${cost:.4g} expected quota and failure cost gives this model its best success per dollar."})
+    return {(item["pool"], item["model_key"]): best[group(item)][1] for item in scored if group(item) in best}
+
+
+def compare_options(roster, runtime, state_dir, role, *, fleet=None, value_mode="best-value"):
+    """Display-only inventory; absence of a rating, permitted role or free slot does not hide a model."""
+    fleet = _fleet(fleet)
+    policy = roster.get("policy", {}).get("selector", {})
+    rows = fleet.comparison_evidence(roster, state_dir)
+    try:
+        ranked = select_option(roster, runtime, state_dir, role, fleet=fleet, value_mode=value_mode,
+                               collect_eligible=True, persist_receipts=False, no_explore=True)
+        scored = ranked["eligible_options"]
+    except fleet.FleetError as exc:
+        if not str(exc).startswith("no eligible selector option"):
+            raise
+        scored = []
+    eligible = {(o["pool"], o["model_key"], o["level"]): o for o in scored if "expected_cost" in o}
+    efficient = {(option["pool"], option.get("benchmark_identity") or option["model_key"]):
+                 option.get("efficient_effort") for option in eligible.values()}
+    family = policy.get("families_by_role", {}).get(role) or FAMILY_BY_ROLE.get(role, "coding-agent")
+    index = {}
+    for lane in roster.get("lanes", []):
+        if fleet._lane_is_admitted(lane):
+            index.setdefault((lane["quota_pool"], lane["model_key"]), []).append(lane)
+    options = []
+    for pool in roster.get("quota_pools", {}):
+        if fleet.pool_level(runtime, pool) == "off":
+            continue
+        for key, run_as in fleet.choosable_models(roster, pool).items():
+            if fleet.model_archived(roster, runtime, pool, key):
+                continue
+            card = fleet.model_cards(roster).get(key, {})
+            lanes = index.get((pool, key), [])
+            if not lanes and (card.get("access_status", "verified") != "verified"
+                              or card.get("admission_status", "active") != "active"):
+                continue
+            effort = roster.get("effort", {}).get(key, {})
+            binding = _pool_price(roster, runtime, pool, policy, fleet, model_key=key)
+            pace = pool_pace(roster, runtime, pool, fleet, model_key=key)
+            identity = canonical_model(key, roster)
+            offered = set()
+            for lane in lanes or [card]:
+                harness = lane.get("harness") or pool
+                billing = funding.classify(roster, pool, lane)
+                reference = _number(policy.get("capacity_reference_usd_equivalent", 2.30)) or 2.30
+                capacity = _capacity_headroom(roster, runtime, pool, key, reference, fleet) if billing == "included" else None
+                rates = lane.get("price_1m")
+                levels = effort.get("levels", {}).get(harness) or [effort.get("default") or "unknown"]
+                for level in levels:
+                    if level in offered:
+                        continue
+                    offered.add(level)
+                    if actual := eligible.get((pool, key, level)):
+                        options.append(dict(actual, comparison_only=False))
+                        continue
+                    item = {"pool": pool, "harness": harness, "model_key": key, "model_identity": identity,
+                            "model": key, "run_as": lane.get("model") or lane.get("selector") or run_as,
+                            "level": level, "funding": billing, "cash": funding.quote(billing),
+                            "pool_price": binding, "quota_pace": pace, "archived": False, "capacity": capacity,
+                            "comparison_only": True,
+                            "efficient_effort": efficient.get((pool, lane.get("benchmark_identity") or key))}
+                    item.update({field: lane[field] for field in ("lane_id", "benchmark_identity", "benchmark_effort")
+                                 if field in lane})
+                    row = option_evidence(rows, item)
+                    if rates is not None:
+                        item["source_price_1m"] = rates
+                        row = dict(row, price_1m=rates, effort_estimate=None)
+                    item["cost"], _ = _task_cost(roster, item, row, binding, None)
+                    grade = row.get("q", {}).get(family) or {}
+                    if grade.get("mean") is not None and (grade.get("n_sources") or row.get("own", {}).get(family, {}).get("trials")):
+                        item.update(quality=grade["mean"], q={"mean": grade["mean"], "sd": grade.get("sd"),
+                                                              "unknown": grade.get("unknown", False)})
+                    item.update(comparison_cost(roster, item, row, fleet))
+                    options.append(item)
+    return fleet.sort_model_families(options, key="model_key")
 
 
 # BR-DATA-001
@@ -1055,11 +1241,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     for option in options:
         if option["pool"] not in prices:
             prices[option["pool"]] = _pool_price(roster, runtime, option["pool"], policy, fleet)
-    path = state_dir / "evidence" / "levels.json"
-    evidence = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    rows = evidence_index(roster, evidence.get("rows", []))
+    rows = fleet.comparison_evidence(roster, state_dir)
+
     def evidence_for(option):
-        row = rows.get((option["model_identity"], option["level"]), {})
+        row = option_evidence(rows, option)
         if "source_price_1m" in option:
             price = option["source_price_1m"]
             row = dict(row, price_1m=price if isinstance(price, dict) else {})
@@ -1200,8 +1385,16 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         no_explore = True
     calibration = SuccessEvidence(rows)
     for item in scored:
-        item.update(estimated_price=routing_price(item), pricing_basis=rating.LIVE_PRICE_BASIS)
-        rate, basis, source = calibration.rate(item["model_identity"], item["level"], family)
+        item.update(comparison_cost(roster, item, evidence_for(item), fleet))
+        item.update(estimated_price=item["quota_cost_usd"], pricing_basis=rating.LIVE_PRICE_BASIS)
+        # The local checked history remains tied to the saved chat route and
+        # effort, even when an exact external benchmark can seed its prior.
+        bench_cell = benchmark_cell(item)
+        cell = bench_cell if bench_cell in rows and rows[bench_cell].get("sources") else (
+            item["model_identity"], item["level"])
+        rate, basis, source = calibration.rate(*cell, family)
+        if cell == bench_cell and source is not None:
+            source = {**source, "benchmark_identity": cell[0], "benchmark_effort": cell[1]}
         prior = rating.success_prior(rate, difficulty)
         item.update(p_success_prior=prior, prior_basis=basis, prior_source=source)
         key = rating_explore.route_key(item)
@@ -1230,6 +1423,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                                       if ("source_price_1m" in item and item["cost"]["estimated_usd"] is not None)
                                       else math.inf,
                                       item["pool"], item["model_key"], item["level"]))
+    efficient = efficient_efforts(scored)
+    for item in scored:
+        item["efficient_effort"] = efficient.get((item["pool"], item["model_key"]))
     hard_reasoning_preference = None
     preferred = []
     if prefer_opus:

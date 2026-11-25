@@ -118,9 +118,27 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/fleetctl.py:lead_window_risk`, `scripts/fleetctl.py:_claude_lead_window_at_risk`, `scripts/fleetctl.py:pool_run_out_seconds`, `scripts/fleetctl.py:lead_pressure`, `scripts/fleetctl.py:lead_blocks`, `scripts/selector.py:_reserve_waiver`, `scripts/selector.py:select_option`.
 - tested-by: `tests/test_lead_profiles.py:LeadSelectionTests.test_claude_lead_hard_reasoning_reserves_only_a_tight_window`, `LeadSelectionTests.test_claude_lead_reserve_applies_only_when_it_helps`, `LeadDetectionTests.test_claude_lead_uses_the_at_risk_window_not_the_most_used`, `LeadDetectionTests.test_pi_fable_lead_preserves_scoped_headroom_without_excluding_opus`.
 
-## BR-SELECT-007 — Ignore estimates until a provider limit [OPERATOR-DECIDED 2026-11-25]
+## BR-SELECT-009 — Show which thinking setting returns the most success per dollar [OPERATOR-DIRECTED 2026-11-25]
 
-- RULE: A pool at `forced` (Ignore estimates) stays eligible regardless of quota pressure or projected run-out, including for its own lead's workers. Its quota debit is priced at plain plan value without forecast, pace or remaining-headroom premiums. Real provider refusals (including rate-limit circuits), applicable provider-reported 100% windows until reset, cash safeguards and the explicit Opus fallback in BR-SELECT-004 still apply. An `off` pool remains unavailable. Normal and high retain their existing rules.
+- RULE: For a model with graded efforts and known total cost, its most efficient effort maximizes estimated success divided by expected quota and failure cost, using the same role and value setting as the comparison. A missing grade or price does not establish a recommendation.
+- Authority: Operator, 25 Nov: “what's the most efficient thinking setting ... the one that gives the most bang for the buck”.
+- implemented-by: `scripts/selector.py:efficient_efforts`, `select_option`, `compare_options`.
+- tested-by: `tests/test_business_round6.py::test_efficient_effort_uses_success_per_expected_dollar`.
+
+## BR-SELECT-010 — Grade included Crossfeed Chat against documented benchmark identities [OPERATOR-DIRECTED 2026-11-25]
+
+- RULE: Use outside grades only for the documented backing model and exact effort of a saved Chat row. Keep the route identity, local checks and caps separate. Charge no incremental dollars for an included native Chat route when its allowance has no sourced dollar equivalent; retain its switches, admission, refusal, role and model quota gates. The separate Pi tool relay keeps its existing fallback policy.
+- Authority: Operator, 25 Nov: “we don't use Crossfeed chat enough, and it's free ... probably because we don't have the benchmarks, and it just doesn't trust it”.
+- implemented-by: `scripts/chatgpt_catalog.py:benchmark_cell` · `scripts/selector.py:option_evidence`, `routing_price` · `scripts/evidence.py:configured_benchmark_rows`.
+- tested-by: `tests/test_business_round6.py::test_chat_uses_exact_effort_benchmark_and_keeps_route_identity`.
+
+## BR-SELECT-008 — ~~A separate Max setting prices pressure lightly~~ [RETIRED 2026-11-25]
+
+- Superseded by BR-SELECT-007 the same day, before release: operator, “max is the same as ignore limits. It should be just max/ignore limits. Ignore quota, whatever it is.” The separate quota-light level is not a shipping option.
+
+## BR-SELECT-007 — Max ignores estimates until a provider limit [OPERATOR-DECIDED 2026-11-25]
+
+- RULE: A pool at `forced` (Max) stays eligible regardless of quota pressure or projected run-out, including for its own lead's workers. Its quota debit is priced at plain plan value without forecast, pace or remaining-headroom premiums. Real provider refusals (including rate-limit circuits), applicable provider-reported 100% windows until reset, cash safeguards and the explicit Opus fallback in BR-SELECT-004 still apply. An `off` pool remains unavailable. Normal and high retain their existing rules.
 - Authority: Operator: “I told it to ignore estimates for GPT ... IGNORE ESTIMATES MEAN!!!!” This takes precedence over estimate-based lead reserves in BR-SELECT-006 and quota price premiums in BR-SELECT-005 only while the dial is `forced`.
 - implemented-by: `scripts/fleetctl.py:current_pool_state`, `lead_pressure`, `pool_run_out_seconds`; `scripts/selector.py:_pool_price`, `pool_pace`, `_capacity_headroom`.
 - tested-by: `tests/test_business_forced_quota.py:ForcedQuotaTests.test_forced_codex_ignores_estimates_not_hard_stops`; control: `test_normal_and_high_still_reserve_and_price_pressure`.
@@ -183,6 +201,20 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/opencode-agent.sh:main`, `scripts/opencode_v2.py:worker_config`, `scripts/migrate_opencode_v2.py:main`.
 - tested-by: `tests/test-opencode.sh:test_v2_boundary` (read-only prohibition, persisted write control, external denial in build, direct and shared boundaries), `test_write_cleanliness_gate`, `test_v2_account_snapshot`; `tests/test_opencode_v2.py:test_no_external_plugins_skills_or_mcp_in_lean_and_direct`, `test_profile_imports_only_named_instructions_and_shared_skill_paths`, `test_migration_cli_writes_separate_candidates_for_both_config_formats`. Boundary execution uses an independent rule-evaluating test double; native v2 acceptance is explicitly unverified where a sandbox prevents server binding.
 - Review when: OpenCode changes tool names, permissions, discovery, auto-approval or standalone semantics.
+
+## BR-SWITCH-002 — Subscription spend dials set each allowance together [OPERATOR-DIRECTED 2026-11-25]
+
+- RULE: An operator setting a multi-pool subscription dial sets the level of every member in one audited write. The readout is common when all members agree and Mixed otherwise. Individual model switches are independent of the subscription level.
+- Authority: Operator, 25 Nov: Google AI Pro “should be just like Claude ... if you want to switch off the model in the model entries, you do it anyways.”
+- implemented-by: `scripts/fleetctl.py:set_level`, `subscription_controls`.
+- tested-by: `tests/test_business_round6.py::test_subscription_dial_is_atomic_audited_and_independent`.
+
+## BR-MODEL-001 — Archive hides models and prevents dispatch on that pool [OPERATOR-DIRECTED 2026-11-25] (MUST NOT)
+
+- RULE: A model archived on a pool is never selected or started there, and only appears in the archive list. Operator archive requires operator restore; restore removes the archive gate but does not override another eligibility or switch rule. Keep the current admitted model in a family unless there is a measured reason to retain an older model. The operator specifically overrides the earlier retention reason for GPT-5.6 Luna.
+- Authority: Operator, 25 Nov: “There needs to be a button to archive a model. For example, why on earth is GPT 5.6 Luna still there?” and “normally, we will only have only one per family.” Supersession follows the roster-admission release checklist, without claiming provider withdrawal.
+- implemented-by: `scripts/fleetctl.py:set_model_archive`, `archive_record`, `model_blocked`, `_dispatch_selection` · `scripts/selector.py:enumerate_options`, `compare_options`.
+- tested-by: `tests/test_business_round6.py::test_archived_model_is_never_selected_or_dispatched` + control: `test_non_archived_model_is_selected_and_dispatches`.
 
 ## BR-SWITCH-001 — Agents control the fleet within operator limits [DECIDED]
 

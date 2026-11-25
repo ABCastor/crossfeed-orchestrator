@@ -315,6 +315,30 @@ def _observations(overlay, records):
     return outcomes, telemetry
 
 
+def configured_benchmark_rows(overlay, read_on):
+    """Read exact outside priors that the free feed omits; never construct local run evidence."""
+    configured = overlay.get("benchmark_priors") or {}
+    for model, levels in configured.items():
+        variants = [dict(value, effort=effort) for effort, value in levels.items()]
+        catalog = {"artificial_analysis": {model: {"variants": variants}}}
+        for effort, raw in levels.items():
+            sources, matches, ambiguous = _source_rows(model, effort, catalog, ASSUMPTIONS, read_on, overlay)
+            if ambiguous or not matches:
+                continue
+            sources = [dict(source, url=raw.get("url")) for source in sources]
+            quality = {}
+            for family in FAMILIES:
+                applicable = [source for source in sources if family in source["families"]]
+                if applicable:
+                    best = max(applicable, key=lambda source: source["weight"])
+                    quality[family] = {"mean": best["prior_mean"], "sd": .20, "n_sources": 1,
+                                       "sources": [best], "unknown": False, "basis": "external_transfer"}
+            row = {"model_key": model, "model_identity": model, "level": effort, "q": quality,
+                   "sources": sources, "price_1m": raw.get("pricing"), "read_on": raw.get("read_on"),
+                   "flags": ["external_scores_are_heuristic_priors"]}
+            yield (model, effort), row
+
+
 def _source_rows(model, level, catalog, assumptions, read_on, overlay):
     raw = []
     for key, aa in (catalog.get("artificial_analysis") or {}).items():
