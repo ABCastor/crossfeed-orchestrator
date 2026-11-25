@@ -29,6 +29,9 @@ class WorkbenchTests(unittest.TestCase):
         roster = test_console.base_overlay()
         roster.pop('chatgpt_gateway', None)
         roster.pop('provider_sources', None)
+        # The frozen fixture predates the model-scoped Argon pool.
+        argon = json.loads((test_console.ROOT / 'examples/access-overlay.example.json').read_text())
+        roster['quota_pools']['antigravity-argon'] = argon['quota_pools']['antigravity-argon']
         roster['model_cards'][self.model]['context_length'] = 123000
         self.overlay = self.state / 'overlay.json'
         self.overlay.write_text(json.dumps(roster), encoding='utf-8')
@@ -248,17 +251,73 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(console._compare_cells({**option, 'funding': 'metered'}, score, pool, {})[2], '≈$0.0240')
         self.assertEqual(console._compare_cells(option, None, {'stale_age_s': 200}, {})[-1], 'Stale')
 
-    def test_antigravity_is_one_group_with_visible_separate_allowances(self):
-        page = self.page()
+    def test_antigravity_is_one_card_with_a_policy_and_models_inside_each_pool_row(self):
+        _, payload = self.get()
+        self.assertIn(b'<h2>Google AI Pro</h2>', payload)
+        page = Page(payload.decode())
         group = page.ident('provider-antigravity')
-        details = page.ident('antigravity-allowances')
-        self.assertIn('open', details['attrs'])
-        for key in json.loads(group['attrs']['data-pool-members']):
-            node = page.ident('pool-' + key)
-            self.assertIn(group, node['parents'])
-            self.assertIn(details, node['parents'])
-            self.assertTrue(page.ident('pick-' + key))
+        rows = page.ident('antigravity-allowances')
+        members = json.loads(group['attrs']['data-pool-members'])
+        self.assertEqual(members, list(console.AGY_ALLOWANCES))
+        self.assertFalse(any(node['tag'] == 'details' for node in rows['parents']))
+        for key in [*members, self.pool]:
+            row = page.ident('pool-' + key)
+            if key in members:
+                self.assertIn(group, row['parents'])
+                self.assertIn(rows, row['parents'])
+                self.assertNotEqual(row['tag'], 'article', 'no nested subscription card')
+            children = [node for node in page.nodes if row in node['parents']]
+            slider, = (node for node in children if node['attrs'].get('role') == 'radiogroup')
+            policy, = (node for node in children if node['attrs'].get('class') == 'wb-advanced')
+            self.assertIn('open', policy['attrs'])
+            self.assertIn(policy, slider['parents'])
+            self.assertIn(row, page.ident('pick-' + key)['parents'])
+            self.assertIn(policy, page.ident('actor-' + key)['parents'])
+            self.assertEqual([node['attrs']['aria-label'] for node in children if slider in node['parents']
+                              and node['attrs'].get('role') == 'radio'], list(console.LEVEL_WORDS.values()))
+            for form in [slider, *(node for node in children if node['attrs'].get('class') == 'wb-models')]:
+                pool_field, = (node for node in children if form in node['parents'] and node['attrs'].get('name') == 'pool')
+                self.assertEqual(pool_field['attrs']['value'], key)
         self.assertNotIn(group, page.ident('pool-gemini-metered')['parents'])
+
+    def test_spend_attribution_follows_the_last_saved_actor_not_the_level(self):
+        now = fleet.utc_now()
+        runtime = json.loads(self.runtime.read_text())
+        with patch.object(fleet, 'utc_now', return_value=now - dt.timedelta(days=1)):
+            fleet.set_pool_level(runtime, self.pool, 'forced', actor='agent')
+        self.runtime.write_text(json.dumps(runtime))
+        _, before = self.get()
+        self.assertIn(b'data-level-actor="agent"', before)
+        self.assertIn('Set by an agent · yesterday'.encode(), before)
+
+        body = urllib.parse.urlencode({'t': self.app.form_token, 'pool': self.pool, 'level': 'low'})
+        res, payload = self.request('POST', '/level', {**self.headers(), 'Accept': 'application/json'}, body)
+        self.assertEqual(res.status, 200)
+        self.assertIsNone(res.getheader('Location'))
+        saved = next(p for p in json.loads(payload)['pools'] if p['pool'] == self.pool)
+        self.assertEqual(saved['level'], 'low')
+        self.assertEqual(saved['control_actor_kind'], 'owner')
+        self.assertRegex(saved['control_actor'], r'^Set by you · today \d\d:\d\d$')
+        on_disk = json.loads(self.runtime.read_text())
+        self.assertEqual(fleet.control_record(on_disk, f'level:{self.pool}')['actor'], 'owner')
+        self.assertEqual(fleet.pool_level(on_disk, 'antigravity-argon'), 'normal')
+        _, after = self.get()
+        self.assertIn(b'data-level-actor="owner"', after)
+        self.assertIn(saved['control_actor'].encode(), after)
+        self.assertIn(b'Last change not recorded', after)
+
+    def test_refusals_and_scoped_windows_use_the_wallet_rows(self):
+        now = fleet.utc_now()
+        reset_at = fleet.iso(now + dt.timedelta(days=3))
+        limit = {'title': 'Weekly', 'scope': 'Fable only', 'kind': 'window', 'used_percent': 42,
+                 'reset_at': reset_at, 'resets': 'Friday'}
+        base = {'pool': 'claude', 'state': 'ABUNDANT', 'limits': [limit], 'plan': {}}
+        self.assertIn('class="wb-limit"><span>Fable weekly</span>', console._work_gauge(base))
+        argon = {**base, 'pool': 'antigravity-argon', 'limits': [{**limit, 'scope': None}]}
+        self.assertIn('class="wb-limit"><span>Argon weekly</span>', console._work_gauge(argon))
+        refusal = console._work_gauge({**argon, 'limits': [], 'state': 'EXHAUSTED', 'until': reset_at})
+        self.assertIn(f'Used up · back <time datetime="{reset_at}">', refusal)
+        self.assertNotIn('% left', refusal)
 
 
 if __name__ == '__main__':

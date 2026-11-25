@@ -546,6 +546,46 @@ test('a level click moves the slider at once', async () => {
   assert.equal(f.requests[0].options.body.get('level'), 'high');
 });
 
+test('wallet policy saves in place and recolors only from confirmed attribution', async () => {
+  const f = start({prepare({document}) {
+    document.querySelector('main').append(h('section', {class: 'wb'}));
+    const row = document.getElementById('pool-codex');
+    row.classList.add('wb-pool-control');
+    row.querySelector('.lv').dataset.levelActor = 'agent';
+    row.append(h('p', {class: 'level-actor'}), h('p', {class: 'wb-error', role: 'status'}));
+  }});
+  const slider = f.document.querySelector('.lv');
+  const text = f.document.querySelector('.level-actor');
+  const saved = (level, actor, control_actor) => ({pools: [{pool: 'codex', level, control_actor_kind: actor, control_actor}]});
+  f.api.update(saved('normal', 'agent', 'Set by an agent · yesterday'));
+  f.stops[3].focus();
+  f.stops[3].click();
+  assert.equal(f.stops[3].getAttribute('aria-checked'), 'true');
+  assert.equal(slider.dataset.levelActor, 'agent', 'a pending click is not a confirmed operator change');
+  assert.equal(text.textContent, 'Set by an agent · yesterday');
+  await flush();
+  assert.equal(f.requests[0].url, '/level');
+  f.stops[1].click();
+  reply(f.requests[0], saved('high', 'owner', 'Set by you · today 11:42'));
+  await flush(); await flush();
+  assert.equal(f.stops[1].getAttribute('aria-checked'), 'true', 'the queued choice stays visible');
+  assert.equal(slider.dataset.levelActor, 'owner');
+  assert.equal(text.textContent, 'Set by you · today 11:42');
+  assert.equal(f.document.activeElement, f.stops[3]);
+
+  f.requests[1].resolve({ok: false, status: 403});
+  await flush(); await flush();
+  assert.equal(f.stops[3].getAttribute('aria-checked'), 'true');
+  assert.equal(slider.dataset.levelActor, 'owner');
+  assert.equal(text.textContent, 'Set by you · today 11:42');
+  assert.equal(f.document.querySelector('.wb-error').textContent, 'Not saved. Try again.');
+
+  f.api.update(saved('forced', 'agent', 'Set by an agent · today 11:43'));
+  assert.equal(slider.dataset.levelActor, 'agent');
+  assert.equal(f.stops[4].getAttribute('aria-checked'), 'true');
+  assert.equal(text.textContent, 'Set by an agent · today 11:43');
+});
+
 test('the slider is one radio group: the arrow keys move it and save', async () => {
   const f = start();
   assert.deepEqual(f.stops.map(stop => stop.tabIndex), [-1, -1, 0, -1, -1]);
