@@ -3,13 +3,13 @@
 It is a door, not a view: a click here changes where agents route. So it is locked like one.
 
 - It binds 127.0.0.1 and nothing else. There is no option to widen that.
-- Each launch mints its own secret. The sign-in link printed at start carries it once; the
-  server trades it for an HttpOnly, SameSite=Strict cookie and redirects, so the secret leaves
-  the address bar. Stopping the console voids both.
+- Each launch mints a sign-in key and trades it for an HttpOnly, SameSite=Strict cookie.
+  The cookie and form token are derived separately from a private per-install secret so an
+  already signed-in browser can keep working when this loopback server restarts.
 - Every request must name this server in its Host header (127.0.0.1:PORT or localhost:PORT).
   That defeats DNS rebinding, where a hostile page points its own hostname at 127.0.0.1.
 - Every change is a POST that must come from this origin (Origin, else Referer, and a
-  same-origin Sec-Fetch-Site when the browser sends one) and carry this launch's form token.
+  same-origin Sec-Fetch-Site when the browser sends one) and carry the install's form token.
   That defeats a cross-site form post even if a browser were to attach the cookie.
 - Responses forbid framing, inline scripts, off-origin loads and caching.
 
@@ -19,6 +19,7 @@ Standard library only. The page renders from `fleetctl.fleet_overview`, the same
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import html
@@ -26,8 +27,10 @@ import http.server
 import importlib.util
 import json
 import math
+import os
 import re
 import secrets
+import stat
 import sys
 import threading
 import time
@@ -68,8 +71,8 @@ except ImportError:
     from scripts import phone_view, providers
 
 PRODUCT_NAME = fleetctl.PRODUCT_NAME
-LEVELS = fleetctl.LEVELS
-LEVEL_WORDS = {"off": "Off", "low": "Low", "normal": "Normal", "high": "High", "forced": "Ignore estimates"}
+LEVEL_WORDS = {"off": "Off", "low": "Low", "normal": "Normal", "high": "High", "forced": "Max"}
+LEVELS = tuple(LEVEL_WORDS)
 STATIC_TYPES = {".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".js": "text/javascript; charset=utf-8"}
 # The page is never stored; its assets are. The stylesheet and script are asked for by a content
 # hash (?v=...), so a year is safe; the fonts never change under one name. Sending no-store with
@@ -82,16 +85,37 @@ CSP = (
 )
 
 
+def _install_secret(state_dir: Path) -> bytes:
+    """Read or create the same private key, including during overlapping starts."""
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(state_dir / 'console-session.key', flags, 0o600)
+    with os.fdopen(fd, 'r+b', buffering=0) as file:
+        info = os.fstat(file.fileno())
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid():
+            raise OSError('The console session key must be an operator-owned regular file with mode 600.')
+        fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+        key = file.read(33)
+        if not key:
+            key = secrets.token_bytes(32)
+            file.write(key)
+            os.fsync(file.fileno())
+        if len(key) != 32:
+            raise OSError('The console session key is damaged.')
+        return key
+
+
 class Console:
-    """Everything one launch knows: where the config lives, and its three secrets."""
+    """One loopback console and its install-local state."""
 
     def __init__(self, overlay_path: Path, state_dir: Path, port: int) -> None:
         self.overlay_path = overlay_path
         self.state_dir = state_dir
         self.port = port
         self.login_key = secrets.token_urlsafe(32)
-        self.session = secrets.token_urlsafe(32)
-        self.form_token = secrets.token_urlsafe(24)
+        secret = _install_secret(state_dir)
+        self.session = hmac.digest(secret, b'crossfeed console session v1', 'sha256').hex()
+        self.form_token = hmac.digest(secret, b'crossfeed console form v1', 'sha256').hex()
         self._refresh_lock = threading.Lock()
         self._last_refresh = float("-inf")
 
@@ -138,10 +162,10 @@ class Console:
             name, _, value = part.strip().partition("=")
             if name:
                 cookies[name] = value
-        return hmac.compare_digest(cookies.get(COOKIE, ""), self.session)
+        return hmac.compare_digest(cookies.get(COOKIE, '').encode(), self.session.encode())
 
     def form_ok(self, token: str) -> bool:
-        return hmac.compare_digest(token or "", self.form_token)
+        return hmac.compare_digest((token or '').encode(), self.form_token.encode())
 
     # ---- the fleet ------------------------------------------------------------------------
     def overview(self, refresh: bool = True) -> dict[str, Any]:
@@ -157,6 +181,24 @@ class Console:
         evidence = fleetctl.load_json(self.state_dir / 'evidence' / 'levels.json', {}) or {}
         overview['console_order'] = display_order(overview, runtime.get('console_order'), roster, evidence)
         return overview
+
+    def add_benchmark_link(self, model: str, url: str, label: str) -> None:
+        url = _benchmark_url(url)
+        label = label.strip()
+        if not url or len(label) > 120:
+            raise ValueError('invalid benchmark link')
+        roster = fleetctl.read_overlay(self.overlay_path, self.state_dir, discover=False)
+        with fleetctl.locked_runtime(self.state_dir) as runtime:
+            evidence = fleetctl.load_json(self.state_dir / 'evidence' / 'levels.json', {}) or {}
+            known = {canonical for canonical, _ in selector.evidence_index(roster, evidence.get('rows', []))}
+            known.update(selector.canonical_model(row['model'], roster) for row in fleetctl.model_overview(roster, runtime))
+            if model not in known:
+                raise ValueError('unknown model')
+            rows = runtime.setdefault('console_benchmark_links', {}).setdefault(model, [])
+            if not any(row['url'] == url for row in rows):
+                if len(rows) >= 100:
+                    raise ValueError('too many links for this model')
+                rows.append({'url': url, 'label': label, 'set_by': 'operator', 'set_at': fleetctl.iso()})
 
     def save_subscription(self, fields: dict) -> None:
         roster = fleetctl.read_overlay(self.overlay_path, self.state_dir, discover=False)
@@ -190,11 +232,26 @@ class Console:
 
     # BR-SWITCH-001
     def set_level(self, pool: str, level: str, reason: str | None = None) -> None:
-        pools = set(fleetctl.read_overlay(self.overlay_path, self.state_dir).get("quota_pools", {}))
-        if pool not in pools or level not in LEVELS:
-            raise ValueError("unknown pool or level")
+        roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
+        if level not in LEVELS:
+            raise ValueError("unknown level")
         with fleetctl.locked_runtime(self.state_dir) as runtime:
-            fleetctl.set_pool_level(runtime, pool, level, actor="owner", reason=reason)
+            set_level = getattr(fleetctl, 'set_level', None)
+            if set_level:
+                set_level(roster, runtime, pool, level, actor='owner', reason=reason)
+            elif pool in roster.get('quota_pools', {}) and level in fleetctl.LEVELS:
+                fleetctl.set_pool_level(runtime, pool, level, actor='owner', reason=reason)
+            else:
+                raise ValueError('unknown pool or level')
+
+    def set_archive(self, pool: str, model: str, archived: bool, reason: str | None = None) -> None:
+        roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
+        with fleetctl.locked_runtime(self.state_dir) as runtime:
+            set_archive = getattr(fleetctl, 'set_model_archive', None)
+            if not set_archive:
+                raise ValueError('archive controls unavailable')
+            set_archive(roster, runtime, pool, model, archived, actor='owner', reason=reason)
+        fleetctl.pins_after_switch(roster, self.state_dir, actor='owner', reason=reason)
 
     # BR-SWITCH-001
     def set_toggle(self, pool: str, model: str, on: bool, reason: str | None = None) -> None:
@@ -756,32 +813,35 @@ def _control_text(record: dict[str, Any] | None) -> str:
 
 def _level_attribution(record: dict[str, Any] | None, as_of: str) -> tuple[str, str]:
     words = {"owner": "you", "agent": "an agent"}
-    actor = (record or {}).get("actor")
-    if actor not in words:
+    record = record or {}
+    actor = record.get('actor') or {'operator': 'owner', 'agent': 'agent'}.get(record.get('set_by'))
+    date = record.get('when') or record.get('set_at')
+    if actor not in words or not date:
         return "unknown", "Last change not recorded"
-    when = fleetctl.parse_iso(record["when"]).astimezone()
+    when = fleetctl.parse_iso(date).astimezone()
     days = (fleetctl.parse_iso(as_of).astimezone().date() - when.date()).days
     date = f"today {when:%H:%M}" if days == 0 else "yesterday" if days == 1 else f"{when.day} {when:%b %Y %H:%M}"
     return actor, f"Set by {words[actor]} · {date}"
 
 
 def _level_meaning(level: str) -> str:
-    return LEVEL_PLAIN[level] + " Ignore estimates still obeys actual limits."
+    return WALLET_LEVEL_MEANING['forced'] if level == 'forced' else LEVEL_PLAIN[level] + ' Actual caps and refusals still apply.'
 
 
 WALLET_LEVEL_MEANING = {"off": "Routing skips this plan.", "low": "Conserve allowance.",
                         "normal": "Follow quota estimates.", "high": "Use allowance more freely.",
-                        "forced": "Actual caps and refusals still apply."}
+                        "forced": "Ignores quota estimates. Actual caps and refusals still apply.",
+                        "mixed": "The allowances have different settings. Choose a stop to set them together."}
 
 
 def _slider(pool: dict[str, Any], form_token: str, as_of: str | None = None, return_fields: str = '') -> str:
     meaning_for = WALLET_LEVEL_MEANING.__getitem__ if return_fields else _level_meaning
-    record = pool.get("control")
-    actor, attribution = _level_attribution(record, as_of or fleetctl.iso())
+    record = pool.get('control')
+    actor, attribution = _level_attribution(pool if pool.get('set_by') else record, as_of or fleetctl.iso())
     if not return_fields:
         attribution = _control_text(record)
-    current = pool["level"]
-    at = LEVELS.index(current)
+    current = pool['level']
+    at = LEVELS.index(current) if current in LEVELS else 'mixed'
     label = html.escape(pool["label"])
     stops = []
     for level in LEVELS:
@@ -797,10 +857,12 @@ def _slider(pool: dict[str, Any], form_token: str, as_of: str | None = None, ret
                 f'<button type="submit" name="level" value="{level}" class="stop {level}" role="radio" aria-checked="false" '
                 f'aria-label="{word}" title="{meaning}"><i></i><span>{word}</span></button>'
             )
-    pool_id = html.escape(pool["pool"])
+    pool_id = html.escape(pool['pool'])
+    mixed_text = html.escape(WALLET_LEVEL_MEANING['mixed'])
     return (
         '<p class="lvh" aria-hidden="true">How agents use this plan</p>'
-        f'<form class="lv at-{at} is-{current}" data-level-actor="{actor}" method="post" action="/level" role="radiogroup" '
+        f'<form class="lv at-{at} is-{current}" data-level-actor="{actor}" data-mixed-meaning="{mixed_text}" '
+        'method="post" action="/level" role="radiogroup" '
         f'aria-label="How much of {label} to use" aria-describedby="actor-{pool_id} means-{pool_id}">'
         f'<input type="hidden" name="pool" value="{pool_id}"><input type="hidden" name="t" value="{form_token}">'
         f'{return_fields}<span class="rail" aria-hidden="true"><span class="fill"></span></span>{"".join(stops)}</form>'
@@ -872,6 +934,14 @@ def _name(model: dict[str, Any] | None, key: str | None = None) -> str:
             return f"ChatGPT picker: {lane['worker_row']} · Thinking: {level} · Up to {count} {'task' if count == 1 else 'tasks'} at once"
     card = (model or {}).get("card") or {}
     return str(card.get("name") or _pretty((model or {}).get("model") or key or ""))
+
+
+def _compact_name(model, key=None, pool=None):
+    if pool == 'chatgpt-work':
+        for lane in (model or {}).get('lanes', []):
+            if lane.get('harness') == 'chatgpt-chat' and lane.get('worker_row') and lane.get('worker_level'):
+                return f'{lane["worker_row"]} · {_pretty(lane["worker_level"])}'
+    return _name(model, key)
 
 
 def _join(words: list[str]) -> str:
@@ -1139,17 +1209,23 @@ def _option(model: dict[str, Any], pool: dict[str, Any], option: dict[str, Any],
     target = _model_id(pool["pool"], key)
     older = not option["current"]
     if compact:
+        name = _compact_name(model, key, pool['pool'])
         blocked = ('Withdrawn' if option.get('retired_on') else 'No runnable route' if not option['run_as'] else
                    'No retention evidence' if older and not option.get('retention_reason') and not option['on'] else '')
         control = _work_switch('switch', option['on'] is True, f'Use {name}',
                                f'{key}={"off" if option["on"] else "on"}', disabled=blocked, hint_id=target)
-        identity = html.escape(f'{pool["pool"]}:{key}')
-        return (f'<li class="opt wb-model" id="{target}" data-model="{html.escape(key)}" '
-                f'data-search-label="{html.escape(name)}" tabindex="-1"><div class="wb-model-name">'
-                f'{_page_link(model, name)}' + ('<small>Older model</small>' if older and option['run_as'] else '') +
+        esc = html.escape
+        identity = esc(f'{pool["pool"]}:{key}')
+        canonical = option.get('model_identity') or model.get('model_identity') or key
+        return (f'<li class="opt wb-model" id="{target}" data-model="{esc(key)}" '
+                f'data-search-label="{esc(name)}" tabindex="-1"><div class="wb-model-name">'
+                f'{_benchmark_link(canonical, name)}' + _efficient(option.get('efficient_effort') or model.get('efficient_effort'))
+                + ('<small>Older model</small>' if older and option['run_as'] else '') +
                 '</div><div class="wb-model-control">'
-                f'<button type="button" class="wb-add" data-route="{identity}" aria-label="Compare {html.escape(name)}" '
+                f'<button type="button" class="wb-add" data-route="{identity}" aria-label="Compare {esc(name)}" '
                 'aria-pressed="false" hidden>Compare</button>' + control +
+                f'<button class="wb-add wb-archive" type="submit" formaction="/model-archive" name="archive" '
+                f'value="{esc(key)}" aria-label="Archive {esc(name)}">Archive</button>'
                 '<span class="wb-error" role="status"></span></div></li>')
     line = _older_reason(model, option, by_key) if older else _best_for(model, pool["pool"])
     if any(lane.get("catalog_state") == "sleeping" for lane in model.get("lanes", [])):
@@ -1201,12 +1277,10 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
     pool_id = html.escape(pool["pool"])
     label = html.escape(pool["label"])
     options = pool.get("options") or []
-    if order:
-        ranking = order['ranks']['models'][pool['pool']][order['sort']['models'][pool['pool']]]
-        options = sorted(options, key=lambda option: ranking.index(option['model']))
     if return_fields:
         # A single inventory: admission changes the switch, not the section the model belongs to.
-        listing = ''.join(_option(by_key[o['model']], pool, o, compact=True) for o in options)
+        listing = ''.join(_option(by_key.get(o['model'], o), pool, o, compact=True)
+                          for o in _sort_model_entries(options, by_key))
         count = len(options)
         count_text = f'{count} model {"entry" if count == 1 else "entries"}'
         return (f'<details class="pick" id="pick-{pool_id}" data-pool="{pool_id}"><summary class="wb-inventory">'
@@ -1215,6 +1289,9 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
                 f'<input type="hidden" name="pool" value="{pool_id}">'
                 f'<input type="hidden" name="t" value="{html.escape(form_token)}">'
                 f'<ul class="opts">{listing}</ul></form></details>')
+    if order:
+        ranking = order['ranks']['models'][pool['pool']][order['sort']['models'][pool['pool']]]
+        options = sorted(options, key=lambda option: ranking.index(option['model']))
     runnable = [o for o in options if o["run_as"]]
     models = pool.get("models") or {}
     state, _, _ = models_summary(pool, by_key)
@@ -1268,13 +1345,41 @@ def _picker(pool: dict[str, Any], by_key: dict[str, dict[str, Any]], form_token:
     )
 
 
+def _sort_model_entries(options, by_key):
+    def details(row):
+        model = by_key.get(row['model'], row)
+        family = row.get('family') or model.get('family') or row['model']
+        cost = _number(row.get('typical_cost_usd', model.get('typical_cost_usd')))
+        return family, cost if cost is not None else -1
+
+    families = {}
+    for row in options:
+        family, cost = details(row)
+        families[family] = max(families.get(family, -1), cost)
+    return sorted(options, key=lambda row: (-families[details(row)[0]], details(row)[0], -details(row)[1], row['model']))
+
+
+def _subscription_group(overview, pools, target='antigravity'):
+    control = next((s for s in overview.get('subscriptions', []) if s['id'] == target), None)
+    if control is None:  # Old overview producers still render the read-only aggregate correctly.
+        levels = {p['level'] for p in pools}
+        last = max((p.get('control') or {} for p in pools), key=lambda r: r.get('when', ''), default={})
+        control = {'level': next(iter(levels)) if len(levels) == 1 else 'mixed', 'control': last}
+    return {**control, 'pool': target, 'label': 'Google AI Pro'}
+
+
 def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
     by_key = {m["model"]: m for m in overview["models"]}
     pools = []
     for p in overview["pools"]:
         state, label, note = models_summary(p, by_key)
-        actor, attribution = _level_attribution(p.get("control"), overview["generated_at"])
-        pools.append({"pool": p["pool"], "level": p["level"], "means": _level_meaning(p["level"]),
+        actor, attribution = _level_attribution(p if p.get('set_by') else p.get('control'), overview['generated_at'])
+        pools.append({"pool": p["pool"], "subscription": p.get('subscription'), "level": p["level"],
+                      'set_by': p.get('set_by'), 'set_at': p.get('set_at'), 'archived': p.get('archived', []),
+                      **{key: p[key] for key in ('credits', 'status_url', 'usage_cost', 'per_model') if key in p},
+                      'wallet_extras': _plan_extras(p, show_status=p['pool'] not in AGY_ALLOWANCES,
+                                                   empty=p['pool'] not in AGY_ALLOWANCES),
+                      "means": _level_meaning(p["level"]),
                       "control_actor": _control_text(p.get("control")),
                       "wallet_control_actor": attribution, "control_actor_kind": actor,
                       "model_actors": {o["model"]: _control_text(o.get("control")) for o in p.get("options", [])},
@@ -1282,7 +1387,12 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
                       "wallet_gauge": _work_gauge(p) + _pro_usage(p),
                       "on": (p.get("models") or {}).get("on", []),
                       "state": state, "label": label, "note": note})
-    return {"pools": pools, "brief": _brief(overview), "brief_full": _brief(overview, True),
+    subscriptions = []
+    for row in overview.get('subscriptions', []):
+        actor, attribution = _level_attribution(row, overview['generated_at'])
+        subscriptions.append({**row, 'control_actor_kind': actor, 'wallet_control_actor': attribution,
+                              'means': WALLET_LEVEL_MEANING[row['level']]})
+    return {"pools": pools, 'subscriptions': subscriptions, "brief": _brief(overview), "brief_full": _brief(overview, True),
             "agy_summary": _agy_summary(overview['pools']),
             "console_order": overview.get('console_order') or display_order(overview), "stamp": _stamp(overview),
             "wallet_stamp": _wallet_stamp(overview['quota_readings'])}
@@ -1432,9 +1542,8 @@ def _compare_key(option: dict[str, Any]) -> str:
 
 
 def _archived_keys(roster: dict[str, Any]) -> set[str]:
-    """Display exclusions only; the selector and control audit use the unmodified roster."""
-    archive = Path.home() / '.claude' / 'roster' / 'models' / '_archive'
-    keys = {entry.stem for entry in archive.iterdir()} if archive.is_dir() else set()
+    """Roster-wide withdrawals; per-pool operator archives come from overview rows."""
+    keys = set()
     for records in (fleetctl.model_cards(roster), roster.get('model_evidence', {})):
         for key, record in records.items():
             if isinstance(record, dict) and (record.get('status') in {'archived', 'retired'} or record.get('archived') is True):
@@ -1456,6 +1565,42 @@ def _lane_statuses(roster):
     return statuses
 
 
+def _unlisted_compare_options(overview):
+    """Keep an admitted route discoverable even if a quote (for example while Off) is unavailable."""
+    roster = overview['_brief_context']['roster']
+    lanes = {}
+    for lane in roster.get('lanes', []):
+        lanes.setdefault((lane.get('quota_pool'), lane.get('model_key')), []).append(lane)
+    cards = fleetctl.model_cards(roster)
+    for pool in overview['pools']:
+        pool_id = pool['pool']
+        for entry in pool.get('options', []):
+            key = entry['model']
+            if not entry.get('run_as') or entry.get('archived') or entry.get('retired_on'):
+                continue
+            configured = lanes.get((pool_id, key), [])
+            sources = [lane for lane in configured if lane.get('admission_status') == 'active'
+                       and lane.get('access_status') == 'verified']
+            if not sources:
+                card = cards.get(key, {})
+                if (configured or not fleetctl.pool_is_direct(roster, pool_id)
+                        or card.get('access_status', 'verified') != 'verified'
+                        or card.get('admission_status', 'active') != 'active'):
+                    continue
+                sources = [card]
+            for lane in sources:
+                harness = lane.get('harness') or pool_id
+                effort = roster.get('effort', {}).get(key, {})
+                configured_levels = effort.get('levels') or {}
+                levels = (configured_levels.get(harness) if isinstance(configured_levels, dict) else configured_levels)
+                for level in levels or [lane.get('worker_level') or effort.get('default') or 'provider-default']:
+                    yield {'pool': pool_id, 'model_key': key, 'model_identity': selector.canonical_model(key, roster),
+                           **{field: lane[field] for field in ('benchmark_identity', 'benchmark_effort') if field in lane},
+                           'harness': harness, 'level': level, 'lane_id': lane.get('lane_id'),
+                           'funding': selector.funding.classify(roster, pool_id, lane),
+                           'comparison_only': True, 'efficient_effort': entry.get('efficient_effort')}
+
+
 def _workbench_query(query: dict[str, list[str]]) -> tuple[str, str, list[str], int]:
     role = query.get('role', ['review'])[0]
     value = query.get('preview-value', query.get('value', ['best-value']))[0]
@@ -1463,9 +1608,17 @@ def _workbench_query(query: dict[str, list[str]]) -> tuple[str, str, list[str], 
     if role not in WORKBENCH_ROLES or value not in VALUE_MODES or len(requested) > 4:
         raise ValueError('Choose a listed role and mode and at most four routes.')
     count = query.get('count', [str(max(3, len(requested)))])[0]
-    if count not in {'2', '3', '4'}:
-        raise ValueError('Compare two to four routes.')
+    if count not in {'1', '2', '3', '4'}:
+        raise ValueError('Compare one to four models.')
     return role, value, requested, int(count)
+
+
+def _comparison_evidence(roster, state_dir):
+    load = getattr(fleetctl, 'comparison_evidence', None)
+    if load:
+        return load(roster, state_dir)
+    evidence = fleetctl.load_json(state_dir / 'evidence' / 'levels.json', {}) or {}
+    return selector.evidence_index(roster, evidence.get('rows', []))
 
 
 def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'implementation',
@@ -1485,7 +1638,10 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
     options, refusals = selector.enumerate_options(roster, runtime, role, fleet=fleet)
     archived = _archived_keys(roster)
     lanes = _lane_statuses(roster)
-    visible = lambda option: _visible_model(roster, archived, option['pool'], option['model_key'], lanes)
+    blocked = {(pool['pool'], entry['model']) for pool in overview['pools']
+               for entry in [*pool.get('archived', []), *(o for o in pool.get('options', []) if o.get('archived'))]}
+    visible = lambda option: ((option['pool'], option['model_key']) not in blocked
+                              and _visible_model(roster, archived, option['pool'], option['model_key'], lanes))
     automatic = {_compare_key(option): option for option in options if visible(option)}
     menu = dict(automatic)
     explicit_pools = {pool for pool, config in roster.get('quota_pools', {}).items()
@@ -1496,6 +1652,17 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
             key = _compare_key(option)
             if option['pool'] in explicit_pools and key not in automatic and visible(option):
                 menu[key] = dict(option, explicit_preview=True)
+    # The menu includes display-only quotes. The replay, not the menu, decides eligibility.
+    previews = getattr(selector, 'compare_options', None)
+    if previews:
+        for option in previews(roster, runtime, state_dir, role, fleet=fleet, value_mode=value):
+            if visible(option):
+                key = _compare_key(option)
+                menu[key] = {**option, **menu.get(key, {})}
+    present = {(item['pool'], item['model_key']) for item in menu.values()}
+    for option in _unlisted_compare_options(overview):
+        if (option['pool'], option['model_key']) not in present and visible(option):
+            menu.setdefault(_compare_key(option), option)
     memo = {}
     result = {}
     try:
@@ -1550,28 +1717,35 @@ def workbench_data(overview: dict[str, Any], state_dir: Path, role: str = 'imple
         keys = [key for key in keys if key in menu]
     for key in keys:
         if key not in memo:
+            if menu[key].get('comparison_only') and not menu[key].get('explicit_preview') and key not in automatic:
+                memo[key] = None
+                continue
             try:
-                memo[key] = replay(key)['top3'][0]
+                ranked = replay(key)
+                memo[key] = next((option for option in [ranked.get('choice'), *ranked['top3']]
+                                  if option and _compare_key(option) == key), None)
             except fleetctl.FleetError as exc:
                 if not selection_failure(exc):
                     raise
                 memo[key] = None
-    if pick and pick.get('expected_cost') is not None:
-        why = (f'Expected cost {pick["expected_cost"]:.3f} at '
-               f'{result.get("rating_stakes", "routine")} stakes.')
+    if value == 'absolute-best':
+        why = 'Prioritizes the highest estimated chance of success among available routes.'
+    elif pick and pick.get('expected_cost') is not None:
+        why = 'Balances estimated success against the cost of using allowance and of having to retry.'
     else:
-        why = 'No comparable price; falls back to available grades.'
+        why = 'No comparable price; ranks the available routes by estimated quality and allowance pressure.'
     if (result.get('hard_reasoning_preference') or {}).get('route') == 'opus':
         why = 'Opus hard-reasoning preference. ' + why
     elif (result.get('hard_reasoning_preference') or {}).get('route') == 'gpt-fallback':
         why = 'Astra fallback when Opus is unavailable. ' + why
-    hidden_names = archived | {key for (pool, key) in lanes if not _visible_model(roster, archived, pool, key, lanes)}
+    offered = {item['model_key'] for item in menu.values()}
+    hidden_names = archived | {key for _, key in blocked if key not in offered}
+    hidden_names |= {key for (pool, key) in lanes if not _visible_model(roster, archived, pool, key, lanes)}
     prioritized = sorted({text for text in refusals if text and not any(key in text for key in hidden_names)},
                          key=lambda text: ('floor' not in text, 'pool exhausted' not in text, text))
-    evidence = fleetctl.load_json(state_dir / 'evidence' / 'levels.json', {}) or {}
     return {'role': role, 'value': value, 'menu': menu, 'keys': keys, 'scores': memo, 'pick': pick,
             'runner': runner, 'exploring': result.get('exploration', False), 'why': why, 'refusals': prioritized[:16], 'hidden_pick': hidden_pick,
-            'evidence': selector.evidence_index(roster, evidence.get('rows', [])),
+            'evidence': _comparison_evidence(roster, state_dir),
             'as_of': fleetctl.utc_now().astimezone().strftime('%H:%M'), 'count': count}
 
 
@@ -1601,13 +1775,13 @@ def _work_gauge(pool):
         name = limit['title']
         if name == 'Weekly' and scope in {'Fable', 'Fable only'}:
             title = 'Fable weekly'
-        elif name == 'Weekly' and pool['pool'] in AGY_ALLOWANCES:
-            title = f'{AGY_ALLOWANCES[pool["pool"]]} weekly'
+        elif pool['pool'] in AGY_ALLOWANCES:
+            title = f'{AGY_ALLOWANCES[pool["pool"]]} {name.lower()}'
         else:
             title = name + (f' · {scope}' if scope else '')
         used = limit['used_percent']
         reset = ('Resets ' + limit['resets'] if limit['reset_at'] else
-                 'Reset not reported' if limit.get('reset_unknown') else 'No active reset')
+                 'Reset unknown' if limit.get('reset_unknown') or used else 'No active reset')
         count = f'{100 - used:g}%' if limit['reset_at'] or used or limit.get('reset_unknown') else ''
         if count and note:
             count = 'Last ' + count
@@ -1667,14 +1841,64 @@ def _compare_cells(option, scored, pool, roster):
             pool.get('label') or option['pool'], headroom]
 
 
+def _money_cell(value):
+    amount = _number(value)
+    if amount is None:
+        return '—'
+    text = f'{amount:.4f}' if amount == 0 or amount >= 0.0001 else f'{amount:.8f}'.rstrip('0')
+    return f'<span class="wb-number">${text.removesuffix(".")}</span>'
+
+
+def _quota_cell(item, data, scored):
+    basis = item.get('quota_basis') or {}
+    qty = _money_cell(item.get('quota_cost_usd'))
+    plan, window = basis.get('plan'), basis.get('window')
+    if window:
+        window = next((label for suffix, label in (('weekly', 'Weekly'), ('monthly', 'Monthly'),
+                                                   ('5h', '5-hour'), ('session', 'Session'))
+                       if str(window).endswith(suffix)), window)
+    details = [' · '.join(str(x) for x in (plan, window) if x)]
+    limit = basis.get('window_limit')
+    if limit is not None:
+        label = f'${limit:g}' if item.get('pool') == 'opencode-go' and _number(limit) is not None else str(limit)
+        details.append(f'Allowance: {label}.')
+    share, value = _number(basis.get('share_percent')), _number(basis.get('plan_value_usd'))
+    if share is not None:
+        details.append(f'A typical job uses about {share:.3g}% of this allowance.')
+    if value is not None:
+        details.append(f'Estimated value of this allowance: ${value:,.2f}.')
+    details.append(basis.get('why') or 'No quota estimate is available for this route.')
+    pick = data.get('pick')
+    if pick and _compare_key(pick) == _compare_key(item):
+        details.append(f'Why it leads: {data["why"]}')
+    elif not scored:
+        details.append('The selector did not rank this route for the selected role.')
+    elif pick:
+        details.append('This route was not the first choice for this role.')
+    prose = html.escape(' '.join(s for s in details if s))
+    key = html.escape(_compare_key(item))
+    return (f'<details class="quota-explain" data-detail="{key}"><summary aria-label="Explain quota cost" title="{prose}">'
+            f'{qty}<span aria-hidden="true" class="quota-info">{CHEVRON}</span></summary><p>{prose}</p></details>')
+
+
+def _efficient(record):
+    if not isinstance(record, dict) or not record.get('effort'):
+        return ''
+    label = html.escape(_pretty(record['effort']))
+    why = html.escape(record.get('why') or 'Best estimated success for the total cost.')
+    return (f'<details class="efficient-effort"><summary title="{why}">Most efficient: {label}'
+            f'<span aria-hidden="true">{CHEVRON}</span></summary><p>{why}</p></details>')
+
+
 def _comparison_grade(data, item, scored, role, policy):
     family = policy.get('families_by_role', {}).get(role) or selector.FAMILY_BY_ROLE.get(role, 'coding-agent')
-    row = data['evidence'].get((item['model_identity'], item['level']), {})
+    read = getattr(selector, 'option_evidence', None)
+    row = read(data['evidence'], item) if read else data['evidence'].get((item['model_identity'], item['level']), {})
     strata = row.get('q_by_stakes', {})
     hard_grade = strata.get('high', {}).get(family)
     scoped = (hard_grade if role == 'hard-reasoning' and hard_grade and not hard_grade.get('unknown')
               else strata.get('normal', {}).get(family))
-    replayed = (scored or {}).get('q') if role == data['role'] else None
+    replayed = (scored or item).get('q') if role == data['role'] else None
     q = replayed or (scoped if scoped is not None else row.get('q', {}).get(family) or {})
     mean = _number(q.get('mean'))
     sourced = q.get('n_sources') or row.get('own', {}).get(family, {}).get('trials')
@@ -1692,8 +1916,9 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
     policy = roster.get('policy', {}).get('selector', {})
     pools = {pool['pool']: pool for pool in overview['pools']}
     models = {model['model']: model for model in overview['models']}
+    entries = {(pool['pool'], row['model']): row for pool in overview['pools'] for row in pool.get('options', [])}
     def name(option):
-        return _name(models.get(option['model_key']), option['model_key'])
+        return _compact_name(models.get(option['model_key']), option['model_key'], option['pool'])
     def route(option):
         return (f'<span class="nm">{esc(name(option))}</span> · {esc(_pretty(option["level"]))}'
                 if option else 'None eligible')
@@ -1704,6 +1929,10 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         return _wallet_title(pools[key]) if key in pools else key
     def identity(option):
         return option['pool'], option['model_key']
+    def preference(option):
+        efficient = (option.get('efficient_effort') or {}).get('effort')
+        return (efficient == option['level'], _number(option.get('api_cost_usd')) is not None,
+                not option.get('comparison_only'))
     grouped = {}
     for key, item in data['menu'].items():
         grouped.setdefault(identity(item), {})[key] = item
@@ -1719,13 +1948,14 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
     if data['role'] != 'default' and data['role'] not in grade_roles:
         grade_roles.append(data['role'])
     fields = [(WORKBENCH_ROLES[role], role == data['role']) for role in grade_roles]
-    fields += [('Quota / job', False), ('Cash / job', False), ('Context', False), ('Allowance left', False)]
+    fields += [('Quota / job', False), ('API cost / job', False), ('Cash / job', False),
+               ('Context', False), ('Allowance left', False)]
     for index, key in enumerate(data['keys'], 1):
         item = data['menu'][key]
         scored = data['scores'][key]
         links = {}
         for ident, efforts in choices:
-            preferred = key if ident == identity(item) else next(reversed(efforts))
+            preferred = key if ident == identity(item) else max(efforts, key=lambda k: preference(efforts[k]))
             option = efforts[preferred]
             links.setdefault(pool_name(ident[0]), {})[preferred] = name(option) + (
                 ' · ' + AGY_ALLOWANCES[ident[0]] if ident[0] in AGY_ALLOWANCES else '')
@@ -1737,12 +1967,15 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
                        f'<small>{esc(pool_name(item["pool"]))} · {funding}</small>'
                        f'<select class="wb-effort-picker" name="compare" aria-label="Effort for {esc(name(item))}" '
                        f'data-col="{index}">{select(effort_options, key)}</select>'
-                       + ('<small>Not eligible in this mode</small>' if not scored else '') + '</th>')
-        cells = _compare_cells(scored or item, scored, pools.get(item['pool'], {}), roster)
-        quota, cash, context, headroom = (esc(cells[i]) for i in (1, 2, 3, 5))
+                       + _efficient(item.get('efficient_effort') or entries.get(identity(item), {}).get('efficient_effort')
+                                    or models.get(item['model_key'], {}).get('efficient_effort'))
+                       + ('<small>Not ranked for this role</small>' if not scored else '') + '</th>')
+        quote = {**item, **(scored or {})}
+        cells = _compare_cells(quote, quote, pools.get(item['pool'], {}), roster)
+        cash, context, headroom = (esc(cells[i]) for i in (2, 3, 5))
+        quota = _quota_cell(quote, data, scored)
+        raw = _money_cell(quote.get('api_cost_usd', (quote.get('cash') or {}).get('api_equivalent_usd')))
         tariff = {'included': 'Included · no extra charge', 'verified-free': 'No charge · free route'}
-        if quota != '—':
-            quota = f'<span class="wb-number">{quota}</span>' + ('<small>Estimate</small>' if quota.startswith('≈') else '')
         if cash != '—':
             cash = f'<span class="wb-number">{cash}</span>'
         elif item.get('funding') in tariff:
@@ -1754,7 +1987,7 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
             headroom = (f'<span class="wb-number" aria-label="{percent}">{percent.removesuffix(" left")}</span>'
                         + (f'<small>{detail}</small>' if detail else ''))
         columns.append([*[_comparison_grade(data, item, scored, role, policy) for role in grade_roles],
-                        quota, cash, context, headroom])
+                        quota, raw, cash, context, headroom])
     if columns:
         lines = []
         for (field, active), cells in zip(fields, zip(*columns)):
@@ -1765,7 +1998,9 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
     else:
         matrix = '<p class="wb-muted">No route to compare for this role.</p>'
     notices = ''.join(f'<li>{esc(reason)}</li>' for reason in data['refusals'])
-    absolute = data['value'] == 'absolute-best'
+    mode_switch = ''.join(f'<button type="submit" name="preview-value" value="{mode}" '
+                          f'aria-pressed="{str(data["value"] == mode).lower()}">{label}</button>'
+                          for mode, label in VALUE_MODES.items())
     why = ('The selected route is archived and hidden.' if data['hidden_pick'] else
            esc(data['why']) if data['pick'] else 'No route clears the selector gates.')
     alternate = f' <b>Alternate:</b> {route(data["runner"])}.' if data['runner'] else ''
@@ -1775,16 +2010,17 @@ def _workbench(overview: dict[str, Any], data: dict[str, Any]) -> str:
         '<h1 id="compare-heading">Compare models</h1><small>Grades 0–1 · costs by role</small></div>'
         '<form class="wb-query" method="get" action="/#compare"><div class="wb-toolbar">'
         f'<label>Role <select name="role">{select(WORKBENCH_ROLES, data["role"])}</select></label>'
-        f'<label>Models <select name="count" aria-label="Number of models to compare">{select({2:"2",3:"3",4:"4"}, data["count"])}</select></label>'
+        f'<label>Models <select name="count" aria-label="Number of models to compare">{select({n: str(n) for n in range(1, 5)}, data["count"])}</select></label>'
         f'<input type="hidden" name="value" value="{data["value"]}">'
-        + _work_switch('preview-value', absolute, 'Preview absolute best', 'best-value' if absolute else 'absolute-best',
-                       state_text=VALUE_MODES[data['value']])
-        + '</div><p class="wb-error" role="status"></p>'
+        f'<div class="wb-mode" role="group" aria-label="Ranking" aria-describedby="wb-mode-help">{mode_switch}</div>'
+        '</div><p id="wb-mode-help" class="wb-mode-help">Best value weighs cost and likely success; Absolute best puts likely success first.</p>'
+        '<p class="wb-error" role="status"></p>'
         + f'<p class="wb-pick" role="status"><b>{VALUE_MODES[data["value"]]}:</b> {pick}{"(exploring) " if data["exploring"] else ""}{why}{alternate} '
         f'<small>As of {esc(data["as_of"])}.</small></p>' + matrix
         + '<noscript><button type="submit">Compare</button></noscript></form>'
         '<details class="wb-numbers"><summary>What the numbers mean</summary><div class="wb-muted">'
-        '<p>The selector converts grades to a success estimate. Quota estimates are not measured use. A dash means no comparable reading.</p>'
+        '<p>The selector converts grades to a success estimate. Quota / job estimates how much of your plan you spend on a job. '
+        'API cost / job is the equivalent API price, not what you pay on an included route. A dash means no comparable reading.</p>'
         + (f'<details><summary>Why other routes are out</summary><ul>{notices}</ul></details>' if notices else '')
         + '<p class="wb-value">Save absolute best ' + _work_switch('role-value', False, 'Save absolute best',
                                                   disabled='Per-run preview only.') + '</p></div></details></section>'
@@ -1805,7 +2041,7 @@ def _work_switch(field: str, on: bool, label: str, value: str = '', *, disabled:
 
 WALLET_PRIMARY = ('claude', 'codex', 'opencode-go', 'antigravity-gemini')
 WALLET_TITLES = {'codex': 'Codex', 'claude': 'Claude Max', 'opencode-go': 'OpenCode Go',
-                 'chatgpt-work': 'ChatGPT Chat', 'github-copilot-student': 'Copilot Student',
+                 'chatgpt-work': 'Crossfeed Chat', 'github-copilot-student': 'Copilot Student',
                  'gemini-metered': 'Gemini API', 'openrouter-free': 'OpenRouter Free'}
 
 
@@ -1851,33 +2087,101 @@ def _order_state(order, token):
             f'data-token="{html.escape(token)}"></div>')
 
 
+STATUS_PAGES = {
+    'claude': 'https://status.claude.com/', 'codex': 'https://status.openai.com/',
+    'chatgpt-work': 'https://status.openai.com/', 'antigravity-gemini': 'https://status.cloud.google.com/',
+    'antigravity-3p': 'https://status.cloud.google.com/', 'antigravity-argon': 'https://status.cloud.google.com/',
+    'gemini-metered': 'https://aistudio.google.com/status', 'opencode-go': 'https://status.opencode.ai/',
+    'openrouter': 'https://status.openrouter.ai/', 'openrouter-free': 'https://status.openrouter.ai/',
+    'openrouter-mimo': 'https://status.openrouter.ai/', 'openrouter-metered': 'https://status.openrouter.ai/',
+    'github-copilot-student': 'https://www.githubstatus.com/',
+}
+
+
+def _plan_extras(pool, *, show_status=True, empty=True):
+    esc = html.escape
+    status = _benchmark_url(pool.get('status_url') or STATUS_PAGES.get(pool['pool'])) if show_status else None
+    credits = pool.get('credits') or {}
+    usage = pool.get('usage_cost') or {}
+    per_model = pool.get('per_model') or usage.get('per_model') or []
+
+    def date(value):
+        if not value:
+            return 'not reported'
+        try:
+            when = fleetctl.parse_iso(value).astimezone()
+            return f'{when.day} {when:%b %Y, %H:%M}'
+        except (ValueError, TypeError, AttributeError):
+            return 'not reported'
+
+    pieces = []
+    balance = credits.get('balance')
+    if balance is not None:
+        unit = credits.get('unit') or 'credits'
+        pieces.append(f'<p>Credit balance <b>{esc(str(balance))} {esc(str(unit))}</b><br>'
+                      f'Expires {esc(date(credits.get("expires_at")))} · New credits arrive {esc(date(credits.get("renews_at")))}</p>')
+    if _number(usage.get('today_usd')) is not None or _number(usage.get('last_30d_usd')) is not None:
+        tokens = ''
+        if (_number(usage.get('today_tokens')) is not None and _number(usage.get('last_30d_tokens')) is not None):
+            tokens = f'<br><small>{usage["today_tokens"]:,.0f} today · {usage["last_30d_tokens"]:,.0f} tokens in the last 30 days</small>'
+        pieces.append(f'<p>Usage cost: {_money_cell(usage.get("today_usd"))} today · '
+                      f'{_money_cell(usage.get("last_30d_usd"))} in the last 30 days{tokens}</p>')
+    elif empty:
+        pieces.append('<p>Usage cost not reported</p>')
+    rows = ''.join(f'<li><span class="nm">{esc(str(row.get("model") or "Unknown model"))}</span> '
+                   f'{_money_cell(row.get("usd_30d"))} · {esc(str(row.get("requests", "—")))} requests</li>'
+                   for row in per_model)
+    if rows:
+        pieces.append(f'<details><summary>Spend by model · last 30 days</summary><ul>{rows}</ul></details>')
+    if status:
+        pieces.append(f'<a href="{esc(status)}" rel="noreferrer">Status page</a>')
+    return ''.join(pieces)
+
+
 def _wallet(overview, token, workbench, order):
     esc = html.escape
     by_key = {m['model']: m for m in overview['models']}
     roster = overview['_brief_context']['roster']
     archived, lanes = _archived_keys(roster), _lane_statuses(roster)
+    efficiencies = {(item['pool'], item['model_key']): item['efficient_effort'] for item in workbench['menu'].values()
+                    if item.get('efficient_effort')}
+    benchmark_ids = {(item['pool'], item['model_key']): item['benchmark_identity'] for item in workbench['menu'].values()
+                     if item.get('benchmark_identity')}
     return_fields = ''.join(f'<input type="hidden" name="return-{field}" value="{esc(value)}">'
                             for field, value in [('role', workbench['role']), ('value', workbench['value']),
+                                                 ('count', str(workbench['count'])),
                                                  *[('compare', key) for key in workbench['keys']]])
 
-    def allowance_row(pool, title, *, card=False):
+    def controls(pool):
+        key = esc(pool['pool'])
+        current = pool['level']
+        switch = ''
+        if current != 'mixed':
+            on = current != 'off'
+            switch = ('<form class="wb-pool-switch" method="post" action="/level">'
+                      f'{return_fields}<input type="hidden" name="t" value="{esc(token)}">'
+                      f'<input type="hidden" name="pool" value="{key}">'
+                      + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal') + '</form>')
+        slider = _slider(pool, esc(token), overview['generated_at'], return_fields)
+        caption = LEVEL_WORDS.get(current, 'Mixed')
+        policy = (f'<details class="wb-advanced" id="policy-{key}" open><summary>Spend policy '
+                  f'<small class="wb-level">{caption}</small></summary>{slider}</details>')
+        return switch, policy
+
+    def allowance_row(pool, title, *, card=False, separate_dial=True):
         key = pool['pool']
         pool_id = esc(key)
-        options = [o for o in pool.get('options') or [] if not o['retired_on']
+        options = [dict(o, model_identity=benchmark_ids.get((key, o['model'])) or selector.canonical_model(o['model'], roster),
+                        efficient_effort=o.get('efficient_effort') or efficiencies.get((key, o['model'])))
+                   for o in pool.get('options') or [] if not o.get('retired_on') and not o.get('archived')
                    and _visible_model(roster, archived, key, o['model'], lanes)]
         pool = dict(pool, options=options)
         tag = 'h2' if card else 'h3'
         container = 'article' if card else 'section'
-        on = pool['level'] != 'off'
         explicit = bool(roster['quota_pools'][key].get('explicit_only'))
-        included = [_name(by_key[o['model']]) for o in options if o['current'] and o['run_as']][:3]
-        pool_switch = ('<form class="wb-pool-switch" method="post" action="/level">'
-                       f'{return_fields}<input type="hidden" name="t" value="{esc(token)}">'
-                       f'<input type="hidden" name="pool" value="{pool_id}">'
-                       + _work_switch('level', on, f'Use {pool["label"]}', 'off' if on else 'normal') + '</form>')
+        included = [_name(by_key.get(o['model'], o), o['model']) for o in options if o['current'] and o['run_as']][:3]
+        pool_switch, policy = controls(pool) if card and separate_dial else ('', '')
         plan = _wallet_plan(pool) if card else ''
-        level = f'<small class="wb-level">{LEVEL_WORDS[pool["level"]]}</small>'
-        slider = _slider(pool, esc(token), overview['generated_at'], return_fields)
         flag = ('<div class="wb-explicit">Explicit only '
                 + _work_switch('explicit-only', explicit, f'{title} explicit-only pool flag',
                                disabled='Set in roster.', hint_id=pool_id) + '</div>')
@@ -1887,25 +2191,30 @@ def _wallet(overview, token, workbench, order):
         ticket = ' wb-ticket' if card else ''
         return (f'<{container} class="pool wb-pool-control{ticket} lvl-{pool["level"]}" '
                 f'id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{esc(pool["label"])}" tabindex="-1">'
-                f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}'
+                + f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}' +
                 '<p class="wb-error" role="status"></p>'
-                f'<div class="gauge">{_work_gauge(pool) + _pro_usage(pool)}</div>{includes}'
-                f'<details class="wb-advanced" id="policy-{pool_id}" open><summary>Spend policy {level}</summary>{slider}</details>'
-                f'{inventory}</{container}>')
+                f'<div class="gauge" aria-label="{esc(title)} allowance">{_work_gauge(pool) + _pro_usage(pool)}</div>'
+                f'<div class="wallet-extras">{_plan_extras(pool, show_status=card, empty=card)}</div>'
+                f'{includes if card else ""}{policy}{inventory}</{container}>')
 
     def antigravity(group):
         members = esc(json.dumps([p['pool'] for p in group]))
+        dial = _subscription_group(overview, group)
+        # The dial itself includes Off; do not offer a second on/off control for the same plan.
+        _, policy = controls(dial)
         return (
-            f'<article class="pool provider-group wb-ticket" id="provider-antigravity" data-pool="{group[0]["pool"]}" '
-            f'data-pool-members="{members}" data-search-label="Antigravity Google AI Pro" tabindex="-1">'
+            f'<article class="pool provider-group wb-ticket wb-pool-control lvl-{dial["level"]}" id="provider-antigravity" '
+            f'data-pool="antigravity" data-pool-members="{members}" data-search-label="Antigravity Google AI Pro" tabindex="-1">'
             '<div class="wb-head"><h2>Google AI Pro</h2></div><small class="wb-plan">Antigravity</small>'
+            '<p class="wb-error" role="status"></p>' + policy +
+            f'<div class="wallet-extras agy-extras">{_plan_extras({"pool":group[0]["pool"], "status_url":group[0].get("status_url")}, empty=not any(p.get("usage_cost") for p in group))}</div>'
             '<div class="wb-allowances" id="antigravity-allowances">'
             + ''.join(allowance_row(p, AGY_ALLOWANCES[p['pool']]) for p in group) + '</div></article>')
 
     by_pool = {p['pool']: p for p in overview['pools']}
     agy = [by_pool[key] for key in AGY_ALLOWANCES if key in by_pool]
     ranking = order['ranks']['pools'][order['sort']['pools']]
-    primary, other = [], []
+    cards = []
     ranking = [*WALLET_PRIMARY, *(key for key in ranking if key not in WALLET_PRIMARY)]
     grouped = False
     for key in ranking:
@@ -1915,10 +2224,11 @@ def _wallet(overview, token, workbench, order):
         if key in AGY_ALLOWANCES:
             if not grouped:
                 grouped = True
-                primary.append(antigravity(agy))
+                cards.append(antigravity(agy))
         else:
-            destination = primary if key in WALLET_PRIMARY else other
-            destination.append(allowance_row(pool, _wallet_title(pool), card=True))
+            # An illustrative legacy route can share this group's ID but is not a second subscription.
+            cards.append(allowance_row(pool, _wallet_title(pool), card=True,
+                                       separate_dial=not (key == 'antigravity' and agy)))
 
     readings = overview['quota_readings']
     stamp = _wallet_stamp(readings)
@@ -1926,12 +2236,31 @@ def _wallet(overview, token, workbench, order):
         '<section class="wb-wallet" aria-labelledby="wallet-heading"><div class="wb-head wb-wallet-head">'
         '<h2 id="wallet-heading">Allowance by subscription</h2>'
         f'<div class="quota-reading"><p class="stamp">{esc(stamp)}</p>{_refresh_form(token, return_fields)}</div></div>'
-        + f'<section class="pools wb-tickets" aria-label="Subscriptions">{"".join(primary)}</section>'
+        + f'<section class="pools wb-tickets" aria-label="Subscriptions and routes">{"".join(cards)}</section>'
         + '<p class="wb-footnote">Window bars show allowance left. Stale readings are not current capacity.</p>'
-        + (f'<details class="wb-other"><summary>Other subscriptions &amp; routes <small>{len(other)} groups</small></summary>'
-           f'<section class="pools wb-tickets" aria-label="Other subscriptions and routes">{"".join(other)}</section></details>'
-           if other else '') + '</section>'
+        + _archived_list(overview, by_key, token, return_fields) + '</section>'
     )
+
+
+def _archived_list(overview, by_key, token, return_fields):
+    esc = html.escape
+    entries = []
+    for pool in overview['pools']:
+        for row in _sort_model_entries(pool.get('archived', []), by_key):
+            key = row['model']
+            name = esc(_name(by_key.get(key, row), key))
+            actor, words = _level_attribution(row, overview['generated_at'])
+            entries.append(
+                f'<li><span><b class="nm">{name}</b> · {esc(pool["label"])}'
+                f'<small class="archive-actor" data-actor="{actor}">{esc(words)}</small></span>'
+                '<form method="post" action="/model-archive">' + return_fields
+                + f'<input type="hidden" name="t" value="{esc(token)}">'
+                f'<input type="hidden" name="pool" value="{esc(pool["pool"])}">'
+                f'<button type="submit" class="wb-add" name="restore" value="{esc(key)}" aria-label="Restore {name}">'
+                'Restore</button></form></li>')
+    content = '<ul>' + ''.join(entries) + '</ul>' if entries else '<p class="wb-muted">No archived models.</p>'
+    return (f'<details class="wb-archived" id="archived"><summary>Archived <small>{len(entries)}</small></summary>'
+            f'{content}</details>')
 
 
 def _wallet_stamp(readings):
@@ -1946,7 +2275,7 @@ def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, 
                 + '<details class="wb-more" id="provider-setup-tools"><summary>Provider setup and history</summary>'
                 + provider_setup(overview.get('provider_sources', []), form_token) + _recent_runs(overview)
                 + '<details><summary>What agents read</summary>' + _agent_brief(overview) + '</details></details>'
-                + '<p class="save-status" role="status" aria-live="polite"></p>')
+                + '<p class="save-status" role="status" aria-live="polite"></p>' + _onboarding())
         return shell('Compare models', body, settings_content=settings, dashboard=True)
 
     by_key = {m["model"]: m for m in overview["models"]}
@@ -2001,12 +2330,164 @@ def render_page(overview: dict[str, Any], form_token: str, workbench: dict[str, 
     return shell("Providers", body, front=True, settings_content=settings)
 
 
-def render_benchmarks(cards: dict[str, Any]) -> str:
+PUBLIC_REPO = 'https://github.com/ABCastor/crossfeed-orchestrator'
+
+
+def _onboarding():
+    esc = html.escape
+
+    def copy(label, body, title=''):
+        return (f'<div class="connect-copy">{f"<h3>{esc(title)}</h3>" if title else ""}'
+                f'<pre tabindex="0"><code>{esc(body)}</code></pre><button type="button" class="wb-add" data-copy-block>'
+                f'{label}</button><span role="status" class="copy-status"></span></div>')
+
+    install = (f'git clone {PUBLIC_REPO} "$HOME/crossfeed-orchestrator"\n'
+               'cd "$HOME/crossfeed-orchestrator"\n'
+               'mkdir -p "$HOME/.config/orchestrator"\n'
+               'cfg="$HOME/.config/orchestrator/access-overlay.json"\n'
+               '[ -e "$cfg" ] || cp examples/access-overlay.example.json "$cfg"\n'
+               'python3 scripts/fleetctl.py doctor\n'
+               'python3 scripts/fleetctl.py console')
+    assistants = {'Claude Code': '$HOME/.claude/skills', 'Codex': '$HOME/.agents/skills',
+                  'Pi': '${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills'}
+    commands = []
+    for name, directory in assistants.items():
+        command = (f'skill="{directory}/crossfeed-orchestrator"\n'
+                   'mkdir -p "$skill"\n'
+                   'cd "$HOME/crossfeed-orchestrator"\n'
+                   'ln -s "$PWD/skill/SKILL.md" "$PWD/skill/references" "$PWD/skill/readers" \\\n'
+                   '      "$PWD/scripts" "$PWD/docs" "$skill/"')
+        commands.append(copy('Copy command', command, name))
+    prompt = ('Use the Crossfeed Orchestrator skill. Read my configured routes and current allowances. '
+              'Show which model and thinking level you would use for code review and why. '
+              'Do not run a model, change settings, or spend anything.')
+    return ('<section class="connect" aria-labelledby="connect-heading"><h2 id="connect-heading">Use your AI assistant</h2>'
+            '<p>Crossfeed runs on your machine, with the accounts you already use. Install Python 3.9+, bash, jq, '
+            'and the provider command-line tools you want, then sign in to those tools.</p>'
+            + copy('Copy setup commands', install, 'Install Crossfeed')
+            + '<p>In Provider setup, add your own routes and verify only the lanes you can use. '
+            'Connect the skill for your assistant, then restart that assistant.</p><div class="connect-tools">'
+            + ''.join(commands) + '</div>' + copy('Copy prompt', prompt, 'Try this prompt')
+            + f'<p><a href="{PUBLIC_REPO}/blob/main/docs/PORTABLE-USAGE.md">Portable setup guide</a> · '
+            f'<a href="{PUBLIC_REPO}/blob/main/docs/SKILL-INSTALL.md">Skill installation guide</a></p></section>'
+            '<section class="connect" id="about" aria-labelledby="about-heading"><h2 id="about-heading">About</h2>'
+            '<p>Crossfeed Orchestrator routes tasks across your available models. It compares evidence, '
+            'allowance and expected cost, and keeps spend controls on your machine.</p>'
+            f'<p><a href="{PUBLIC_REPO}">Source and documentation</a></p></section>')
+
+
+def _benchmark_anchor(model):
+    return 'model-' + model
+
+
+def _benchmark_link(model, name):
+    return f'<a class="nm" href="/benchmarks#{urllib.parse.quote(_benchmark_anchor(model), safe="")}">{html.escape(name)}</a>'
+
+
+def _benchmark_url(url):
+    if not isinstance(url, str) or len(url) > 1800 or re.search(r'[\s\\\x00-\x1f\x7f]', url):
+        return None
     try:
-        from scripts.benchmark_page import render_body
+        target = urllib.parse.urlsplit(url)
+        if target.scheme in {'https', 'http'} and target.hostname and not target.username and not target.password:
+            return url
+    except ValueError:
+        return None
+    return None
+
+
+# These pages have public results for the listed model releases, not every entry in the picker.
+BENCHMARK_BOARDS = {
+    'terminal_bench': ('Terminal-Bench', 'https://www.tbench.ai/leaderboard'),
+    'swebench': ('SWE-bench', 'https://www.swebench.com/'),
+}
+CHECKED_BENCHMARKS = {
+    'terminal_bench': ('2026-11-25', {'claude-opus-5-5', 'deepseek-v4-pro', 'deepseek-v4.1-flash'}),
+    'swebench': ('2026-11-25', {'claude-opus-4-6', 'claude-opus-4-5', 'deepseek-v3.2'}),
+}
+
+
+def _benchmark_sources(cards, form_token, links, direct_sources, benchmark_page):
+    esc = html.escape
+    groups = {}
+    for row in cards.get('rows', []):
+        groups.setdefault(row['model'], []).extend(row.get('outside', []))
+    boards = {**benchmark_page.OUTSIDE_RANKING_PAGES, **BENCHMARK_BOARDS}
+    for model, rows in groups.items():
+        found = {}
+        for source in [*rows, *direct_sources.get(model, [])]:
+            if isinstance(source, str):
+                source = {'url': source}
+            if not isinstance(source, dict):
+                continue
+            name = source.get('source') or source.get('publisher') or ''
+            board_name, board_url = boards.get(name, ('', ''))
+            url = _benchmark_url(source.get('url') or source.get('source_url') or board_url)
+            if url:
+                label = source.get('title') or board_name or name or _source_name(url)
+                date = source.get('read_on') or source.get('date') or ''
+                if url not in found or str(date) > str(found[url][1]):
+                    found[url] = (label, date, 'Roster evidence')
+        for board, (date, models) in CHECKED_BENCHMARKS.items():
+            if model in models:
+                label, url = boards[board]
+                found.setdefault(url, (label, date, 'Public leaderboard'))
+        for entry in links.get(model, []):
+            url = _benchmark_url(entry.get('url'))
+            if url and url not in found:
+                found[url] = (entry.get('label') or _source_name(url),
+                              entry.get('set_at', '').split('T', 1)[0], 'Added by you')
+        items = ''.join(f'<li><a href="{esc(url)}" rel="noreferrer">{esc(str(label))}</a>'
+                        f'<small>{esc(who)} · {esc(str(date)[:10]) if date else "Date not recorded"}</small></li>'
+                        for url, (label, date, who) in found.items())
+        listing = f'<ul>{items}</ul>' if items else '<p>No linked benchmark sources yet.</p>'
+        form = (f'<form class="benchmark-add" method="post" action="/benchmark-link">'
+                f'<input type="hidden" name="t" value="{esc(form_token)}">'
+                f'<input type="hidden" name="model" value="{esc(model)}">'
+                '<label>Add a benchmark link <input type="url" name="url" placeholder="https://…" maxlength="1800" required></label>'
+                '<label>Label (optional) <input name="label" maxlength="120"></label>'
+                '<button class="wb-add" type="submit">Add link</button></form>') if form_token else ''
+        yield _benchmark_anchor(model), f'<section class="benchmark-sources"><h3>Benchmark sources</h3>{listing}{form}</section>'
+
+
+def _benchmark_data(overview, cards, evidence):
+    roster = overview['_brief_context']['roster']
+    canonical = lambda key: selector.canonical_model(key, roster)
+    hidden = {(pool['pool'], row['model']) for pool in overview['pools'] for row in pool.get('archived', [])}
+    active = {canonical(row['model']) for pool in overview['pools'] for row in pool.get('options', [])
+              if not row.get('archived') and not row.get('retired_on')}
+    excluded = {canonical(key) for _, key in hidden} - active
+    rows = [dict(row, sources=[s for s in row.get('sources', []) if (s.get('pool'), s.get('model_key')) not in hidden])
+            for row in cards.get('rows', []) if row['model'] not in excluded]
+    seen = {row['model'] for row in rows}
+    for model in overview['models']:
+        key = canonical(model['model'])
+        if key in active and key not in seen:
+            rows.append({'model': key, 'name': _name(model), 'level': 'provider-default'})
+            seen.add(key)
+    references = {}
+    for (key, _), row in selector.evidence_index(roster, evidence.get('rows', [])).items():
+        references.setdefault(key, []).extend(row.get('sources') or [])
+    for records in [fleetctl.model_cards(roster), roster.get('model_evidence') or {}]:
+        for key, row in records.items():
+            for field in ('benchmarks', 'benchmark_links', 'benchmark_sources'):
+                value = row.get(field) if isinstance(row, dict) else None
+                if isinstance(value, list):
+                    references.setdefault(canonical(key), []).extend(value)
+    return dict(cards, rows=rows), references
+
+
+def render_benchmarks(cards: dict[str, Any], form_token='', links=None, direct_sources=None, settings_content='') -> str:
+    try:
+        from scripts import benchmark_page
     except ImportError:
-        from benchmark_page import render_body
-    return shell('Benchmarks', render_body(cards), benchmarks=True)
+        import benchmark_page
+    body = benchmark_page.render_body(cards)
+    panels = dict(_benchmark_sources(cards, form_token, links or {}, direct_sources or {}, benchmark_page))
+    # Augment the existing model disclosures. Job picks and provider entries share these anchors.
+    body = re.sub(r'(<article id="([^"]+)"><details class="model-disclosure"><summary\b[^>]*>.*?</summary>)',
+                  lambda match: match[1] + panels.get(html.unescape(match[2]), ''), body, flags=re.S)
+    return shell('Benchmarks', body, benchmarks=True, dashboard=True, settings_content=settings_content)
 
 
 def message_page(title: str, text: str) -> str:
@@ -2049,7 +2530,10 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             self._send(status, page.encode("utf-8"), "text/html; charset=utf-8", extra)
 
         def _refuse(self, status: int, title: str, text: str) -> None:
-            self._html(status, message_page(title, text))
+            # Some POST refusals happen before reading the body. Do not parse the leftover bytes as a request.
+            if self.command == 'POST':
+                self.close_connection = True
+            self._html(status, message_page(title, text), {'Connection': 'close'} if self.close_connection else None)
 
         def _redirect(self, location: str, extra: dict[str, str] | None = None) -> None:
             headers = {"Location": location, **(extra or {})}
@@ -2063,7 +2547,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             url = urllib.parse.urlsplit(self.path)
             if url.path == "/login":
                 key = urllib.parse.parse_qs(url.query).get("key", [""])[0]
-                if not hmac.compare_digest(key, console.login_key):
+                if not hmac.compare_digest(key.encode(), console.login_key.encode()):
                     self._refuse(403, "This link has expired",
                                  "Sign-in links work only while the console that printed them is running. "
                                  "Start the console again for a fresh one.")
@@ -2079,8 +2563,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 return
             if not console.signed_in(self.headers):
                 self._refuse(401, "Signed out",
-                             "Open the console from the link it printed when it started. "
-                             "The link signs this browser in for as long as the console runs.")
+                             "Open the sign-in link printed by this installation's running console.")
                 return
             if url.path == '/phone':
                 try:
@@ -2102,7 +2585,13 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     if url.path == '/model-cards.json':
                         self._send(200, json.dumps(cards, separators=(',', ':'), allow_nan=False).encode(), 'application/json; charset=utf-8')
                     else:
-                        self._html(200, render_benchmarks(cards))
+                        overview = console.overview(refresh=False)
+                        runtime = overview['_brief_context']['runtime']
+                        evidence = fleetctl.load_json(console.state_dir / 'evidence' / 'levels.json', {}) or {}
+                        cards, sources = _benchmark_data(overview, cards, evidence)
+                        self._html(200, render_benchmarks(cards, console.form_token,
+                                                        runtime.get('console_benchmark_links'), sources,
+                                                        _settings_content(overview, console.form_token, panel=True)))
                     return
                 if url.path == '/':
                     try:
@@ -2143,7 +2632,8 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 self._refuse(401, "Signed out", "Open the console from the link it printed when it started.")
                 return
             path = urllib.parse.urlsplit(self.path).path
-            if path not in {"/settings/pro", "/settings/subscriptions", "/level", "/preference", "/refresh", "/model", "/order", "/provider/probe", "/provider/add", "/provider/remove"}:
+            if path not in {'/settings/pro', '/settings/subscriptions', '/level', '/preference', '/refresh',
+                            '/model', '/model-archive', '/benchmark-link', '/order', '/provider/probe', '/provider/add', '/provider/remove'}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             try:
@@ -2158,7 +2648,16 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 self._refuse(403, "Refused", "That form came from an older console. Reload the page and try again.")
                 return
             pool = fields.get("pool", [""])[0]
-            level = fields.get("level", [""])[0]
+            level = fields.get('level', [''])[0]
+            if path == '/benchmark-link':
+                model = fields.get('model', [''])[0]
+                try:
+                    console.add_benchmark_link(model, fields.get('url', [''])[0], fields.get('label', [''])[0])
+                except (ValueError, OSError, fleetctl.FleetError):
+                    self._refuse(400, 'Link not saved', 'Use a complete HTTP or HTTPS URL for a listed model.')
+                else:
+                    self._redirect('/benchmarks#' + urllib.parse.quote(_benchmark_anchor(model), safe=''))
+                return
             if path == '/settings/subscriptions':
                 try:
                     console.save_subscription({name: values[0] for name, values in fields.items()})
@@ -2203,6 +2702,12 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     outcomes = console.refresh_now()
                 elif path == "/level":
                     console.set_level(pool, level, reason=fields.get("reason", [None])[0])
+                elif path == '/model-archive':
+                    archive = fields.get('archive', [''])[0]
+                    restore = fields.get('restore', [''])[0]
+                    if bool(archive) == bool(restore):
+                        raise ValueError('expected an archive or restore action')
+                    console.set_archive(pool, archive or restore, bool(archive), reason=fields.get('reason', [None])[0])
                 elif path == "/model":
                     change = fields.get("switch", [""])[0]
                     if change:   # "<model>=on" or "<model>=off": the state to set, never a flip
@@ -2234,13 +2739,19 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 return
             role = fields.get('return-role', [''])[0]
             value = fields.get('return-value', [''])[0]
-            if path in {'/level', '/model', '/refresh'} and role in WORKBENCH_ROLES and value in VALUE_MODES:
-                query = urllib.parse.urlencode({'role': role, 'value': value,
-                                               'compare': fields.get('return-compare', [])[:4]}, doseq=True)
-                anchor = f'pick-{pool}' if path == '/model' else f'pool-{pool}' if path == '/level' else 'compare'
+            if path in {'/level', '/model', '/model-archive', '/refresh'} and role in WORKBENCH_ROLES and value in VALUE_MODES:
+                count = fields.get('return-count', [''])[0]
+                params = {'role': role, 'value': value, 'compare': fields.get('return-compare', [])[:4]}
+                if count in {'1', '2', '3', '4'}:
+                    params['count'] = count
+                query = urllib.parse.urlencode(params, doseq=True)
+                anchor = ('archived' if path == '/model-archive' and archive else f'pick-{pool}' if path in {'/model', '/model-archive'}
+                          else 'provider-antigravity' if path == '/level' and pool == 'antigravity'
+                          else f'pool-{pool}' if path == '/level' else 'compare')
                 self._redirect(f'/?{query}#{urllib.parse.quote(anchor)}')
                 return
-            self._redirect(f"/#pool-{urllib.parse.quote(pool)}" if path in {"/level", "/model"} else "/")
+            self._redirect('/#archived' if path == '/model-archive' else
+                           f'/#pool-{urllib.parse.quote(pool)}' if path in {'/level', '/model'} else '/')
 
         def _static(self, name: str) -> None:
             target = (ASSETS / name).resolve()
