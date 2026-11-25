@@ -131,7 +131,7 @@ _cleanup() {
   # Only the wrapper's own shell cleans up. With bash 5 a background subshell (the watchdog,
   # a job just forked) can run this inherited EXIT trap and delete the run's files early.
   [ "${BASHPID:-$$}" = "$$" ] || return 0
-  _finish_copy || status=1
+  [ -z "${COPY_SCRATCH:-}" ] || _finish_copy || status=1
   crossfeed_finish "$status" || status=8
   if [ "$CROSSFEED_STARTED" = 1 ] && [ -n "$AGY_SNAPSHOT" ]; then
     python3 "$HERE/session_cleanup.py" agy --snapshot "$AGY_SNAPSHOT" --run-id "$CROSSFEED_RUN_ID" || true
