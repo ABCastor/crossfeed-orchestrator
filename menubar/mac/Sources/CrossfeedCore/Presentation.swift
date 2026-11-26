@@ -155,13 +155,14 @@ public struct BarSummary: Equatable {
     public var used: Double?          // used %, whatever the count
     public var reset: String?         // "2h 13m": when the window resets, nil when unknown
     public var pace: String?          // "46% over", "81% under", "on pace", nil without a pace
+    public var cost: String?          // "US$11.26 today": estimated cost across providers, nil when none reports one
 
     public init(text: String, left: Double?, right: Double?, deficit: Bool, tooltip: String,
                 logo: ProviderLogo? = nil, icon: BarPrefs.Icon = .tanks, name: String = "", window: String = "", used: Double? = nil,
-                reset: String? = nil, pace: String? = nil) {
+                reset: String? = nil, pace: String? = nil, cost: String? = nil) {
         self.text = text; self.left = left; self.right = right; self.deficit = deficit; self.tooltip = tooltip
         self.logo = logo; self.icon = icon; self.name = name; self.window = window; self.used = used
-        self.reset = reset; self.pace = pace
+        self.reset = reset; self.pace = pace; self.cost = cost
     }
 }
 
@@ -555,13 +556,16 @@ public struct Presenter {
             limit.resetAt.flatMap { Self.iso.date(from: $0) }.map { resetClock ? clockText($0, today: "") : Self.shortCountdown(to: $0, now: now) }
         }
         let pace = Self.shortPace(focal.limit?.pace ?? focal.pool.pace)
+        let spent = glance.pools.compactMap { $0.usageCost?.todayUSD }
+        let cost = spent.isEmpty ? nil : String(format: "US$%.2f today", spent.reduce(0, +))
         var text = BarPrefs.format(name: name, window: window.short, used: focal.used, count: prefs.count, text: prefs.text)
-        if !text.isEmpty, let extra = prefs.extra == .reset ? reset : (prefs.extra == .pace ? pace : nil) { text += " · " + extra }
+        let extra: String? = [.reset: reset, .pace: pace, .cost: cost][prefs.extra] ?? nil
+        if !text.isEmpty, let extra { text += " · " + extra }
         return BarSummary(
             text: text,
             left: fill(focal.used), right: fill(next?.used), deficit: focal.deficit > 0,
             tooltip: sentence + "\n" + tip, logo: logo, icon: prefs.icon == .logo && logo == nil ? .tanks : prefs.icon,
-            name: name, window: window.short, used: focal.used, reset: reset, pace: pace)
+            name: name, window: window.short, used: focal.used, reset: reset, pace: pace, cost: cost)
     }
 
     /// "4d 8h", "2h 13m", "13m": the countdown without its sentence, for the bar.

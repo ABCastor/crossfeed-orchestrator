@@ -80,6 +80,15 @@ final class BarTitleTests: XCTestCase {
         XCTAssertEqual(p.barSummary(prefs).text, "")   // no text, no suffix
     }
 
+    func testTodaysCostAddsUpAcrossProvidersAndIsNeverInvented() throws {
+        var prefs = BarPrefs()
+        prefs.extra = .cost
+        XCTAssertEqual(try presenter(geminiPressed).barSummary(prefs).text, "Gemini 5h 59%")     // no cost reported
+        let priced = try Glance.decode(fixture("glance-round7.json"))
+        let s = Presenter(glance: priced, loadedAt: now, now: now).barSummary(prefs)
+        XCTAssertEqual(s.text, "Codex Week 88% · US$12.02 today")      // Claude 3.04 + Antigravity 8.22 + Codex 0.76
+    }
+
     func testOnlyProvidersWithAReadingCanBePinned() throws {
         let p = try presenter(geminiPressed)
         XCTAssertEqual(p.barChoices.map(\.id), ["claude", "agy"])

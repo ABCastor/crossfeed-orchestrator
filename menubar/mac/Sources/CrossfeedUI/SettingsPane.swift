@@ -76,6 +76,7 @@ struct SettingsPane: View {
                     Chip("None", selected: prefs.extra == .none, control: .extra(.none), state: state)
                     Chip("Reset", selected: prefs.extra == .reset, control: .extra(.reset), state: state)
                     Chip("Pace", selected: prefs.extra == .pace, control: .extra(.pace), state: state)
+                    Chip("Cost today", selected: prefs.extra == .cost, control: .extra(.cost), state: state)
                 }
                 SettingRow("Resets") {
                     Chip("Countdown", selected: prefs.reset == .countdown, control: .resets(.countdown), state: state)

@@ -9,8 +9,8 @@ public struct BarPrefs: Equatable {
     /// How much of "Gemini 5h 59%" to print. `.none` leaves the icon alone.
     public enum Text: String, CaseIterable { case full, window, number, none }
 
-    /// Something short after the number: when the window resets, or how far ahead of an even burn it is.
-    public enum Extra: String, CaseIterable { case none, reset, pace }
+    /// Something short after the number: when the window resets, how far ahead of an even burn it is, or today's estimated cost.
+    public enum Extra: String, CaseIterable { case none, reset, pace, cost }
 
     /// How a reset is written, in the card and after the bar number: "in 4d 8h" or the clock time it happens.
     public enum Reset: String, CaseIterable { case countdown, clock }
