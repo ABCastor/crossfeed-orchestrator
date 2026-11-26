@@ -1844,6 +1844,62 @@ def _local_cost_roots(provider):
     return list(dict.fromkeys((root / "projects").resolve() for root in roots))
 
 
+def _cost_breakdown(rows, now, *, strict):
+    """Seven-day totals, a 30-day daily series, hourly buckets for the last 8 days and cost by model.
+
+    rows: (timestamp, model, counted tokens, cost or None when the row has no list price). `strict`
+    keeps the 30-day rule of the Codex and Claude readers: a window with any unpriced row has no
+    dollar total. Antigravity (strict=False) shows what it could price.
+    """
+    today = now.astimezone().date()
+    first = today - dt.timedelta(days=29)
+    week = today - dt.timedelta(days=6)
+    hours_from = int(now.timestamp() // 3600) - 8 * 24
+    window = lambda: [0, 0.0, 0, 0]  # tokens, known cost, rows, unpriced rows
+    daily, hourly, models = {}, {}, {}
+    totals = {"week": window(), "today": window()}
+
+    def put(bucket, tokens, cost):
+        bucket[0] += tokens
+        bucket[1] += cost or 0.0
+        bucket[2] += 1
+        bucket[3] += cost is None
+
+    def usd(bucket):
+        ok = bucket[3] == 0 if strict else (bucket[2] > bucket[3] or not bucket[2])
+        return round(bucket[1], 8) if ok else None
+
+    for stamp, model, tokens, cost in rows:
+        day = stamp.astimezone().date()
+        if not first <= day <= today:
+            continue
+        put(daily.setdefault(day, window()), tokens, cost)
+        row = models.setdefault(model or "unknown", {"all": window(), "week": window(), "today": window()})
+        put(row["all"], tokens, cost)
+        if day >= week:
+            put(totals["week"], tokens, cost)
+            put(row["week"], tokens, cost)
+        if day == today:
+            put(totals["today"], tokens, cost)
+            put(row["today"], tokens, cost)
+        hour = int(stamp.timestamp() // 3600)
+        if hour >= hours_from:
+            slot = hourly.setdefault(hour, [0, 0.0])
+            slot[0] += tokens
+            slot[1] += cost or 0.0
+    ranked = sorted(models.items(), key=lambda item: (-item[1]["all"][0], item[0]))
+    return {
+        "last_7d_tokens": totals["week"][0], "last_7d_usd": usd(totals["week"]),
+        "daily": [{"day": (first + dt.timedelta(days=n)).isoformat(),
+                   "tokens": (daily.get(first + dt.timedelta(days=n)) or window())[0],
+                   "usd": usd(daily.get(first + dt.timedelta(days=n)) or window())} for n in range(30)],
+        "hourly": [[hour, slot[0], round(slot[1], 8)] for hour, slot in sorted(hourly.items())],
+        "by_model": [{"model": name, "tokens": int(row["all"][0]), "usd": usd(row["all"]),
+                      "usd_7d": usd(row["week"]), "usd_today": usd(row["today"]),
+                      "requests": int(row["all"][2])} for name, row in ranked[:8]],
+    }
+
+
 def local_usage_cost(provider, roots, models, now=None):
     """Thirty local calendar days including today. Unpriced/unfinished rows keep token totals only."""
     now = now or _now()
@@ -1859,7 +1915,10 @@ def local_usage_cost(provider, roots, models, now=None):
     claude_rows = {}
     visited = set()
 
-    def add(day, model, amounts, service=None, excluded=False, one_hour=0):
+    rows = []
+
+    def add(stamp, model, amounts, service=None, excluded=False, one_hour=0):
+        day = stamp.astimezone().date()
         inp, out, read, write = amounts
         tokens = inp + out + (read + write if provider == "claude" else 0)
         if not tokens:
@@ -1877,6 +1936,8 @@ def local_usage_cost(provider, roots, models, now=None):
             bucket[0] += 0 if excluded else tokens
             bucket[1] += cost
             bucket[2] += unsupported
+        rows.append((stamp, model if isinstance(model, str) else None, 0 if excluded else tokens,
+                     None if unsupported else cost))
 
     for root in existing_roots:
         for path in root.rglob("*.jsonl"):
@@ -1894,14 +1955,14 @@ def local_usage_cost(provider, roots, models, now=None):
             if provider == "codex":
                 for timestamp, model, amounts, service, inherited in _codex_cost_rows(events):
                     stamp = _parse_time(timestamp)
-                    if stamp and start <= (day := stamp.astimezone().date()) <= today:
-                        add(day, model, amounts, service, inherited)
+                    if stamp and start <= stamp.astimezone().date() <= today:
+                        add(stamp, model, amounts, service, inherited)
             else:
                 for row in events:
                     if row.get("type") != "assistant":
                         continue
                     stamp = _parse_time(row.get("timestamp"))
-                    if not stamp or not start <= (day := stamp.astimezone().date()) <= today:
+                    if not stamp or not start <= stamp.astimezone().date() <= today:
                         continue
                     msg = _mapping(row.get("message"))
                     usage = _mapping(msg.get("usage"))
@@ -1921,13 +1982,14 @@ def local_usage_cost(provider, roots, models, now=None):
                         if old is None or (amounts[1], stamp) >= (old[2][1], old[0]):
                             claude_rows[key] = (stamp, model, amounts, one_hour)
                     else:
-                        add(day, model, amounts, one_hour=one_hour)
+                        add(stamp, model, amounts, one_hour=one_hour)
     for stamp, model, amounts, one_hour in claude_rows.values():
-        add(stamp.astimezone().date(), model, amounts, one_hour=one_hour)
+        add(stamp, model, amounts, one_hour=one_hour)
     result = {"source": f"{provider}-cli-local-logs", "observed_at": _iso(now), "estimate": "API list price"}
     for prefix, (tokens, cost, unknown) in zip(("today", "last_30d"), buckets):
         result[f"{prefix}_tokens"] = tokens
         result[f"{prefix}_usd"] = round(cost, 8) if not unknown else None
+    result.update(_cost_breakdown(rows, now, strict=True))
     return result
 
 
@@ -2201,6 +2263,7 @@ def local_antigravity_cost(models: dict[str, Any], roots: list[Path] | None = No
             events.append((session, turn))
     buckets = [[0, 0.0, 0, 0], [0, 0.0, 0, 0]]  # tokens, priced estimate, requests, unpriced requests
     by_model: dict[str, list[float]] = {}
+    rows = []
     for _session, turn in events:
         usage = turn["usage"]
         stamp = dt.datetime.fromtimestamp(turn["ms"] / 1000, dt.timezone.utc).astimezone()
@@ -2220,6 +2283,7 @@ def local_antigravity_cost(models: dict[str, Any], roots: list[Path] | None = No
         if rates and (not read or rates[2] is not None):
             cost = (inp * rates[0] + (out + reasoning) * rates[1] + read * (rates[2] or 0)) / 1_000_000
         row = by_model.setdefault(model, [0, 0.0, 0, 0])
+        rows.append((stamp, model, tokens, cost))
         for bucket in ((*buckets,) if day == today else (buckets[1],)):
             bucket[0] += tokens
             bucket[1] += cost or 0.0
@@ -2239,6 +2303,10 @@ def local_antigravity_cost(models: dict[str, Any], roots: list[Path] | None = No
     result["by_model"] = [{"model": name, "tokens": int(row[0]), "usd": round(row[1], 8) if row[2] > row[3] else None,
                            "requests": int(row[2])}
                           for name, row in sorted(by_model.items(), key=lambda item: (-item[1][0], item[0]))[:8]]
+    extras = _cost_breakdown(rows, now, strict=False)
+    extras["by_model"] = [{**old, **{k: new[k] for k in ("usd_7d", "usd_today")}}
+                          for old in result["by_model"] for new in extras["by_model"] if new["model"] == old["model"]]
+    result.update(extras)
     return result
 
 

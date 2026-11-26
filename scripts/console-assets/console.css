@@ -778,7 +778,7 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wallet-extras .incident.lvl-major b,.wallet-extras .incident.lvl-critical b{color:var(--human-text)}
 .wallet-extras .daily{list-style:none;margin:4px 0;padding:0;display:grid;gap:2px}
 .wallet-extras .daily li{display:grid;grid-template-columns:3.4rem minmax(0,1fr) 4.5rem;align-items:center;gap:.5rem}
-.wallet-extras .daily i{display:block;height:6px;width:var(--w);min-width:1px;background:var(--rule-strong)}
+.wallet-extras .daily .us-mbar{width:100%;height:8px}
 .wallet-extras .daily .num{text-align:right;font-variant-numeric:tabular-nums}
 .secret-form{margin:8px 0 2px;display:grid;gap:2px}
 .secret-form label{color:var(--ink);font-weight:600}
@@ -848,3 +848,180 @@ details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick
 .model-actor { white-space: nowrap; }
 
 .switch-attribution { display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; }
+
+/* Usage and Share. One column, the dashboard's width. Numbers are mono and right-aligned; charts are inline SVG whose
+   labels are HTML, so type never scales with the drawing. Teal, terracotta and olive keep the roles they have
+   everywhere: here they only tell providers apart, and terracotta also marks an allowance running ahead of its pace. */
+.us{max-width:704px;margin:20px auto 0;--s1:var(--machine);--s2:var(--human);--s3:var(--between);--s4:var(--rule-strong)}
+.us-head{align-items:baseline;margin-bottom:0}
+.us-head h1{font:600 32px/1.12 var(--read);letter-spacing:-.012em}
+.us-action{font:600 14px/1 var(--face);color:var(--machine-text);padding:10px 0}
+.us .stamp{margin:.35rem 0 2.4rem}
+.us section{margin-top:3rem}
+.us h2{font:600 22px/1.2 var(--read);margin:0 0 .5rem;letter-spacing:0}
+.us h3{font:600 14px/1.3 var(--face);margin:2.2rem 0 .7rem;color:var(--ink)}
+.us-basis{margin:0 0 1.4rem;max-width:62ch;color:var(--quiet);font-size:14px;line-height:1.5}
+.us-empty{color:var(--quiet);margin:.6rem 0}
+.us-note{color:var(--quiet);font-size:13px;max-width:62ch;margin:1rem 0 0}
+.us-none{color:var(--quiet)}
+.key{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:8px;background:var(--s4);vertical-align:baseline}
+.key.s1{background:var(--s1)}.key.s2{background:var(--s2)}.key.s3{background:var(--s3)}
+.us-table{width:100%;border-collapse:collapse;font-size:14px}
+.us-table :is(th,td){padding:.7rem 0;border-bottom:1px solid var(--rule);text-align:right;font-weight:400;vertical-align:baseline}
+.us-table :is(th,td):first-child{text-align:left}
+.us-table thead th{color:var(--quiet);font-size:13px;padding-top:0;border-bottom-color:var(--rule-strong)}
+.us-table tbody th{font-weight:500}
+.us-table small{display:block;margin:.15rem 0 0 17px;color:var(--quiet);font-size:12.5px;font-weight:400}
+.us-table td{padding-left:1rem;white-space:nowrap}
+.us-table tfoot :is(th,td){border-bottom:0;font-weight:600;padding-top:.8rem}
+.us-table .num{font-size:13.5px}
+.us-models .us-bar{min-width:11rem}
+.us-cell{display:flex;align-items:center;justify-content:flex-end;gap:.9rem}
+.us-mbar{flex:1;max-width:6.5rem;height:10px}
+.us-mbar .t{fill:var(--rule)}.us-mbar .f{fill:var(--machine);opacity:.75}
+.us-cell .num{min-width:4.6rem;text-align:right}
+.chart{margin:0}
+.chart figcaption{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.2rem 1.1rem;margin-bottom:.6rem;font-size:13px;color:var(--quiet)}
+.chart figcaption b{font-weight:600;color:var(--ink);font-size:13.5px}
+.chart .key-label{display:inline-flex;align-items:center}
+.chart .plot{position:relative;height:8rem;margin-left:3.4rem}
+.chart .plot svg{display:block;width:100%;height:100%;overflow:visible}
+.chart .yl{position:absolute;left:-3.4rem;width:3rem;text-align:right;color:var(--quiet);font-size:11.5px;line-height:1}
+.chart .yl.top{top:-.3em}.chart .yl.zero{bottom:-.3em}
+.chart .xl{display:flex;justify-content:space-between;margin:.55rem 0 0 3.4rem;color:var(--quiet);font-size:12px}
+.chart .grid{stroke:var(--rule);stroke-width:1;vector-effect:non-scaling-stroke}
+.chart rect{fill:var(--s4)}.chart rect.s1{fill:var(--s1)}.chart rect.s2{fill:var(--s2)}.chart rect.s3{fill:var(--s3)}
+.chart rect:hover{opacity:.78}
+.chart .line{fill:none;stroke:var(--s1);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.chart .line.s2{stroke:var(--s2)}.chart .line.s3{stroke:var(--s3)}.chart .line.s4{stroke:var(--s4)}
+.chart .area{fill:color-mix(in srgb,var(--s1) 12%,transparent);stroke:none}
+.chart .area.s2{fill:color-mix(in srgb,var(--s2) 12%,transparent)}.chart .area.s3{fill:color-mix(in srgb,var(--s3) 12%,transparent)}.chart .area.s4{fill:color-mix(in srgb,var(--s4) 12%,transparent)}
+.chart .keys{display:flex;flex-wrap:wrap;gap:.1rem 1rem}
+.chart.mini .plot{height:6rem;margin-left:2.6rem}
+.chart.mini .yl{left:-2.6rem;width:2.2rem}
+.chart.mini .xl{margin-left:2.6rem;gap:.5rem}
+.us-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2.2rem 2rem}
+.us-pace{margin-top:1.6rem}
+.us-pace h3{margin:0 0 .3rem}
+.us-pace ul{list-style:none;margin:0;padding:0}
+.us-pace li{display:grid;grid-template-columns:minmax(5.5rem,9rem) minmax(0,1fr) 3.2rem;column-gap:1rem;align-items:center;padding:.55rem 0;border-bottom:1px solid var(--rule)}
+.us-pace .nm{font-size:14px}
+.us-pace .pc{text-align:right;font-size:13.5px}
+.us-pace small{grid-column:2/-1;color:var(--quiet);font-size:12.5px;margin-top:-.1rem}
+.us-track{display:block;width:100%;height:10px;overflow:visible}
+.us-track .t{fill:var(--rule)}.us-track .f{fill:var(--machine)}.us-track .k{fill:var(--ink);opacity:.6}
+.us-pace li.behind .us-track .f{fill:var(--human)}
+.us code{font:400 12.5px var(--mono)}
+
+.share-list{display:grid;gap:2.4rem}
+.share-sheet{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1.5rem 1.6rem 1.4rem}
+.share-sheet p{margin:.5rem 0;font-size:15px;line-height:1.5}
+.share-sheet .sc-title{font:600 22px/1.2 var(--read);margin:0}
+.share-sheet .sc-sub{color:var(--quiet);margin:.2rem 0 1.4rem;font-size:14px}
+.share-sheet .sc-plan{font:600 15px/1.3 var(--face);margin:1.4rem 0 .2rem;padding-top:1.1rem;border-top:1px solid var(--rule)}
+.share-sheet .sc-row{margin:.3rem 0;font-size:14.5px}
+.share-sheet .sc-total{font:600 18px/1.3 var(--read);margin-top:1.4rem;padding-top:1.1rem;border-top:1px solid var(--rule-strong)}
+.share-sheet .sc-note{color:var(--quiet);font-size:13px;margin-top:1rem}
+.share-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .6rem;margin-top:.9rem}
+.share-actions .wb-add{min-height:40px;padding:0 1rem}
+.share-status{color:var(--quiet);font-size:13px}
+.us-cannot ul{margin:.4rem 0 .9rem;padding-left:1.1rem;max-width:62ch}
+.us-cannot li{margin:.4rem 0;color:var(--quiet)}
+.us-cannot p{color:var(--quiet);max-width:62ch}
+.print-sheet{max-width:704px;margin:2rem auto}
+.print-bar{max-width:704px;margin:1rem auto}
+@media (max-width:640px){
+  .us-grid{grid-template-columns:minmax(0,1fr)}
+  .us-pace li{grid-template-columns:minmax(0,1fr) 3.2rem;row-gap:.35rem}
+  .us-pace .us-track{grid-column:1/-1;grid-row:2}
+  .us-pace small{grid-column:1/-1;grid-row:3}
+  .us-models .us-bar{min-width:0}
+  .us-models :is(th,td):nth-child(3){display:none}
+  .share-sheet{padding:1.2rem 1.1rem}
+}
+@media print{
+  html,body{background:#fff}
+  .mast,.print-bar,footer,.site-footer,.wrap>footer{display:none!important}
+  .share-sheet{border:0;background:#fff;color:#000;padding:0}
+}
+.share-actions .wb-add{display:inline-flex;align-items:center;text-decoration:none;font-size:14px}
+
+/* ---- Round 8: simpler and more modern, the Castor look kept. One size up for reading, hairlines in place of boxes,
+   each subscription one row: what it has left on the left, how agents may spend it on the right. Nothing new is
+   drawn; what did not carry information (surface boxes, repeated captions, a second line of tokens) is gone. ---- */
+.dashboard main{font-size:15px;line-height:1.5}
+.dashboard main :is(small,.wb-muted){font-size:13px}
+.wb-head h1,.bench-page h1{font:600 30px/1.15 var(--read);letter-spacing:-.012em}
+.wb-head{margin-bottom:10px}
+.wb-head small{font-size:13px}
+.wb-toolbar{gap:8px 16px;margin-bottom:12px}
+.wb-toolbar label{font-size:14px}
+.wb-query select,.wb-toolbar select{min-height:36px;font-size:14px;border-radius:8px;padding:0 10px}
+.wb-mode{border-radius:8px;padding:3px}
+.wb-mode button{min-height:32px;padding:4px 14px;font-size:14px;border-radius:6px}
+.wb-mode-help{font-size:13.5px}
+.wb-pick{font-size:14px;padding:.55rem .9rem;border-radius:0 6px 6px 0}
+.wb-matrix :is(th,td){padding:9px 8px;border-bottom:1px solid var(--rule)}
+.wb-matrix thead th{background:none;border-top:0;border-bottom-color:var(--rule-strong)}
+.wb-matrix tbody th,.wb-matrix thead th:first-child{font-size:13.5px;font-weight:500;color:var(--quiet)}
+.wb-matrix select{font-size:14px;min-height:34px;border-radius:8px}
+@media (min-width:571px){.wb-matrix tr>th:first-child{width:8.2rem}}
+.wb-grade,.wb-number{font-size:14px}
+.wb-add{min-height:34px;font:400 13.5px var(--face);border-radius:8px;padding:0 12px}
+.wb-footnote{font-size:13px}
+
+.wb-wallet{margin-top:3rem}
+.wb-wallet-head{border-bottom:0;padding-bottom:0;margin-bottom:.4rem}
+.wb-wallet-head h2{font:600 24px/1.2 var(--read)}
+.wb-wallet-head .stamp{font:400 13px/1.4 var(--face)}
+.wb-tickets.pools{grid-template-columns:minmax(0,1fr);gap:0;border-top:1px solid var(--ink)}
+.wb-ticket.pool{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);column-gap:2.4rem;align-items:start;
+  grid-template-areas:"head head" "plan plan" "error error" "gauge policy" "gauge includes" "extras extras" "allow allow" "pick pick";
+  padding:1.25rem 0 .8rem;background:none;border:0;border-bottom:1px solid var(--rule);border-radius:0}
+.wb-ticket>.wb-head{grid-area:head;margin-bottom:.15rem}
+.wb-ticket>.wb-plan{grid-area:plan;margin:0}
+.wb-ticket>.wb-error{grid-area:error}
+.wb-ticket>.gauge{grid-area:gauge;margin-top:.3rem}
+.wb-ticket>.wallet-extras{grid-area:extras}
+.wb-ticket>.wb-includes{grid-area:includes}
+.wb-ticket>.wb-advanced{grid-area:policy;margin:.5rem 0 0;border-top:0;align-self:start}
+.wb-ticket>.wb-error:empty{display:none}
+.wb-ticket>.wb-allowances{grid-area:allow}
+.wb-ticket>.pick{grid-area:pick;margin-top:.6rem}
+.wb-ticket .wb-head h2{font:600 21px/1.25 var(--read)}
+.wb-plan,.wb-ticket .allow{font-size:13.5px;color:var(--quiet)}
+.wb-limit{grid-template-columns:minmax(0,1fr) auto;gap:0 .6rem;padding:.4rem 0;font-size:14px}
+.wb-limit>span:first-child{font-weight:500}
+.wb-limit b{font-size:14px}
+.wb-limit b .left{font:400 13px var(--face);color:var(--quiet)}
+.wb-limit .bar{height:6px;margin:.35rem 0 .2rem}
+.wb-limit small{font-size:13px;color:var(--quiet)}
+.wb-extra-limit{font-size:14px;font-weight:500;color:var(--ink);margin:.55rem 0}
+.wb-extra-limit small{font-weight:400;color:var(--quiet)}
+.wallet-extras{font-size:13.5px;line-height:1.5}
+.wallet-extras:not(:empty){margin-block:.7rem 0}
+.wallet-extras p,.wallet-extras ul{margin:.3rem 0}
+.wallet-extras summary,:is(.quota-explain,.efficient-effort)>summary{font-size:13.5px}
+.wallet-extras .incident{padding:.45rem .7rem;border-radius:6px;background:var(--surface);color:var(--ink)}
+.wallet-extras .incident:is(.lvl-major,.lvl-critical){background:color-mix(in srgb,var(--human) 10%,var(--paper))}
+.wb-cost b,.wb-cost .wb-number{color:var(--ink);font-weight:500}
+.wb-cost .wb-number{font-size:13px}
+.wb-includes{font-size:13.5px;color:var(--quiet);margin:.2rem 0 0;align-self:start}
+.wb-includes .nm{color:var(--ink)}
+.wb-wallet .lv{max-width:20rem;margin-block:.5rem 0}
+.wb-wallet .stop{font-size:13px;min-height:40px}
+.wb-wallet :is(.means,.level-actor){display:inline;text-align:left;font-size:13px;margin:0;color:var(--quiet)}
+.wb-wallet .level-actor{margin-inline:0}
+.wb-wallet .means::before{content:" · "}
+.wb-wallet .wb-advanced>summary{padding-inline:0}
+.wb-advanced,.pick,.wb-archived,.wb-more{border-top:0}
+.pick{border-top:1px solid var(--rule)}
+:is(.wb,.wb-wallet,.wb-more) summary{font-size:14px;font-weight:600;padding:.55rem 0}
+.wb-allowances>.pool{margin-top:.9rem;padding:.9rem 0 0;border-top:1px solid var(--rule)}
+.wb-allowances .wb-head h3{font:600 16px/1.3 var(--face)}
+@media (max-width:690px){
+  .wb-limits{max-width:30rem}
+  .wb-ticket.pool{grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "plan" "error" "gauge" "extras" "policy" "includes" "allow" "pick"}
+  .wb-ticket>.wb-advanced{margin-top:.9rem}
+  .wb-wallet .lv{max-width:none}
+}

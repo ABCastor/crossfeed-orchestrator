@@ -68,8 +68,10 @@ keep_html = console_keep.keep_html
 try:
     import phone_view
     import providers
+    import sharing
+    import usage_page
 except ImportError:
-    from scripts import phone_view, providers
+    from scripts import phone_view, providers, sharing, usage_page
 
 PRODUCT_NAME = fleetctl.PRODUCT_NAME
 LEVEL_WORDS = {"off": "Off", "low": "Low", "normal": "Normal", "high": "High", "forced": "Max"}
@@ -495,14 +497,15 @@ _BN, _, _BD = PRODUCT_NAME.partition(" ")
 BRAND_WORDS = f'<span class="bn">{html.escape(_BN)}</span> <span class="bd">{html.escape(_BD)}</span>'
 
 
-def _masthead(settings: bool = False, settings_content: str = "", benchmarks: bool = False) -> str:
+def _masthead(settings: bool = False, settings_content: str = "", benchmarks: bool = False, usage: bool = False) -> str:
     """The Castor product header: everything stands on one line that is exactly the column.
 
     It is fixed to the screen and every part rides up with the page, 1:1, until the air above the
     name is halved; then it holds, the name at its own size (console.css, "v2.8 header").
     """
     name = html.escape(PRODUCT_NAME)
-    provider_current = ' aria-current="page"' if not settings and not benchmarks else ""
+    provider_current = ' aria-current="page"' if not settings and not benchmarks and not usage else ""
+    usage_current = ' aria-current="page"' if usage else ""
     benchmark_current = ' aria-current="page"' if benchmarks else ''
     settings_current = ' aria-current="page"' if settings else ""
     settings_controls = ' aria-expanded="false" aria-controls="settings-panel"' if settings_content else ""
@@ -511,6 +514,7 @@ def _masthead(settings: bool = False, settings_content: str = "", benchmarks: bo
         f'<a class="product-mark" href="/" aria-label="{name} console">{MARK}</a>'
         f'<a class="compact-brand" href="/">{BRAND_WORDS}<span class="star" aria-hidden="true">*</span></a></span>'
         f'<nav class="nav" aria-label="Main"><a href="/"{provider_current}><span class="tl" data-t="Providers">Providers</span></a>'
+        f'<a href="/usage"{usage_current}><span class="tl" data-t="Usage">Usage</span></a>'
         f'<a href="/benchmarks"{benchmark_current}><span class="tl" data-t="Benchmarks">Benchmarks</span></a></nav>'
         '<span class="bar-tools"><span class="find">'
         '<button class="find-lens" type="button" aria-label="Search everything  /" title="Search everything  /" '
@@ -529,7 +533,7 @@ def _masthead(settings: bool = False, settings_content: str = "", benchmarks: bo
 
 
 def shell(title: str, body: str, front: bool = False, settings: bool = False, settings_content: str = "",
-          benchmarks: bool = False, dashboard: bool = False) -> str:
+          benchmarks: bool = False, dashboard: bool = False, usage: bool = False) -> str:
     """A page. `front` is the console's front page, where the name starts as large as its row allows."""
     fonts = "".join(f'<link rel="preload" href="/static/fonts/{font}" as="font" type="font/woff2" crossorigin>'
                     for font in PRELOAD_FONTS)
@@ -543,7 +547,7 @@ def shell(title: str, body: str, front: bool = False, settings: bool = False, se
         f'<link rel="stylesheet" href="/static/console.css?v={_asset_version("console.css")}">'
         f'<script src="/static/console.js?v={_asset_version("console.js")}" defer></script>'
         f'<script src="/static/keep.js?v={_asset_version("keep.js")}" defer></script></head>'
-        f'<body><div class="wrap">{_masthead(settings, settings_content, benchmarks)}<main>{body}</main>{FOOTER}</div></body></html>'
+        f'<body><div class="wrap">{_masthead(settings, settings_content, benchmarks, usage)}<main>{body}</main>{FOOTER}</div></body></html>'
     )
 
 
@@ -1786,12 +1790,12 @@ def _work_gauge(pool):
         if count and note:
             count = 'Last ' + count
         if limit not in prominent:
-            value = (' · ' + count + ' left') if count else ''
-            extra.append(f'<li class="wb-extra-limit"><span>{esc(title + value)}</span><small>{esc(reset)}</small></li>')
+            value = (count + ' left · ') if count else ''
+            extra.append(f'<li class="wb-extra-limit"><span>{esc(title)}</span><small>{esc(value + reset.lower())}</small></li>')
             continue
         visual = _meter(100 - used, used >= 75) if count and not note else ''
         rows.append(f'<li class="wb-limit"><span>{esc(title)}</span>'
-                    + (f'<b aria-label="{count} left">{count}<span class="vh"> left</span></b>' if count
+                    + (f'<b aria-label="{count} left">{count}<span class="left"> left</span></b>' if count
                        else '<b class="wb-idle">—</b>' if limit.get('reset_unknown') else '<b class="wb-idle">Idle</b>') + visual
                     + f'<small>{esc(reset)}</small></li>')
     rows.extend(extra)
@@ -2057,6 +2061,46 @@ def _wallet_title(pool):
     return WALLET_TITLES.get(key, pool.get('short_label') or pool['label'])
 
 
+def _usage_window_title(pool):
+    key = pool['pool']
+    return f'Google AI Pro · {AGY_ALLOWANCES[key]}' if key in AGY_ALLOWANCES else _wallet_title(pool)
+
+
+def _usage_group_title(group_id, members):
+    return 'Google AI Pro' if any(p['pool'] in AGY_ALLOWANCES for p in members) else _wallet_title(members[0])
+
+
+def _usage_line_label(pool, limit):
+    if pool['pool'] in AGY_ALLOWANCES:
+        return AGY_ALLOWANCES[pool['pool']]
+    return limit.get('title') + (f' · {limit["scope"]}' if limit.get('scope') else '')
+
+
+def render_usage_page(overview, series, now, token, settings_content=''):
+    share = sharing.build(overview.get('subscription_spend') or {'unavailable': True}, overview, now)
+    costs = [p['usage_cost']['age_s'] for p in overview['pools'] if (p.get('usage_cost') or {}).get('age_s') is not None]
+    stamp = f'Cost logs read {_ago(min(costs))}' if costs else 'No cost logs read yet'
+    # Limit scopes are a source's own words; show them the way the Providers page does.
+    pools = [dict(p, limits=[dict(l, scope=None if p['pool'] in AGY_ALLOWANCES else _scope_words(l.get('scope'), p['pool']))
+                             for l in p.get('limits') or []]) for p in overview['pools']]
+    body = usage_page.render_usage(dict(overview, pools=pools), series, now, _wallet_title, fleetctl.pretty_model_name,
+                                   stamp, share, _usage_window_title, _usage_group_title, _usage_line_label)
+    return shell('Usage', body, usage=True, dashboard=True, settings_content=settings_content)
+
+
+def render_share_page(overview, now, settings_content='', person=None, printing=False):
+    model = sharing.build(overview.get('subscription_spend') or {'unavailable': True}, overview, now)
+    people = {p['key']: p for p in model['people']}
+    if printing:
+        lines = sharing.card_lines(model, person) if person in people else []
+        body = usage_page.render_print(lines) if lines else '<p class="us-empty">No such card.</p>'
+        return shell('Share', body, usage=True, dashboard=True)
+    cards = [usage_page.card_html(model, p, sharing.card_lines(model, p['key']), sharing.card_text(model, p['key']))
+             for p in model['people']]
+    return shell('Share', usage_page.render_share(model, cards), usage=True, dashboard=True,
+                 settings_content=settings_content)
+
+
 def _wallet_plan(pool):
     name = pool['plan'].get('name') or ''
     name = name.removeprefix('Owner ')
@@ -2122,7 +2166,7 @@ def date_day(value):
     return f'{day.day} {day:%b}'
 
 
-def _plan_extras(pool, *, show_status=True, empty=True):
+def _plan_extras(pool, *, show_status=True, empty=False):
     esc = html.escape
     status = _benchmark_url(pool.get('status_url') or STATUS_PAGES.get(pool['pool'])) if show_status else None
     usage = pool.get('usage_cost') or {}
@@ -2133,7 +2177,7 @@ def _plan_extras(pool, *, show_status=True, empty=True):
             return 'not reported'
         try:
             when = fleetctl.parse_iso(value).astimezone()
-            return f'{when.day} {when:%b %Y, %H:%M}'
+            return f'{when.day} {when:%b %Y}'
         except (ValueError, TypeError, AttributeError):
             return 'not reported'
 
@@ -2176,7 +2220,7 @@ def _plan_extras(pool, *, show_status=True, empty=True):
     for grant in billing.get('grants') or []:
         left, total = _number(grant.get('credits')), _number(grant.get('granted'))
         amount = f'{left:,.0f}' + (f' of {total:,.0f}' if total else '') if left is not None else '—'
-        pieces.append(f'<p>Funded credits <b>{esc(amount)}</b> left<br>Expire {esc(date(grant.get("expires_at")))}</p>')
+        pieces.append(f'<p>Funded credits <b>{esc(amount)}</b> left · expire {esc(date(grant.get("expires_at")))}</p>')
     if _number(billing.get('credits_30d')) is not None:
         pieces.append(f'<p>Credits used: <b>{billing["credits_today"]:,.0f}</b> today · '
                       f'<b>{billing["credits_7d"]:,.0f}</b> in 7 days · <b>{billing["credits_30d"]:,.0f}</b> in 30 days</p>')
@@ -2184,7 +2228,7 @@ def _plan_extras(pool, *, show_status=True, empty=True):
         peak = max([row['credits'] for row in days] + [0])
         if days and peak > 0:
             bars = ''.join(f'<li><span class="nm">{esc(date_day(row["date"]))}</span>'
-                           f'<i style="--w:{row["credits"] / peak * 100:.1f}%"></i>'
+                           f'{usage_page.bar(row["credits"] / peak * 100, None, "us-mbar")}'
                            f'<span class="num">{row["credits"]:,.0f}</span></li>' for row in reversed(days[-14:]))
             folds.append(f'<details><summary>Credit use by day · last 14 days</summary><ul class="daily">{bars}</ul></details>')
     for quota in pool.get('model_quota') or []:
@@ -2199,14 +2243,13 @@ def _plan_extras(pool, *, show_status=True, empty=True):
             continue
         unit = credits.get('unit') or 'credits'
         amount = f'{balance:,.2f}'.rstrip('0').rstrip('.') if _number(balance) is not None else str(balance)
-        pieces.append(f'<p>{label} <b>{esc(amount)} {esc(str(unit))}</b><br>'
+        pieces.append(f'<p>{label} <b>{esc(amount)} {esc(str(unit))}</b> · '
                       f'Expires {esc(date(credits.get("expires_at")))} · New credits arrive {esc(date(credits.get("renews_at")))}</p>')
-    if _number(usage.get('today_usd')) is not None or _number(usage.get('last_30d_usd')) is not None:
-        tokens = ''
-        if (_number(usage.get('today_tokens')) is not None and _number(usage.get('last_30d_tokens')) is not None):
-            tokens = f'<br><small>{usage["today_tokens"]:,.0f} today · {usage["last_30d_tokens"]:,.0f} tokens in the last 30 days</small>'
-        pieces.append(f'<p>Usage cost: {cash(usage.get("today_usd"))} today · '
-                      f'{cash(usage.get("last_30d_usd"))} in the last 30 days{tokens}</p>')
+    costs = [(usage.get(key), label) for key, label in (('today_usd', 'today'), ('last_7d_usd', '7 days'),
+                                                      ('last_30d_usd', '30 days')) if _number(usage.get(key)) is not None]
+    if costs:
+        pieces.append('<p class="wb-cost">Cost ' + ' · '.join(f'{cash(amount)} {label}' for amount, label in costs)
+                      + ' <a href="/usage">Usage</a></p>')
     elif empty:
         pieces.append('<p>Usage cost not reported</p>')
     rows = ''.join(f'<li><span class="nm">{esc(str(row.get("model") or "Unknown model"))}</span> '
@@ -2294,7 +2337,7 @@ def _wallet(overview, token, workbench, order):
                 + f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}' +
                 '<p class="wb-error" role="status"></p>'
                 f'<div class="gauge" aria-label="{esc(title)} allowance">{_work_gauge(pool) + _pro_usage(pool)}</div>'
-                f'<div class="wallet-extras">{_plan_extras(pool, show_status=card, empty=card)}</div>'
+                f'<div class="wallet-extras">{_plan_extras(pool, show_status=card)}</div>'
                 f'{includes if card else ""}{policy}{inventory}</{container}>')
 
     def antigravity(group):
@@ -2307,7 +2350,7 @@ def _wallet(overview, token, workbench, order):
             f'data-pool="antigravity" data-pool-members="{members}" data-search-label="Antigravity Google AI Pro" tabindex="-1">'
             '<div class="wb-head"><h2>Google AI Pro</h2></div><small class="wb-plan">Antigravity</small>'
             '<p class="wb-error" role="status"></p>' + policy +
-            f'<div class="wallet-extras agy-extras">{_plan_extras(_group_extras(group), empty=not any(p.get("usage_cost") for p in group))}</div>'
+            f'<div class="wallet-extras agy-extras">{_plan_extras(_group_extras(group))}</div>'
             '<div class="wb-allowances" id="antigravity-allowances">'
             + ''.join(allowance_row({**p, 'usage_cost': None, 'billing': None, 'incident': None}, AGY_ALLOWANCES[p['pool']])
                       for p in group) + '</div></article>')
@@ -2664,7 +2707,8 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             if url.path.startswith("/static/"):
                 self._static(url.path[len("/static/"):])
                 return
-            if url.path not in {"/", "/snapshot", "/settings", "/benchmarks", "/model-cards.json", "/phone"}:
+            if url.path not in {"/", "/snapshot", "/settings", "/benchmarks", "/model-cards.json", "/phone",
+                                "/usage", "/share", "/share/print"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             if not console.signed_in(self.headers):
@@ -2716,6 +2760,15 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     return
                 if url.path == '/settings':
                     page = render_settings(overview, console.form_token)
+                elif url.path in {'/usage', '/share', '/share/print'}:
+                    now = time.time()
+                    panel = _settings_content(overview, console.form_token, panel=True)
+                    if url.path == '/usage':
+                        page = render_usage_page(overview, fleetctl.usage_history.series(console.state_dir, now), now,
+                                                 console.form_token, panel)
+                    else:
+                        who = urllib.parse.parse_qs(url.query).get('person', [''])[0]
+                        page = render_share_page(overview, now, panel, who, url.path == '/share/print')
                 else:
                     data = workbench_data(overview, console.state_dir, role, value, requested, count)
                     page = keep_html(_workbench(overview, data)) if fragment else render_page(overview, console.form_token, data)

@@ -137,3 +137,61 @@ class PhoneTests(unittest.TestCase):
                 self.assertEqual(headers['Content-Security-Policy'], phone.CSP)
                 self.assertNotIn('<form', body)
                 self.assertNotIn(app.form_token, body)
+
+
+class ShareTests(unittest.TestCase):
+    MODEL = {'unavailable': False, 'as_of': 1_800_000_000.0, 'plans': [
+        {'id': 'claude', 'name': 'Claude <Max>', 'currency': 'EUR', 'monthly': '100.00', 'operator_percent': '50',
+         'other_name': 'Sam', 'use': {'percent': 26, 'total_usd': 16.9, 'measured_usd': 9.8, 'rest_usd': 7.1,
+                                        'measured_share': 58.0, 'basis': 'in the last 7 days', 'exact': True,
+                                        'stale': False, 'overshoot': False, 'reason': None}}],
+        'people': [{'key': 'me', 'name': 'Me', 'self': True, 'owed': {'EUR': '50.00'},
+                    'plans': [{'plan': 'claude', 'percent': '50', 'monthly': '50.00'}]},
+                   {'key': 'sam', 'name': 'Sam', 'self': False, 'owed': {'EUR': '50.00'},
+                    'plans': [{'plan': 'claude', 'percent': '50', 'monthly': '50.00'}]}]}
+
+    def test_share_cards_are_served_to_the_one_login_with_a_pinned_script_and_no_other_script(self):
+        login = 'operator@example.invalid'
+        identity = [('Tailscale-User-Login', login)]
+        snapshot, share = Mock(return_value={'pools': [], 'subscription_spend': {'monthly': [], 'unpriced': 0, 'unavailable': False}}), Mock(return_value=self.MODEL)
+        with tempfile.TemporaryDirectory(prefix='cf-') as root:
+            path = Path(root) / 'phone.sock'
+            with serving(phone.open_server(path, login, snapshot, share)):
+                for route in ('/share', '/crossfeed/share', '/crossfeed/share/'):
+                    self.assertEqual(request(UnixConnection(path), 'GET', route, [])[0], 403, route)
+                share.assert_not_called()
+                status, headers, body = request(UnixConnection(path), 'GET', '/crossfeed/share', identity)
+                self.assertEqual(status, 200)
+                self.assertIn(f"script-src 'sha256-{phone.SCRIPT_HASH}'", headers['Content-Security-Policy'])
+                self.assertIn(f"style-src 'sha256-{phone.CSS_HASH}'", headers['Content-Security-Policy'])
+                self.assertEqual(body.count('<script>'), 1)
+                self.assertIn(f'<script>{phone.SHARE_SCRIPT}</script>', body)
+                self.assertIn('Sam', body)
+                self.assertIn('Your share 50% of €100.00 a month: €50.00', body)
+                self.assertIn('Claude &lt;Max&gt;', body)
+                self.assertNotIn('<Max>', body)
+                self.assertIn('data-share="card-sam"', body)
+                self.assertNotIn("script-src", request(UnixConnection(path), 'GET', '/crossfeed/', identity)[1]['Content-Security-Policy'])
+
+    def test_without_a_share_source_the_route_does_not_exist_and_the_main_page_links_only_when_there_are_prices(self):
+        login = 'operator@example.invalid'
+        identity = [('Tailscale-User-Login', login)]
+        spend = {'monthly': [{'currency': 'EUR', 'total': '12.00', 'operator': '6.00'}], 'unpriced': 0, 'unavailable': False}
+        snapshot = Mock(return_value={'pools': [], 'subscription_spend': spend})
+        with tempfile.TemporaryDirectory(prefix='cf-') as root:
+            path = Path(root) / 'phone.sock'
+            with serving(phone.open_server(path, login, snapshot)):
+                self.assertEqual(request(UnixConnection(path), 'GET', '/crossfeed/share', identity)[0], 404)
+                self.assertIn('href="share"', request(UnixConnection(path), 'GET', '/crossfeed/', identity)[2])
+        empty = phone.render({'pools': [], 'subscription_spend': {'monthly': [], 'unpriced': 1, 'unavailable': False}})
+        self.assertNotIn('href="share"', empty)
+
+    def test_a_failing_share_read_is_a_plain_503_without_the_reason(self):
+        login = 'operator@example.invalid'
+        share = Mock(side_effect=RuntimeError('/Users/someone/private/path'))
+        with tempfile.TemporaryDirectory(prefix='cf-') as root:
+            path = Path(root) / 'phone.sock'
+            with serving(phone.open_server(path, login, Mock(), share)):
+                status, _, body = request(UnixConnection(path), 'GET', '/share', [('Tailscale-User-Login', login)])
+                self.assertEqual(status, 503)
+                self.assertNotIn('private', body)

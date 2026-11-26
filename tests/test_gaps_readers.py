@@ -102,6 +102,23 @@ class AntigravityCost(unittest.TestCase):
         self.assertFalse(result["partial"])
         self.assertEqual(result["source"], "antigravity-desktop-history")
 
+    def test_breakdown_adds_seven_days_a_daily_series_and_per_model_windows(self):
+        make_db(self.root / "c.db", [
+            turn("gemini-4-hydrogen", inp=1_000_000, out=0, response="a", ms=self.ms),
+            turn("gemini-4-hydrogen", inp=1_000_000, out=0, response="b", ms=self.ms - 86_400_000 * 3),
+            turn("gemini-4-hydrogen", inp=1_000_000, out=0, response="c", ms=self.ms - 86_400_000 * 20),
+            turn("gemini-9-unknown", inp=500, out=5, response="d", ms=self.ms),
+        ])
+        result = self.cost()
+        self.assertAlmostEqual(result["last_7d_usd"], 2.0, places=6)  # priced rows only, like the 30-day total
+        self.assertAlmostEqual(result["last_30d_usd"], 3.0, places=6)
+        self.assertEqual(len(result["daily"]), 30)
+        self.assertAlmostEqual(sum(day["usd"] for day in result["daily"]), 3.0, places=6)
+        hydrogen = next(row for row in result["by_model"] if row["model"] == "gemini-4-hydrogen")
+        self.assertAlmostEqual(hydrogen["usd_7d"], 2.0, places=6)
+        self.assertAlmostEqual(hydrogen["usd_today"], 1.0, places=6)
+        self.assertAlmostEqual(sum(row[2] for row in result["hourly"]), 2.0, places=6)
+
     def test_unpriced_model_keeps_tokens_and_is_counted_not_zeroed(self):
         make_db(self.root / "c.db", [turn("gemini-9-unknown", inp=500, out=5, ms=self.ms)])
         result = self.cost()

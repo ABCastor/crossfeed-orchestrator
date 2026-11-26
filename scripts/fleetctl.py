@@ -72,6 +72,13 @@ except ImportError:
     _secret_spec.loader.exec_module(secret_store)
 
 try:
+    import usage_history
+except ImportError:
+    _history_spec = importlib.util.spec_from_file_location("fleet_usage_history", Path(__file__).with_name("usage_history.py"))
+    usage_history = importlib.util.module_from_spec(_history_spec)
+    _history_spec.loader.exec_module(usage_history)
+
+try:
     import native_usage
 except ImportError:
     _native_spec = importlib.util.spec_from_file_location("fleet_native_usage", Path(__file__).with_name("native_usage.py"))
@@ -1733,13 +1740,17 @@ def refresh_stale_pools(
                 except Exception:  # the oracle's exception may contain credentials
                     observed = {"available": False, "reason": f"{oracle_name} oracle transport failed"}
                 fetched = {pool: _filtered_observation(observed, sources[pool]) for pool in targets}
+                committed = {}
                 with locked_runtime(state_dir) as locked:
                     for pool, result in fetched.items():
-                        outcome = _commit_gauge(locked, pool, result, attempted_at,
-                                                recover_circuit=(recover_circuits and pool not in agy_pools
-                                                                 and oracle_name != "antigravity"))
+                        outcome = committed[pool] = _commit_gauge(
+                            locked, pool, result, attempted_at,
+                            recover_circuit=(recover_circuits and pool not in agy_pools and oracle_name != "antigravity"))
                         if pool in wanted:
                             outcomes[pool] = outcome
+                for pool, outcome in committed.items():
+                    if outcome == "refreshed":
+                        usage_history.record(state_dir, pool, fetched[pool])  # display-only; feeds the console charts
     except Exception:  # noqa: BLE001 - freshness is best-effort, never fatal
         pass
     return outcomes
@@ -6629,11 +6640,13 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
     names = {key: (model.get("card") or {}).get("name") for key, model in by_model.items()}
     for row in payload["pools"]:
         pool = pools[row["pool"]]
-        row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "usage_cost", "per_model",
+        row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "per_model",
                                                "per_model_error", "account_usage", "reading_age_s", "reading_source",
                                                "reading_observed_at", "reading_stale", "last_observed_windows",
                                                "incident", "billing", "billing_error", "model_quota")
                     if key in pool})
+        if pool.get("usage_cost"):  # hourly buckets feed the sharing card only; the glance stays small
+            row["usage_cost"] = {key: value for key, value in pool["usage_cost"].items() if key != "hourly"}
         record = pool.get("control") or {}
         # Glance needs attribution, not free-form reasons, ceilings or history.
         row["level_control"] = {key: record[key] for key in ("actor", "when") if key in record} or None
