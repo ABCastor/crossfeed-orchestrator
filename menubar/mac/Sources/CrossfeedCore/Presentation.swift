@@ -233,7 +233,12 @@ public struct Presenter {
         guard let group = groups.first(where: { $0.id == tab }) else { return nil }
         let multi = group.pools.count > 1
         let agy = tab == "agy"
-        let sections = group.pools.map { section($0, titled: multi, hasOwnPolicy: !agy) }
+        // Antigravity's three allowances share one status feed: say an incident once, on the section drawn first.
+        let shown = ["antigravity-gemini", "antigravity-3p", "antigravity-argon"]
+        let firstShown = group.pools.filter { $0.incident != nil }.min { (shown.firstIndex(of: $0.pool) ?? shown.count) < (shown.firstIndex(of: $1.pool) ?? shown.count) }?.pool
+        let sections = group.pools.map { pool in
+            section(pool, titled: multi, hasOwnPolicy: !agy, showIncident: !agy || pool.pool == firstShown)
+        }
         let subscriptionPolicy = agy ? glance.subscriptions.first(where: { $0.id == "antigravity" }).flatMap { subscription in
             let attribution = subscription.levelControl ?? group.pools.compactMap(\.levelControl)
                 .compactMap { record in Self.controlDate(record.when).map { ($0, record) } }
@@ -272,7 +277,7 @@ public struct Presenter {
         }
     }
 
-    func section(_ pool: Pool, titled: Bool, hasOwnPolicy: Bool) -> SectionModel {
+    func section(_ pool: Pool, titled: Bool, hasOwnPolicy: Bool, showIncident: Bool = true) -> SectionModel {
         let windows = pool.limits.filter { $0.kind == "window" }
         var rows = windows.enumerated().map { index, limit in row(limit, poolID: pool.pool, index: index) }
         if rows.isEmpty, let used = pool.usedPercent {
@@ -295,7 +300,7 @@ public struct Presenter {
         return SectionModel(id: pool.pool, title: titled ? title : nil, badge: badge, note: note, rows: rows,
                             logo: ProviderLogo.forPool(pool.pool),
                             policy: hasOwnPolicy ? PolicyModel(id: pool.pool, rawLevel: pool.level, attribution: pool.levelControl) : nil,
-                            models: Self.modelNames(pool.models), extras: ProviderExtras(pool: pool))
+                            models: Self.modelNames(pool.models), extras: ProviderExtras(pool: pool, showIncident: showIncident))
     }
 
     static func modelNames(_ models: [GlanceModel]) -> [String] {

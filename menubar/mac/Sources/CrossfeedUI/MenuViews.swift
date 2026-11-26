@@ -369,8 +369,25 @@ struct ProviderExtrasView: View {
     @State private var hoveringStatus = false
 
     var body: some View {
-        if !extras.credits.isEmpty || !extras.usage.isEmpty || !extras.perModel.isEmpty || extras.status != nil {
+        if !extras.credits.isEmpty || !extras.usage.isEmpty || !extras.perModel.isEmpty || extras.status != nil
+            || extras.incident != nil || !extras.billing.isEmpty || !extras.modelQuota.isEmpty || !extras.costByModel.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
+                if let incident = extras.incident {
+                    // The word carries the level; terracotta only for a major incident or outage.
+                    (Text(incident.title).font(CF.face(11.5, .semibold)).foregroundColor(incident.isSevere ? CF.humanText : CF.ink)
+                        + Text(incident.detail.isEmpty ? "" : " · " + incident.detail).font(CF.face(11.5)).foregroundColor(CF.ink))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("\(incident.title). \(incident.detail)")
+                }
+                if !extras.billing.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Subscription").font(CF.face(12, .semibold))
+                        ForEach(extras.billing, id: \.self) { line in
+                            Measure(line, size: 11.5).foregroundStyle(CF.quiet)
+                        }
+                    }
+                }
+                if !extras.modelQuota.isEmpty { extraRows("Per-model allowance", rows: extras.modelQuota, stacked: true) }
                 if !extras.credits.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(extras.creditTitle).font(CF.face(12, .semibold))
@@ -381,6 +398,7 @@ struct ProviderExtrasView: View {
                 }
                 if !extras.usage.isEmpty { extraRows("Usage cost estimate", rows: extras.usage) }
                 if !extras.perModel.isEmpty { extraRows("Spend by model · last 30 days", rows: extras.perModel) }
+                if !extras.costByModel.isEmpty { extraRows("Cost by model · last 30 days", rows: extras.costByModel) }
                 if let url = extras.status {
                     Button { openStatus(url) } label: {
                         Label("Status page", systemImage: "arrow.up.right.square")
@@ -402,18 +420,28 @@ struct ProviderExtrasView: View {
         }
     }
 
-    private func extraRows(_ heading: String, rows: [ExtraRow]) -> some View {
+    private func extraRows(_ heading: String, rows: [ExtraRow], stacked: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(heading).font(CF.face(12, .semibold))
             ForEach(rows.indices, id: \.self) { index in
                 let row = rows[index]
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(row.label).font(CF.face(11.5)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Measure(row.detail, size: 11.5).foregroundStyle(CF.quiet)
-                        .fixedSize(horizontal: true, vertical: false)
+                if stacked {
+                    // Long details (a percent, a reset and a shared pool) wrap under the name instead of leaving the menu.
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.label).font(CF.face(11.5))
+                        Measure(row.detail, size: 11.5).foregroundStyle(CF.quiet)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.label).font(CF.face(11.5)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Measure(row.detail, size: 11.5).foregroundStyle(CF.quiet)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
-                .accessibilityElement(children: .combine)
             }
         }
     }
