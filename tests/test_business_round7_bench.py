@@ -57,8 +57,8 @@ class BenchmarkPriorTests(unittest.TestCase):
         from pathlib import Path
         roster = fixture()
         roster["benchmark_priors"] = {"mimo-v2.6-pro": {"provider-default": {
-            "evaluations": {"terminal_bench_4": 0.35, "intelligence_index": 29.9}, "name": "MiMo V2.6 Pro",
-            "read_on": "2026-11-26", "slug": "mimo-v2-6-pro", "url": "https://artificialanalysis.ai/models/mimo-v2-6-pro"}}}
+            "evaluations": {"terminal_bench_4": 0.40, "intelligence_index": 31.0}, "name": "Synthetic row",
+            "read_on": "2026-11-26", "slug": "synthetic", "url": "https://example.invalid/synthetic"}}}
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
             (state / "evidence").mkdir()
@@ -68,8 +68,8 @@ class BenchmarkPriorTests(unittest.TestCase):
     # BR-BENCH-001
     def test_prior_grades_the_cell_with_outside_scores(self):
         row = self.rows()[("mimo-v2.6-pro", "provider-default")]
-        self.assertAlmostEqual(row["q"]["coding-agent"]["mean"], 0.35, places=2)
-        self.assertAlmostEqual(row["q"]["reasoning"]["mean"], 0.299, places=2)
+        self.assertAlmostEqual(row["q"]["coding-agent"]["mean"], 0.40, places=2)
+        self.assertAlmostEqual(row["q"]["reasoning"]["mean"], 0.31, places=2)
         self.assertTrue(row["q"]["review"]["n_sources"])
         self.assertNotIn("extraction", row["q"])  # no instruction-following score was published, so none is invented
 
