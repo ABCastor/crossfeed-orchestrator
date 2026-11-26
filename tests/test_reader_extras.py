@@ -58,6 +58,9 @@ class ReaderExtras(unittest.TestCase):
                          [{"model": "openai/gpt", "usd_30d": 3.75, "requests": 3},
                           {"model": "openrouter/free", "usd_30d": 0, "requests": 10}])
         self.assertIsNone(native.parse_openrouter_activity({"data": [{**data[0], "usage": "bad"}]}, NOW.date()))
+        live_shape = [{**r, "date": r["date"] + " 00:00:00"} for r in data]  # the API's real date format
+        self.assertEqual(native.parse_openrouter_activity({"data": live_shape}, NOW.date()),
+                         native.parse_openrouter_activity({"data": data}, NOW.date()))
 
     def test_openrouter_management_rejection_still_returns_cash_not_zero_per_model(self):
         def opener(request, timeout):

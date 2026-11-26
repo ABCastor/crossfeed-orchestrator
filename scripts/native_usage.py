@@ -1471,7 +1471,7 @@ def parse_openrouter_activity(payload: Any, today: dt.date) -> list[dict[str, An
     for raw in rows:
         row = _mapping(raw)
         try:
-            day = dt.date.fromisoformat(str(row.get("date")))
+            day = dt.date.fromisoformat(str(row.get("date"))[:10])  # the API sends "YYYY-MM-DD 00:00:00"
         except ValueError:
             return None  # don't pass incomplete account totals as complete
         if not start <= day < today:
