@@ -1,4 +1,4 @@
-"""BR-ROSTER-001: Argon is off every chain; Neon explains public and code material, Opus the rest.
+"""BR-ROSTER-001: Argon is off every chain; Neon takes every class of material and explains first.
 
 The synthetic class patches the shipped example the same way the operator's overlay was changed.
 Set CROSSFEED_ROSTER_OVERLAYS to a path-separated list of overlay files to run the same checks on
@@ -38,7 +38,7 @@ def after_round8(roster):
     neon = copy.deepcopy(template)
     neon.update(lane_id=NEON, model_key="gemini-4-neon", selector="gemini-4-neon-high", quota_pool="antigravity-gemini",
                 roles=["implementation", "review", "hard-reasoning", "debug", *VISUAL, "writing", "explain"],
-                data_policy="code-ok", agy_read_only_copy=True,
+                agy_read_only_copy=True,
                 agy_read_only_roles=["review", "hard-reasoning", "debug", "explain"],
                 notes="synthetic Neon lane for the round-8 roster tests")
     r["lanes"].append(neon)
@@ -123,40 +123,45 @@ class RosterRules:
         # ChatGPT is a gateway seat that is not in this static roster; the next seat is Opus for any material.
         for data_class in ("public", "code", "private"):
             self.assertEqual(self.route("writing", data_class)["model_key"], "claude-opus-5-5")
-        # Neon writes only after Opus, and only public or code material.
+        # Neon writes only after Opus, for every class of material.
         no_opus = copy.deepcopy(self.roster)
         next(l for l in no_opus["lanes"] if l["lane_id"] == OPUS)["access_status"] = "unverified"
-        self.assertEqual(self.route("writing", "public", roster=no_opus)["lane_id"], NEON)
-        self.assertEqual(self.route("writing", "code", roster=no_opus)["lane_id"], NEON)
-        with self.assertRaises(fleetctl.FleetError):
-            self.route("writing", "private", roster=no_opus)
+        for data_class in ("public", "code", "private"):
+            self.assertEqual(self.route("writing", data_class, roster=no_opus)["lane_id"], NEON)
 
     # BR-ROSTER-001
-    def test_explain_takes_neon_for_public_and_code_and_opus_for_private(self):
+    def test_explain_takes_neon_first_for_every_class_of_material(self):
         self.assertEqual(self.roster["routing"]["roles"]["explain"]["quality_first"], [NEON, OPUS])
-        self.assertEqual(self.route("explain", "public")["lane_id"], NEON)
-        self.assertEqual(self.route("explain", "code")["lane_id"], NEON)
-        private = self.route("explain", "private")
-        self.assertEqual((private["model_key"], private["effort"]), ("claude-opus-5-5", "high"))
-        self.assertEqual(self.route("explain", None)["model_key"], "claude-opus-5-5")  # unclassified is private
+        for data_class in ("public", "code", "private", None):  # unclassified material is private
+            chosen = self.route("explain", data_class)
+            self.assertEqual((chosen["lane_id"], chosen["effort"]), (NEON, "high"), data_class)
+        # The selector offers Neon to a private-class job too, and refuses it nothing on data policy.
+        options, rejected = selector.enumerate_options(self.roster, {}, "explain", mode="read-only", data_class="private",
+                                                       fleet=fleetctl)
+        self.assertIn("gemini-4-neon", {o["model_key"] for o in options})
+        self.assertFalse([r for r in rejected if r.startswith(NEON) and "refuses" in r], rejected)
 
-    # BR-ROSTER-001 control: the probe sees Neon for private material once its policy allows it.
-    def test_control_neon_takes_private_material_only_when_its_policy_says_so(self):
+    # BR-ROSTER-001 control: the probe sees a refusal when a lane does carry a lower data policy.
+    def test_control_a_code_ok_policy_would_send_private_material_to_opus(self):
         roster = copy.deepcopy(self.roster)
-        next(l for l in roster["lanes"] if l["lane_id"] == NEON)["data_policy"] = "private-ok"
-        self.assertEqual(self.route("explain", "private", roster=roster)["lane_id"], NEON)
+        next(l for l in roster["lanes"] if l["lane_id"] == NEON)["data_policy"] = "code-ok"
+        self.assertEqual(self.route("explain", "code", roster=roster)["lane_id"], NEON)
+        private = self.route("explain", "private", roster=roster)
+        self.assertEqual((private["model_key"], private["effort"]), ("claude-opus-5-5", "high"))
 
     # BR-ROSTER-001
     def test_visual_roles_use_neon_where_argon_was(self):
         for role in VISUAL:
             for band in BANDS:
                 self.assertEqual(self.roster["routing"]["roles"][role][band], [NEON], (role, band))
-            self.assertEqual(self.route(role, "code")["lane_id"], NEON)
+            for data_class in ("public", "code", "private"):
+                self.assertEqual(self.route(role, data_class)["lane_id"], NEON, (role, data_class))
 
     # BR-ROSTER-001
-    def test_neon_stays_code_ok_and_explain_is_read_only(self):
+    def test_neon_has_no_data_policy_and_explain_is_read_only(self):
         neon = next(l for l in self.roster["lanes"] if l["lane_id"] == NEON)
-        self.assertEqual(neon["data_policy"], "code-ok")
+        self.assertNotIn("data_policy", neon)
+        self.assertIsNone(fleetctl.data_policy_refusal(neon, "private"))
         self.assertIn("explain", neon["roles"])
         self.assertEqual(self.roster["policy"]["selector"]["mode_by_role"]["explain"], "read-only")
         self.assertEqual(self.roster["policy"]["selector"]["families_by_role"]["explain"], "reasoning")
