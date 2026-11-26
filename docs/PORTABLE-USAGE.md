@@ -54,6 +54,39 @@ The console has five spend levels: **off**, **low**, **normal**, **high** and **
 
 For parallel jobs, use `scripts/fanout.sh tasks.jsonl --parallel 3`. Give write-capable workers separate worktrees and verify their output before integrating it. [Selector details](SELECTOR.md) and [adapter contracts](ADAPTERS.md) cover configuration.
 
+## Usage readings and the one key it can store
+
+Crossfeed reads usage itself. No menu-bar helper, browser cookie or password manager is needed.
+
+| What | Where it comes from | Needs |
+| --- | --- | --- |
+| Claude, Codex and Copilot windows | The provider's own usage endpoint, with the CLI's existing sign-in | The CLI signed in |
+| Codex plan, renewal date, funded credits and credit use | Codex account billing endpoints, with the Codex CLI's sign-in | `billing` is on by default; set `billing: false` on the pool to turn it off |
+| Antigravity model allowances, including Argon | The desktop app's local language server | `model_quota: ["argon"]` on the pool's `quota_refresh` |
+| Antigravity cost by model | The desktop app's local history | `local_usage_cost: true` on the pool |
+| Incident badge | Each provider's public status feed, cached five minutes | Nothing; hidden when all is clear |
+| OpenRouter spend by model | OpenRouter's Activity endpoint | A management key (below) |
+
+Every row is hidden when the provider gives nothing. A failed read keeps the last good value and says it is old.
+
+### Storing the OpenRouter management key
+
+Spend by model is the only reading that needs a key beyond the inference key, because OpenRouter returns Activity only to a management key with Activity read access. Create one at openrouter.ai/settings/management-keys, then store it in one of these ways. Crossfeed looks in this order and stops at the first hit:
+
+1. The `OPENROUTER_MANAGEMENT_KEY` environment variable.
+2. A 1Password reference, if `op` is installed: `fleetctl secret set openrouter-management --ref 'op://Vault/Item/field'`. Only the reference is stored.
+3. The macOS Keychain.
+4. The Linux Secret Service (`secret-tool`).
+5. A mode-600 file under the orchestrator config directory, only when you pass `--plaintext` yourself.
+
+```bash
+fleetctl secret set openrouter-management      # reads the value from a hidden prompt or stdin
+fleetctl secret status openrouter-management   # present or absent, and which backend; never the value
+fleetctl secret delete openrouter-management   # removes it from every backend
+```
+
+The console has the same step: an "Add key" field on the OpenRouter card. It is a password field, the page clears it on submit and the value is never sent back to the page, logged or placed on a command line. Without a Keychain or Secret Service, `set` refuses and names the plaintext flag instead of writing a file quietly.
+
 ## Evidence and limits
 
 **The selector has not yet been proven better than simpler routing policies on hard tasks.** On 5 October 2026, synthetic coding tests passed 12/12 for Sol High, 9/11 for ChatGPT High through Pi and 9/10 for ChatGPT Extra High through Pi. Only 23/36 ChatGPT cells were measured, none of its nine calibration cells ran, and its underlying model identity is unconfirmed. Sol High remains the default; admitted Pi relay workers can provide fallback capacity under quota pressure. The [benchmark harness](../bench/README.md) lets you measure your own tasks.

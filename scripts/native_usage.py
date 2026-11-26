@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import calendar
+import collections
 import datetime as dt
 import fcntl
 import http.client
@@ -418,6 +419,147 @@ def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> d
     return result
 
 
+CODEX_BILLING_SOURCE = "codex-oauth-billing"
+CODEX_BACKEND = "https://chatgpt.com/backend-api/"
+HISTORY_DAYS = 30
+
+
+def _day(raw: Any) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(str(raw))
+    except ValueError:
+        return None
+
+
+def _credit_amount(raw: Any) -> float | None:
+    amount = _finite_amount(raw)
+    return amount if amount is not None and 0 <= amount < 1e12 else None
+
+
+def parse_codex_billing(subscription: Any, balance: Any, breakdown: Any, events: Any,
+                        today: dt.date) -> dict[str, Any] | None:
+    """Codex's own ChatGPT sign-in against the same endpoints ChatGPT's billing page calls.
+
+    `subscription` carries the paid period end (`active_until`) and whether it renews; `balance`
+    the funded credit grants with expiry dates; `events` every credit spend (summed per day, no
+    event or account identifiers kept); `breakdown` the share of the weekly limit used per day
+    and per model (its `units` are percent; its per-model `credits` field is not on the same
+    scale as the events, so it is not shown). Absent or malformed parts are omitted, never zero.
+    """
+    out: dict[str, Any] = {"source": CODEX_BILLING_SOURCE}
+    sub = _mapping(subscription)
+    if sub:
+        entitlement = _mapping(sub.get("entitlement"))
+        until = _parse_time(sub.get("active_until") or entitlement.get("expires_at"))
+        will_renew = sub.get("will_renew") if isinstance(sub.get("will_renew"), bool) else None
+        plan = _label(sub.get("plan_type") or entitlement.get("subscription_plan"))
+        period = _label(sub.get("billing_period") or entitlement.get("billing_period"))
+        cancels = _parse_time(entitlement.get("cancels_at"))
+        currency = sub.get("billing_currency") if isinstance(sub.get("billing_currency"), str) else None
+        if plan:
+            out["plan"] = plan
+        if period:
+            out["period"] = period
+        if currency and re.fullmatch(r"[A-Z]{3}", currency):
+            out["currency"] = currency
+        if until:
+            out["active_until"] = _iso(until)
+        if will_renew is not None:
+            out["will_renew"] = will_renew
+            if until and will_renew:
+                out["renews_at"] = _iso(until)
+        if cancels:
+            out["cancels_at"] = _iso(cancels)
+    details = _mapping(balance).get("expiring_balance_details")
+    if isinstance(details, list):
+        grants = []
+        for raw in details:
+            grant = _mapping(raw)
+            remaining, expiry = _credit_amount(grant.get("amount_remaining")), _parse_time(grant.get("expiry_date"))
+            kind = grant.get("grant_type")
+            if remaining is None or not expiry:
+                continue
+            row = {"credits": remaining, "expires_at": _iso(expiry)}
+            granted = _credit_amount(grant.get("amount_granted"))
+            if granted is not None:
+                row["granted"] = granted
+            if isinstance(kind, str) and re.fullmatch(r"[a-z_]{1,40}", kind):
+                row["kind"] = kind
+            grants.append(row)
+        out["grants"] = sorted(grants, key=lambda row: row["expires_at"])
+    rows = _mapping(events).get("data")
+    if isinstance(rows, list):
+        start = today - dt.timedelta(days=HISTORY_DAYS - 1)
+        daily: dict[dt.date, float] = {}
+        for raw in rows:
+            row = _mapping(raw)
+            day, amount = _day(row.get("date")), _credit_amount(row.get("credit_amount"))
+            if day is None or amount is None:
+                return None if not out.get("plan") and len(out) == 1 else out
+            if start <= day <= today:
+                daily[day] = daily.get(day, 0.0) + amount
+        out["credit_history"] = [{"date": day.isoformat(), "credits": round(daily.get(day, 0.0), 6)}
+                                 for day in (start + dt.timedelta(days=i) for i in range(HISTORY_DAYS))]
+        out["credits_today"] = round(daily.get(today, 0.0), 6)
+        out["credits_7d"] = round(sum(v for d, v in daily.items() if d > today - dt.timedelta(days=7)), 6)
+        out["credits_30d"] = round(sum(daily.values()), 6)
+    days = _mapping(breakdown).get("data")
+    if isinstance(days, list):
+        usage: list[dict[str, Any]] = []
+        per_model: dict[str, float] = {}
+        for raw in days:
+            row = _mapping(raw)
+            day = _day(row.get("date"))
+            attribution = row.get("attribution")
+            if day is None or not isinstance(attribution, list):
+                continue
+            usage.append({"date": day.isoformat(), "percent": round(sum(
+                _finite_amount(_mapping(a).get("value")) or 0 for a in attribution), 6)})
+            for item in attribution:
+                name, value = _mapping(item).get("model"), _finite_amount(_mapping(item).get("value"))
+                if isinstance(name, str) and re.fullmatch(r"[\w./:-]{1,80}", name, re.ASCII) and value and value > 0:
+                    per_model[name] = per_model.get(name, 0.0) + value
+        out["limit_use_history"] = sorted(usage, key=lambda row: row["date"])[-HISTORY_DAYS:]
+        out["limit_use_by_model_30d"] = [{"model": name, "percent": round(value, 6)} for name, value in
+                                         sorted(per_model.items(), key=lambda item: (-item[1], item[0]))[:6]]
+    return out if len(out) > 1 else None
+
+
+def _codex_billing(headers: dict[str, str], account: str | None, budget: float,
+                   opener: Callable[..., Any] | None) -> tuple[dict[str, Any] | None, list[str]]:
+    """Four concurrent GETs on fixed ChatGPT paths; failures degrade to named gaps."""
+    if not account:
+        return None, ["no account id"]
+    paths = {
+        "subscription": "subscriptions?" + urlencode({"account_id": account}),
+        "balance": f"accounts/{account}/remaining_balance",
+        "breakdown": "wham/usage/daily-token-usage-breakdown",
+        "events": "wham/usage/credit-usage-events",
+    }
+    results: dict[str, Any] = {}
+    failed: list[str] = []
+
+    def fetch(name: str) -> None:
+        try:
+            status, body = _http_get(CODEX_BACKEND + paths[name], headers, budget, opener)
+            payload = _json(body) if status == 200 else None
+            if payload is None:
+                failed.append(name)
+            else:
+                results[name] = payload
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            failed.append(name)
+
+    threads = [threading.Thread(target=fetch, args=(name,), daemon=True) for name in paths]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(budget + 1)
+    parsed = parse_codex_billing(results.get("subscription"), results.get("balance"), results.get("breakdown"),
+                                 results.get("events"), _now().astimezone().date()) if results else None
+    return parsed, sorted(set(failed) | {name for name in paths if name not in results})
+
+
 def _owner_file(path: Path) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as handle:
@@ -462,6 +604,14 @@ def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
                     observed["credits"] = inventory
                 else:
                     return unavailable(CODEX_OAUTH_SOURCE, "failed", f"Codex reset credits returned HTTP {status}")
+            if config.get("billing") is not False:
+                # Display-only: a billing failure never fails the quota reading it rides on.
+                billing, missing = _codex_billing(headers, account if "ChatGPT-Account-Id" in headers else None,
+                                                  min(4.0, max(1.0, budget / 2)), opener)
+                if billing:
+                    observed["billing"] = {**billing, "observed_at": _iso(_now()), **({"missing": missing} if missing else {})}
+                else:
+                    observed["billing_error"] = "Codex billing endpoints returned nothing usable"
             return observed
         if status in (401, 403):
             return unavailable(CODEX_OAUTH_SOURCE, "unauthorized", "Codex ChatGPT sign-in was rejected; no renewal attempted")
@@ -765,6 +915,69 @@ def parse_antigravity_local(payload: Any, observed_at: dt.datetime | None = None
     return snap
 
 
+AGY_OAUTH_MODEL_QUOTA = "/v1internal:retrieveUserQuota"
+AGY_OAUTH_MODELS = "/v1internal:fetchAvailableModels"
+_AGY_FAMILY = re.compile(r"gemini-\d+(?:\.\d+)?-([a-z]+)(?:-|\Z)")
+
+
+def _agy_model_family(model: str) -> str:
+    if model.startswith("claude-"):
+        return "Claude"
+    if model.startswith("gpt-"):
+        return "GPT"
+    match = _AGY_FAMILY.match(model)
+    return match.group(1).capitalize() if match and match.group(1) not in {"flash", "pro"} else "Gemini"
+
+
+def parse_antigravity_model_quota(payload: Any, families: list[str], observed_at: dt.datetime | None = None,
+                                  shared: dict[str, Any] | None = None) -> list[dict[str, Any]] | None:
+    """Per-model quota (T3 Code's `retrieveUserQuota`, else `fetchAvailableModels`), grouped by pool.
+
+    Models that report the same remaining fraction and reset share one pool; a pool that equals a
+    summary window (Gemini 5-hour, weekly) is labelled as sharing it. `families` keeps only the
+    requested model families (e.g. ["argon"]); with none requested nothing is returned.
+    """
+    root = _mapping(payload)
+    rows: list[tuple[str, Any, Any]] = []
+    if isinstance(root.get("buckets"), list):
+        rows = [(b.get("modelId"), b.get("remainingFraction"), b.get("resetTime")) for b in map(_mapping, root["buckets"])]
+    elif isinstance(root.get("models"), dict):
+        for model_id, model in root["models"].items():
+            info = _mapping(_mapping(model).get("quotaInfo"))
+            rows.append((model_id, info.get("remainingFraction"), info.get("resetTime")))
+    else:
+        return None
+    wanted = {family.lower() for family in families}
+    groups: dict[tuple[float, str | None], dict[str, Any]] = {}
+    for model, fraction, reset in rows:
+        if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", model):
+            continue
+        if _agy_model_family(model).lower() not in wanted:
+            continue
+        # A missing fraction beside a reset is a protobuf zero, but only a stated value is shown.
+        if type(fraction) not in (int, float) or not 0 <= fraction <= 1:
+            continue
+        stamp = _parse_time(reset)
+        key = (round(float(fraction), 8), _iso(stamp) if stamp else None)
+        group = groups.setdefault(key, {"models": [], "families": set()})
+        group["models"].append(model)
+        group["families"].add(_agy_model_family(model))
+    result = []
+    for (fraction, reset), group in sorted(groups.items(), key=lambda item: item[0][1] or ""):
+        used = round(100 * (1 - fraction), 8)
+        entry: dict[str, Any] = {"label": " · ".join(sorted(group["families"])) + " models",
+                                 "models": sorted(group["models"]), "used_percent": used}
+        if reset:
+            entry["reset_at"] = reset
+        for name, row in (shared or {}).items():
+            same_reset = bool(reset) and row.get("reset_at") == reset
+            if same_reset and abs(float(row.get("used_percent", -1000)) - used) < 0.01:
+                entry["shared_with"] = row.get("label") or name
+                break
+        result.append(entry)
+    return result
+
+
 def _agy_reuse_target(deadline: float) -> list[tuple[int, str]]:
     """Return listening loopback ports on exactly one recognised, same-UID process.
 
@@ -911,8 +1124,32 @@ def _agy_cli_keychain(timeout: float) -> dict[str, Any]:
     return _mapping(_json(body.decode("utf-8")))
 
 
+def _agy_model_quota(token: str, project: str | None, families: list[str], summary: dict[str, Any],
+                     provider_used: dict[str, float], budget: float) -> list[dict[str, Any]]:
+    """Best effort: a failure here never costs the summary windows already read."""
+    shared = {name: {**row, "used_percent": provider_used.get(name, row.get("used_percent", 0))}
+              for name, row in summary.items()}
+    body = json.dumps({"project": project} if project else {}, separators=(",", ":")).encode()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+               "User-Agent": AGY_OAUTH_USER_AGENT}
+    deadline = time.monotonic() + budget
+    for path in (AGY_OAUTH_MODEL_QUOTA, AGY_OAUTH_MODELS):
+        for host in AGY_OAUTH_HOSTS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return []
+            try:
+                status, payload = _agy_google_post(host, path, body, headers, min(4.0, remaining))
+                rows = parse_antigravity_model_quota(payload, families, None, shared) if status == 200 else None
+            except (OSError, ValueError, TypeError, http.client.HTTPException, RecursionError):
+                continue
+            if rows:
+                return rows
+    return []
+
+
 def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False,
-                                keychain: bool = False) -> dict[str, Any]:
+                                keychain: bool = False, model_families: list[str] | None = None) -> dict[str, Any]:
     """Use one explicitly selected profile. No account discovery or fallback."""
     deadline = time.monotonic() + max(1, min(timeout, 10))
     source = AGY_OAUTH_SOURCE
@@ -967,7 +1204,13 @@ def _observe_antigravity_oauth(path: Any, timeout: int, *, acp: bool = False,
                 target.update(new)
                 provider_used.update({key: snap["provider_used_percent"][key] for key in new})
     if windows or idle:
-        return {**_snapshot(source, windows, idle, None, now), "provider_used_percent": provider_used}
+        result = {**_snapshot(source, windows, idle, None, now), "provider_used_percent": provider_used}
+        if model_families:
+            quota = _agy_model_quota(token, project, model_families, {**windows, **idle}, provider_used,
+                                     max(1.0, deadline - time.monotonic()))
+            if quota:
+                result["model_quota"] = quota
+        return result
     return unavailable(AGY_OAUTH_SOURCE, "failed", "Antigravity returned no usable quota summary")
 
 
@@ -989,12 +1232,13 @@ def observe_antigravity(config: dict[str, Any], timeout: int = 5) -> dict[str, A
     keychain = config.get("oauth_cli_keychain") is True
     if sum((keychain, "oauth_acp_file" in config, "oauth_session_file" in config)) > 1:
         return unavailable(AGY_OAUTH_SOURCE, "no-auth", "Select only one Antigravity OAuth profile type")
+    families = [f for f in config.get("model_quota", []) if isinstance(f, str)] if isinstance(config.get("model_quota"), list) else []
     if keychain:
-        return _observe_antigravity_oauth(None, timeout, keychain=True)
+        return _observe_antigravity_oauth(None, timeout, keychain=True, model_families=families)
     if "oauth_acp_file" in config:
-        return _observe_antigravity_oauth(config["oauth_acp_file"], timeout, acp=True)
+        return _observe_antigravity_oauth(config["oauth_acp_file"], timeout, acp=True, model_families=families)
     if "oauth_session_file" in config:
-        return _observe_antigravity_oauth(config["oauth_session_file"], timeout)
+        return _observe_antigravity_oauth(config["oauth_session_file"], timeout, model_families=families)
     if config.get("reuse_running") is True:
         result = _observe_running_antigravity(timeout)
         if result:
@@ -1143,6 +1387,20 @@ def openrouter_key_path() -> Path:
     return Path(os.environ.get("OPENROUTER_KEY_FILE") or Path.home() / ".config/orchestrator/openrouter_api_key")
 
 
+def _management_key() -> str | None:
+    """The OpenRouter management key from the portable store (env, 1Password, Keychain, Secret Service)."""
+    try:
+        try:
+            import secret_store
+        except ImportError:
+            spec = importlib.util.spec_from_file_location("fleet_secret_store", Path(__file__).with_name("secret_store.py"))
+            secret_store = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(secret_store)
+        return secret_store.resolve("openrouter-management")
+    except Exception:  # noqa: BLE001 - a broken store means "no management key", never a failed quota read
+        return None
+
+
 def observe_openrouter(config: dict[str, Any], timeout: int = 5,
                        opener: Callable[..., Any] | None = None) -> dict[str, Any]:
     try:
@@ -1179,8 +1437,11 @@ def observe_openrouter(config: dict[str, Any], timeout: int = 5,
             cash["account_balance_usd"] = balance
     result = {**_snapshot(OPENROUTER_SOURCE, {}, {}), "account_usage": cash}
     if activity:
+        management = _management_key()
+        # Activity is the only call that needs the management key; cash stays on the inference key.
+        activity_headers = {**headers, "Authorization": f"Bearer {management}"} if management else headers
         try:
-            status, body = _http_get(OPENROUTER_BASE + "activity", headers, per_request, opener)
+            status, body = _http_get(OPENROUTER_BASE + "activity", activity_headers, per_request, opener)
             if status == 200:
                 rows = parse_openrouter_activity(_json(body), _now().date())
                 if rows is not None:
@@ -1188,7 +1449,11 @@ def observe_openrouter(config: dict[str, Any], timeout: int = 5,
                 else:
                     return unavailable(OPENROUTER_SOURCE, "malformed", "OpenRouter activity response was unreadable")
             elif status in (401, 403):
-                result["per_model_error"] = "OpenRouter activity requires a management key with Activity read access"
+                result["per_model_error"] = (
+                    "OpenRouter rejected the stored management key; it needs Activity read access"
+                    if management else
+                    "OpenRouter activity requires a management key with Activity read access "
+                    "(add one: fleetctl secret set openrouter-management)")
             else:
                 return unavailable(OPENROUTER_SOURCE, "failed", f"OpenRouter activity returned HTTP {status}")
         except (OSError, ValueError, http.client.HTTPException, RecursionError):
@@ -1252,13 +1517,228 @@ def display_extras(pool, config, snapshot, failure, state_dir, now, *, refresh):
     status = (STATUS_URLS.get(oracle) if isinstance(oracle, str) else None) or STATUS_URLS.get(pool)
     if status:
         projection["status_url"] = status
-    for field in ("credits", "spend_credits", "per_model", "per_model_error", "account_usage"):
+    for field in ("credits", "spend_credits", "per_model", "per_model_error", "account_usage", "model_quota", "billing", "billing_error"):
         if field in snapshot:
             projection[field] = snapshot[field]
     cost = usage_cost(reader, state_dir, now, refresh=refresh)
     if cost is not None:
         projection["usage_cost"] = cost
+    incident = provider_incident(pool, oracle, state_dir, now, refresh=refresh)
+    if incident is not None:
+        projection["incident"] = incident
     return projection
+
+
+# ---- Provider incident badges ----------------------------------------------------------------------
+# CodexBar v0.67.0, ProviderStatusFetcher.swift: Statuspage `api/v2/summary.json` (Claude, OpenAI,
+# GitHub) and Google Workspace's public `incidents.json` filtered to the Gemini product. OpenRouter's
+# Datadog page and OpenCode's own page publish public JSON too. Public GETs with no credentials.
+STATUS_TTL_S = 300
+STATUS_LEVELS = ("none", "maintenance", "minor", "major", "critical")
+GOOGLE_GEMINI_PRODUCT = "npdyhgECDJ6tB66MxXyo"
+STATUS_FEEDS = {
+    "claude": ("statuspage", "https://status.claude.com/api/v2/summary.json"),
+    "openai": ("statuspage", "https://status.openai.com/api/v2/summary.json"),
+    "github": ("statuspage", "https://www.githubstatus.com/api/v2/summary.json"),
+    "openrouter": ("datadog", "https://status.openrouter.ai/config.json"),
+    "opencode": ("opencode", "https://status.opencode.ai/api/status"),
+    "google": ("google", "https://www.google.com/appsstatus/dashboard/incidents.json"),
+}
+STATUS_FEED_FOR = {
+    "codex": "openai", "codex-oauth": "openai", "chatgpt-work": "openai", "claude": "claude",
+    "copilot": "github", "github-copilot-student": "github", "openrouter": "openrouter",
+    "openrouter-free": "openrouter", "opencode-go": "opencode", "antigravity": "google",
+}
+_COMPONENT_LEVEL = {"operational": "none", "degraded_performance": "minor", "degraded": "minor",
+                    "partial_outage": "major", "major_outage": "critical", "under_maintenance": "maintenance",
+                    "maintenance": "maintenance", "outage": "critical"}
+_IMPACT_LEVEL = {"none": "none", "minor": "minor", "major": "major", "critical": "critical", "maintenance": "maintenance"}
+
+
+def _worst(*levels: str | None) -> str:
+    known = [level for level in levels if level in STATUS_LEVELS]
+    return max(known, key=STATUS_LEVELS.index) if known else "none"
+
+
+def _status_text(text: Any, limit: int = 140) -> str | None:
+    if not isinstance(text, str):
+        return None
+    for line in re.sub(r"\*\*|\[([^\]]+)\]\([^)]*\)", r"\1", text.replace("\r", "\n")).split("\n"):
+        line = line.strip(" -\t")
+        if line and not line.lower().startswith(("summary", "description")):
+            return re.sub(r"\s+", " ", line)[:limit]
+    return None
+
+
+def _status_record(level: str, text: Any, since: Any, affected: list[str], feed: str) -> dict[str, Any]:
+    stamp = _parse_time(since)
+    return {"level": level, "text": _status_text(text), "since": _iso(stamp) if stamp else None,
+            "affected": sorted({n.strip()[:60] for n in affected if isinstance(n, str) and n.strip()})[:4], "feed": feed}
+
+
+def parse_statuspage_summary(payload: Any) -> dict[str, Any] | None:
+    root = _mapping(payload)
+    status = _mapping(root.get("status"))
+    if not status or not isinstance(root.get("components", []), list):
+        return None
+    level = _IMPACT_LEVEL.get(str(status.get("indicator")), "minor")
+    components = [_mapping(c) for c in root.get("components") or []]
+    broken = [c for c in components if _COMPONENT_LEVEL.get(str(c.get("status")), "minor") != "none" and not c.get("group")]
+    incidents = [_mapping(i) for i in root.get("incidents") or [] if _mapping(i).get("status") not in ("resolved", "postmortem")]
+    # The page's own indicator is the badge level (as CodexBar shows it); an open incident's name explains it.
+    top = max(incidents, key=lambda i: STATUS_LEVELS.index(_IMPACT_LEVEL.get(str(i.get("impact")), "minor")), default={})
+    if level == "none":
+        return _status_record("none", None, None, [], "statuspage")
+    text = top.get("name") or status.get("description")
+    return _status_record(level, text, top.get("created_at") or _mapping(root.get("page")).get("updated_at"),
+                          [str(c.get("name")) for c in broken], "statuspage")
+
+
+def parse_datadog_status(payload: Any) -> dict[str, Any] | None:
+    root = _mapping(payload)
+    if not isinstance(root.get("components"), list):
+        return None
+    leaves: list[dict[str, Any]] = []
+
+    def walk(items: list[Any]) -> None:
+        for raw in items:
+            item = _mapping(raw)
+            if isinstance(item.get("components"), list):
+                walk(item["components"])
+            else:
+                leaves.append(item)
+
+    walk(root["components"])
+    levels = [_COMPONENT_LEVEL.get(str(c.get("status")), "minor") for c in leaves]
+    active = [_mapping(i) for i in root.get("incidents") or [] if not _mapping(i).get("resolved")]
+    level = _worst(*levels, *("minor" for _ in active))
+    if level == "none":
+        return _status_record("none", None, None, [], "datadog")
+    top = active[0] if active else {}
+    text = top.get("title") or top.get("name") or (_status_text(top.get("description")) if top else None)
+    return _status_record(level, text or "Degraded service", top.get("publishedDate"),
+                          [str(c.get("name")) for c, lv in zip(leaves, levels) if lv != "none"], "datadog")
+
+
+def parse_opencode_status(payload: Any) -> dict[str, Any] | None:
+    root = _mapping(payload)
+    if not isinstance(root.get("status"), str) or not isinstance(root.get("components", []), list):
+        return None
+    level = _COMPONENT_LEVEL.get(root["status"], "minor")
+    if level == "none":
+        return _status_record("none", None, None, [], "opencode")
+    bad = [_mapping(c) for c in root.get("components") or [] if _COMPONENT_LEVEL.get(str(_mapping(c).get("status")), "minor") != "none"]
+    since = max((c.get("since") for c in bad if isinstance(c.get("since"), (int, float))), default=None)
+    reasons = sorted({str(c.get("reason")) for c in bad if c.get("reason") not in (None, "none")})
+    text = (", ".join(reasons)[:1].upper() + ", ".join(reasons)[1:]) if reasons else None
+    return _status_record(level, text, since / 1000 if since else None,
+                          [str(c.get("service")) for c in bad], "opencode")
+
+
+def parse_google_status(payload: Any, product: str = GOOGLE_GEMINI_PRODUCT) -> dict[str, Any] | None:
+    if not isinstance(payload, list):
+        return None
+    best: tuple[int, dict[str, Any], dict[str, Any]] | None = None
+    for raw in payload:
+        item = _mapping(raw)
+        products = item.get("currently_affected_products") or item.get("affected_products") or []
+        if item.get("end") or not any(_mapping(p).get("id") == product for p in products if isinstance(products, list)):
+            continue
+        update = _mapping(item.get("most_recent_update") or ((item.get("updates") or [{}])[-1:] or [{}])[0])
+        impact = str(update.get("status") or item.get("status_impact") or "").upper()
+        level = {"AVAILABLE": "none", "SERVICE_INFORMATION": "minor", "SERVICE_DISRUPTION": "major",
+                 "SERVICE_OUTAGE": "critical", "SERVICE_MAINTENANCE": "maintenance",
+                 "SCHEDULED_MAINTENANCE": "maintenance"}.get(impact) or \
+            {"low": "minor", "medium": "major", "high": "critical"}.get(str(item.get("severity")).lower(), "minor")
+        if best is None or STATUS_LEVELS.index(level) > best[0]:
+            best = (STATUS_LEVELS.index(level), item, update)
+    if best is None or best[0] == 0:
+        return _status_record("none", None, None, [], "google")
+    _, item, update = best
+    return _status_record(STATUS_LEVELS[best[0]], update.get("text") or item.get("external_desc"),
+                          update.get("when") or item.get("modified") or item.get("begin"), ["Gemini"], "google")
+
+
+STATUS_PARSERS = {"statuspage": parse_statuspage_summary, "datadog": parse_datadog_status,
+                  "opencode": parse_opencode_status, "google": parse_google_status}
+
+
+def fetch_provider_status(opener: Callable[..., Any] | None = None, now: dt.datetime | None = None) -> dict[str, Any]:
+    """{feed: record}; a feed that fails is left out so the cache keeps its last good record."""
+    results: dict[str, Any] = {}
+    headers = {"Accept": "application/json", "User-Agent": "crossfeed-orchestrator/1.0"}
+
+    def one(name: str) -> None:
+        kind, url = STATUS_FEEDS[name]
+        try:
+            status, body = _http_get(url, headers, 10, opener)
+            record = STATUS_PARSERS[kind](_json(body)) if status == 200 else None
+        except (OSError, ValueError, http.client.HTTPException, RecursionError):
+            record = None
+        if record:
+            results[name] = {**record, "checked_at": _iso(now or _now())}
+
+    threads = [threading.Thread(target=one, args=(name,), daemon=True) for name in STATUS_FEEDS]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(15)
+    return dict(results)
+
+
+def _write_provider_status(path: Path, opener: Callable[..., Any] | None = None) -> None:
+    try:
+        old = _mapping(json.loads(_owner_file(path))) if path.exists() else {}
+    except (OSError, ValueError, RecursionError):
+        old = {}
+    fresh = fetch_provider_status(opener)
+    if fresh:
+        _write_owner_json(path, {**old, **fresh})
+
+
+def provider_incident(pool: str, oracle: Any, state_dir: Path, now: dt.datetime, *, refresh: bool) -> dict[str, Any] | None:
+    """The cached incident for a pool's provider, refreshed in the background; None when unknown.
+
+    A record with level `none` is returned as such so callers can tell "checked, all clear" from
+    "never checked"; consumers hide the badge for `none`.
+    """
+    feed = STATUS_FEED_FOR.get(oracle) if isinstance(oracle, str) else None
+    feed = feed or STATUS_FEED_FOR.get(pool)
+    if not feed:
+        return None
+    cache = state_dir / "provider-status.json"
+    try:
+        saved = _mapping(json.loads(_owner_file(cache)))
+    except (OSError, ValueError, RecursionError):
+        saved = {}
+    record = _mapping(saved.get(feed))
+    stamp = _parse_time(record.get("checked_at"))
+    age = max(0, int((now - stamp).total_seconds())) if stamp else None
+    if refresh and (age is None or age >= STATUS_TTL_S):
+        _spawn_locked(cache, ["--status", str(cache.resolve())], state_dir)
+    if not record or stamp is None:
+        return None
+    return {**record, "age_s": age, "stale": age >= STATUS_TTL_S * 6}
+
+
+def _spawn_locked(cache: Path, args: list[str], state_dir: Path) -> None:
+    """One detached child per cache file; retries no faster than every five minutes."""
+    fd = None
+    try:
+        state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(cache.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not os.fstat(fd).st_size or time.time() - os.fstat(fd).st_mtime >= 300:
+            os.pwrite(fd, b"1", 0)
+            child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *args], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                                     pass_fds=(fd,))
+            threading.Thread(target=child.wait, daemon=True).start()
+    except OSError:
+        pass
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 # ---- Native CLI log cost (API list-price equivalents, not bills) -------------------------------
@@ -1268,7 +1748,7 @@ def display_extras(pool, config, snapshot, failure, state_dir, now, *, refresh):
 COST_TTL_S = 1800
 COST_LINE_LIMIT = 4_000_000
 COST_PRICING_URL = "https://models.dev/api.json"
-COST_ORACLES = {"codex": "codex", "codex-oauth": "codex", "claude": "claude"}
+COST_ORACLES = {"codex": "codex", "codex-oauth": "codex", "claude": "claude", "antigravity": "antigravity"}
 
 
 def _token_counts(usage, keys):
@@ -1451,6 +1931,317 @@ def local_usage_cost(provider, roots, models, now=None):
     return result
 
 
+# ---- Antigravity desktop history cost -------------------------------------------------------------
+# CodexBar v0.67.0, Sources/CodexBarCore/Providers/Antigravity/AntigravityLocalReader.swift (+
+# AntigravityProtoReader.swift, AntigravityLocalSQLite.swift): per-conversation SQLite files hold
+# `gen_metadata(idx, data)` protobuf rows with token usage; rows are deduplicated by (conversation,
+# idx) and response id, routing variants (-tiered, -low, -thinking) fall back to the base model's
+# public price. Read-only; no model is called and nothing is written back.
+AGY_COST_SUFFIXES = ("-tiered", "-low", "-thinking")
+AGY_ROW_LIMIT = 50_000
+AGY_BLOB_LIMIT = 16 * 1024 * 1024
+
+
+def _pb_fields(data: bytes):
+    """Yield (field, wire, value) over one message. Raises ValueError when it is malformed."""
+    pos, size = 0, len(data)
+
+    def varint():
+        nonlocal pos
+        result = 0
+        for shift in range(0, 70, 7):
+            if pos >= size:
+                raise ValueError("truncated")
+            byte = data[pos]
+            pos += 1
+            result |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                return result
+        raise ValueError("varint too long")
+
+    while pos < size:
+        tag = varint()
+        number, wire = tag >> 3, tag & 7
+        if number <= 0:
+            raise ValueError("bad field")
+        if wire == 0:
+            yield number, wire, varint()
+        elif wire == 2:
+            length = varint()
+            if length > size - pos:
+                raise ValueError("truncated")
+            yield number, wire, data[pos:pos + length]
+            pos += length
+        elif wire in (1, 5):
+            width = 8 if wire == 1 else 4
+            if width > size - pos:
+                raise ValueError("truncated")
+            yield number, wire, data[pos:pos + width]
+            pos += width
+        else:
+            raise ValueError("unsupported wire type")
+
+
+def _pb_text(value: Any) -> str | None:
+    if not isinstance(value, (bytes, bytearray)):
+        raise ValueError("not text")
+    text = bytes(value).decode("utf-8")
+    return text if text.strip() else None
+
+
+def _pb_timestamp(data: bytes) -> int | None:
+    seconds, nanos = None, 0
+    for number, wire, value in _pb_fields(data):
+        if number == 1 and wire == 0:
+            if not 0 < value <= 253_402_300_799:
+                raise ValueError("bad seconds")
+            seconds = value
+        elif number == 2 and wire == 0:
+            if value > 999_999_999:
+                raise ValueError("bad nanos")
+            nanos = value
+    return None if seconds is None else seconds * 1000 + nanos // 1_000_000
+
+
+def parse_antigravity_turn(blob: bytes) -> dict[str, Any] | None:
+    """One generation row: usage counters, model, label, timestamp (ms) and step UUID."""
+    turn: dict[str, Any] = {}
+    usage: dict[str, Any] = {}
+    found = False
+    try:
+        for number, wire, value in _pb_fields(blob):
+            if number == 4 and wire == 2:
+                turn["step"] = _pb_text(value)
+            elif number == 1 and wire == 2:
+                found = True
+                for chat_no, chat_wire, chat in _pb_fields(value):
+                    if chat_no == 4 and chat_wire == 2:
+                        for u_no, u_wire, u in _pb_fields(chat):
+                            key = {1: "system", 2: "new", 5: "read", 9: "output", 10: "reasoning"}.get(u_no)
+                            if key and u_wire == 0:
+                                if u >= 10**12:
+                                    raise ValueError("implausible count")
+                                usage[key] = u
+                            elif u_no == 11 and u_wire == 2:
+                                usage["response"] = _pb_text(u)
+                            elif u_no == 7 and u_wire == 2:
+                                usage["bot"] = _pb_text(u)
+                    elif chat_no == 9 and chat_wire == 2:
+                        for g_no, g_wire, g in _pb_fields(chat):
+                            if g_no == 4 and g_wire == 2:
+                                turn["ms"] = _pb_timestamp(g)
+                    elif chat_no == 19 and chat_wire == 2:
+                        turn["model"] = _pb_text(chat)
+                    elif chat_no == 21 and chat_wire == 2:
+                        turn["label"] = _pb_text(chat)
+    except (ValueError, UnicodeError):
+        return None
+    if not found or not usage:
+        return None
+    turn["usage"] = usage
+    return turn
+
+
+def _pb_step_metadata(blob: bytes) -> tuple[str | None, int | None, str | None]:
+    step, ms, bot = None, None, None
+    try:
+        for number, wire, value in _pb_fields(blob):
+            if number == 1 and wire == 2:
+                ms = _pb_timestamp(value)
+            elif number == 9 and wire == 2:
+                for sub, sub_wire, sub_value in _pb_fields(value):
+                    if sub == 7 and sub_wire == 2:
+                        bot = _pb_text(sub_value)
+            elif number == 12 and wire == 2:
+                step = _pb_text(value)
+    except (ValueError, UnicodeError):
+        return None, None, None
+    return step, ms, bot
+
+
+def _agy_cost_roots(home: Path | None = None) -> list[Path]:
+    base = Path(os.environ.get("GEMINI_CLI_HOME") or (home or Path.home()) / ".gemini")
+    app = base / "antigravity"
+    return [base / "antigravity-cli" / "conversations", app, app / "conversations"]
+
+
+def _agy_databases(roots: list[Path]) -> list[Path]:
+    found: dict[tuple[int, int], Path] = {}
+    for root in roots:
+        try:
+            entries = sorted(root.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            if path.suffix.lower() != ".db" or path.is_symlink():
+                continue
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid():
+                found.setdefault((info.st_dev, info.st_ino), path)
+    return list(found.values())
+
+
+def _agy_open(path: Path):
+    import sqlite3
+
+    last: Exception | None = None
+    for query in ("mode=ro", "mode=ro&immutable=1"):  # immutable ignores a WAL that has no sidecar
+        connection = None
+        try:
+            connection = sqlite3.connect(f"file:{path}?{query}", uri=True, timeout=1)
+            connection.execute("select count(*) from gen_metadata limit 1").fetchone()
+            return connection
+        except sqlite3.Error as error:
+            last = error
+            if connection is not None:
+                connection.close()
+    raise OSError("not a readable Antigravity history database") from last
+
+
+def _agy_rows(path: Path, since_ms: int) -> tuple[list[dict[str, Any]], bool]:
+    """Turns of one conversation database, newest window only. `complete` is False when rows were skipped."""
+    complete = True
+    connection = _agy_open(path)
+    try:
+        rows = connection.execute("select idx, data from gen_metadata order by idx limit ?", (AGY_ROW_LIMIT + 1,)).fetchall()
+        if len(rows) > AGY_ROW_LIMIT:
+            rows, complete = rows[:AGY_ROW_LIMIT], False
+        steps: dict[str, list[int]] = {}
+        turns, pending = [], []
+        for idx, blob in rows:
+            if not isinstance(blob, bytes) or not 0 < len(blob) <= AGY_BLOB_LIMIT:
+                complete = False
+                continue
+            turn = parse_antigravity_turn(blob)
+            if turn is None:
+                complete = False
+                continue
+            turn["row"] = idx
+            (turns if turn.get("ms") else pending).append(turn)
+        if pending:
+            by_uuid: dict[str, list[int]] = {}
+            by_bot: dict[str, list[tuple[str | None, int]]] = {}
+            try:
+                for blob, in connection.execute("select metadata from steps order by idx"):
+                    if isinstance(blob, bytes) and len(blob) <= AGY_BLOB_LIMIT:
+                        step, ms, bot = _pb_step_metadata(blob)
+                        if step and ms:
+                            by_uuid.setdefault(step, []).append(ms)
+                        if bot and ms:
+                            by_bot.setdefault(bot, []).append((step, ms))
+            except Exception:  # noqa: BLE001 - no steps table: the rows stay unrecovered
+                by_uuid, by_bot = {}, {}
+            uses = collections.Counter(t["usage"].get("bot") for t in turns + pending if t["usage"].get("bot"))
+            rank: dict[str, int] = {}
+            for turn in sorted(pending, key=lambda t: t["row"]):
+                step, bot = turn.get("step"), turn["usage"].get("bot")
+                offset = rank.get(step or "", 0)
+                rank[step or ""] = offset + 1
+                ms = None
+                if bot and bot in by_bot:
+                    # An identifier shared by two steps or two generations cannot date either one.
+                    matches = by_bot[bot]
+                    if len(matches) == 1 and uses[bot] == 1 and matches[0][0] in (None, step):
+                        ms = matches[0][1]
+                elif step and offset < len(by_uuid.get(step, ())):
+                    ms = by_uuid[step][offset]
+                if ms:
+                    turn["ms"] = ms
+                    turns.append(turn)
+                else:
+                    complete = False
+    finally:
+        connection.close()
+    return [turn for turn in turns if turn["ms"] >= since_ms], complete
+
+
+def local_antigravity_cost(models: dict[str, Any], roots: list[Path] | None = None,
+                           now: dt.datetime | None = None) -> dict[str, Any] | None:
+    now = now or _now()
+    today = now.astimezone().date()
+    start = today - dt.timedelta(days=29)
+    since_ms = int(dt.datetime.combine(start, dt.time()).timestamp() * 1000)
+    databases = _agy_databases(roots if roots is not None else _agy_cost_roots())
+    if not databases:
+        return None
+    deadline = time.monotonic() + 60
+    complete, seen_rows, seen_replies = True, set(), {}
+    events: list[tuple[str, dict[str, Any]]] = []
+    for path in databases:
+        if time.monotonic() > deadline:
+            complete = False
+            break
+        try:
+            turns, ok = _agy_rows(path, since_ms)
+        except (OSError, ValueError):
+            complete = False
+            continue
+        complete &= ok
+        session = path.stem
+        labels: dict[str, set[str]] = {}
+        for turn in turns:
+            if turn.get("label") and turn.get("model"):
+                labels.setdefault(turn["label"], set()).add(turn["model"])
+        for turn in turns:
+            if (session, turn["row"]) in seen_rows:
+                continue  # the same conversation copied into a second root
+            seen_rows.add((session, turn["row"]))
+            reply = turn["usage"].get("response")
+            if reply:
+                prior = seen_replies.get((session, reply))
+                if prior is not None:
+                    complete &= prior == (turn["usage"], turn["ms"])
+                    continue
+                seen_replies[(session, reply)] = (turn["usage"], turn["ms"])
+            known = labels.get(turn.get("label") or "", set())
+            turn["model"] = turn.get("model") or (next(iter(known)) if len(known) == 1 else None) or "unknown"
+            events.append((session, turn))
+    buckets = [[0, 0.0, 0, 0], [0, 0.0, 0, 0]]  # tokens, priced estimate, requests, unpriced requests
+    by_model: dict[str, list[float]] = {}
+    for _session, turn in events:
+        usage = turn["usage"]
+        stamp = dt.datetime.fromtimestamp(turn["ms"] / 1000, dt.timezone.utc).astimezone()
+        day = stamp.date()
+        if not start <= day <= today:
+            continue
+        inp = usage.get("system", 0) + usage.get("new", 0)
+        out, read, reasoning = usage.get("output", 0), usage.get("read", 0), usage.get("reasoning", 0)
+        tokens = inp + out + read + reasoning
+        model = turn["model"]
+        rates = None
+        for candidate in (model, *(model[:-len(s)] for s in AGY_COST_SUFFIXES if model.lower().endswith(s))):
+            rates = _usage_rates(models, candidate, inp + read, "antigravity")
+            if rates:
+                break
+        cost = None
+        if rates and (not read or rates[2] is not None):
+            cost = (inp * rates[0] + (out + reasoning) * rates[1] + read * (rates[2] or 0)) / 1_000_000
+        row = by_model.setdefault(model, [0, 0.0, 0, 0])
+        for bucket in ((*buckets,) if day == today else (buckets[1],)):
+            bucket[0] += tokens
+            bucket[1] += cost or 0.0
+            bucket[2] += 1
+            bucket[3] += cost is None
+        row[0] += tokens
+        row[1] += cost or 0.0
+        row[2] += 1
+        row[3] += cost is None
+    result: dict[str, Any] = {"source": "antigravity-desktop-history", "observed_at": _iso(now),
+                              "estimate": "API list price", "partial": not complete}
+    for prefix, (tokens, cost, requests, unpriced) in zip(("today", "last_30d"), buckets):
+        result[f"{prefix}_tokens"] = tokens
+        result[f"{prefix}_usd"] = round(cost, 8) if requests > unpriced or not requests else None
+        result[f"{prefix}_requests"] = requests
+        result[f"{prefix}_unpriced_requests"] = unpriced
+    result["by_model"] = [{"model": name, "tokens": int(row[0]), "usd": round(row[1], 8) if row[2] > row[3] else None,
+                           "requests": int(row[2])}
+                          for name, row in sorted(by_model.items(), key=lambda item: (-item[1][0], item[0]))[:8]]
+    return result
+
+
 def _write_owner_json(path, value):
     with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
         temp = Path(handle.name)
@@ -1471,8 +2262,8 @@ def _cached_list_prices(provider, path):
                                                                   "User-Agent": "crossfeed-orchestrator/1.0"})
         with urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(request, timeout=8) as response:
             pricing = _mapping(json.loads(response.read(12_000_000)))
-        vendor = "openai" if provider == "codex" else "anthropic"
-        updated = {key: {"cost": value["cost"]} for key, value in
+        vendors = {"codex": ("openai",), "antigravity": ("google", "anthropic", "openai")}.get(provider, ("anthropic",))
+        updated = {key: {"cost": value["cost"]} for vendor in vendors for key, value in
                    _mapping(_mapping(pricing.get(vendor)).get("models")).items() if _mapping(value).get("cost")}
         if updated:
             _write_owner_json(path, updated)
@@ -1485,7 +2276,8 @@ def _cached_list_prices(provider, path):
 def _write_usage_cost(provider, cache):
     try:
         models = _cached_list_prices(provider, cache.with_name(f"{provider}-cli-list-prices.json"))
-        result = local_usage_cost(provider, _local_cost_roots(provider), models)
+        result = (local_antigravity_cost(models) if provider == "antigravity"
+                  else local_usage_cost(provider, _local_cost_roots(provider), models))
         if result is None:
             return
         if result["last_30d_usd"] is None:
@@ -1540,6 +2332,11 @@ OBSERVERS: dict[str, Callable[..., dict[str, Any]]] = {
     "copilot": observe_copilot,
     "openrouter": observe_openrouter,
 }
+
+
+if __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--status":
+    os.nice(10)
+    _write_provider_status(Path(sys.argv[2]))
 
 
 if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--local-cost" and sys.argv[2] in COST_ORACLES.values():

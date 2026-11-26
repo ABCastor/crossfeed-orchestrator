@@ -101,6 +101,9 @@ public struct Pool: Decodable, Equatable {
     public var statusURL: String?
     public var usageCost: UsageCost?
     public var perModel: [ModelSpend]
+    public var incident: Incident?
+    public var billing: Billing?
+    public var modelQuota: [ModelQuota]
     public var state: String?
     public var measured: Bool
     public var full: Bool
@@ -118,6 +121,7 @@ public struct Pool: Decodable, Equatable {
         case resetAt = "reset_at", pace, limits, gaugeError = "gauge_error", staleAgeS = "stale_age_s"
         case levelControl = "level_control", models, archivedModels = "archived"
         case credits, statusURL = "status_url", usageCost = "usage_cost", perModel = "per_model"
+        case incident, billing, modelQuota = "model_quota"
     }
 
     public init(from decoder: Decoder) throws {
@@ -134,6 +138,9 @@ public struct Pool: Decodable, Equatable {
         statusURL = try? c.decode(String.self, forKey: .statusURL)
         usageCost = try? c.decode(UsageCost.self, forKey: .usageCost)
         perModel = (try? c.decode([ModelSpend].self, forKey: .perModel)) ?? []
+        incident = try? c.decodeIfPresent(Incident.self, forKey: .incident)
+        billing = try? c.decodeIfPresent(Billing.self, forKey: .billing)
+        modelQuota = (try? c.decode([ModelQuota].self, forKey: .modelQuota)) ?? []
         state = try? c.decodeIfPresent(String.self, forKey: .state)
         measured = (try? c.decode(Bool.self, forKey: .measured)) ?? false
         full = (try? c.decode(Bool.self, forKey: .full)) ?? false

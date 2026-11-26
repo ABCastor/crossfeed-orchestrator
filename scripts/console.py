@@ -19,6 +19,7 @@ Standard library only. The page renders from `fleetctl.fleet_overview`, the same
 
 from __future__ import annotations
 
+import datetime as dt
 import fcntl
 import hashlib
 import hmac
@@ -221,6 +222,20 @@ class Console:
         validate_order(order)
         with fleetctl.locked_runtime(self.state_dir) as runtime:
             runtime['console_order'] = order
+
+    def save_secret(self, name: str, value: str, *, allow_file: bool = False) -> str:
+        where = fleetctl.secret_store.Store().put(name, value, allow_file=allow_file)
+        # The next readings use the new key; a failed read stays a stated gap, not a console error.
+        try:
+            roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
+            pools = [pool for pool in fleetctl.quota_sources(roster)
+                     if ((roster['quota_pools'].get(pool) or {}).get('quota_refresh') or {}).get('oracle') == 'openrouter']
+            with self._refresh_lock:
+                fleetctl.refresh_stale_pools(self.state_dir, pools, roster=roster, force=True)
+        except (OSError, fleetctl.FleetError):
+            pass
+        return {'keychain': 'the macOS Keychain', 'secret-service': 'the system keyring',
+                'file': 'a mode-600 file'}.get(where, where)
 
     def refresh_now(self) -> dict[str, str]:
         roster = fleetctl.read_overlay(self.overlay_path, self.state_dir)
@@ -888,11 +903,7 @@ def _model_id(provider: str, model: str) -> str:
 # current models are listed with one line each on what they are best for and a switch that says On
 # or Off, older models folded away. The mark follows the page's two colours: teal is the machine
 # deciding (everything on), terracotta is the human's hand (something switched off, as on Forced).
-NAME_WORDS = {
-    "gpt": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "minimax": "MiniMax", "mimo": "MiMo",
-    "qwen": "Qwen", "kimi": "Kimi", "grok": "Grok", "gemini": "Gemini", "claude": "Claude", "oss": "OSS",
-    "openrouter": "OpenRouter", "github": "GitHub", "copilot": "Copilot",
-}
+NAME_WORDS = fleetctl.NAME_WORDS
 ROLE_WORDS = {
     "default": "everyday tasks", "hard-reasoning": "hard reasoning", "implementation": "building",
     "review": "reviews", "debug": "debugging", "repo-map": "repo maps", "long-context": "long documents",
@@ -901,26 +912,7 @@ ROLE_WORDS = {
 }
 
 
-def _pretty(key: str) -> str:
-    """deepseek-v4-flash -> DeepSeek V4 Flash; used when the roster has no card with a name."""
-    words: list[str] = []
-    for part in key.split("-"):
-        low = part.casefold()
-        if part.isdigit() and words and re.fullmatch(r"\d+(\.\d+)*", words[-1]):
-            words[-1] += "." + part   # claude-opus-4-6 -> Claude Opus 4.6
-        elif words == ["GPT"] and part[:1].isdigit():
-            words[-1] += "-" + part   # gpt-6-sol -> GPT-6 Sol, as OpenAI writes it
-        elif low in NAME_WORDS:
-            words.append(NAME_WORDS[low])
-        elif re.fullmatch(r"[a-z]\d.*", low):
-            words.append(part[0].upper() + part[1:])
-        elif re.match(r"qwen\d", low):
-            words.append("Qwen " + part[4:])
-        elif low.isalpha():
-            words.append(part.capitalize())
-        else:
-            words.append(part)
-    return " ".join(words)
+_pretty = fleetctl.pretty_model_name
 
 
 def _name(model: dict[str, Any] | None, key: str | None = None) -> str:
@@ -1376,7 +1368,8 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         actor, attribution = _level_attribution(p if p.get('set_by') else p.get('control'), overview['generated_at'])
         pools.append({"pool": p["pool"], "subscription": p.get('subscription'), "level": p["level"],
                       'set_by': p.get('set_by'), 'set_at': p.get('set_at'), 'archived': p.get('archived', []),
-                      **{key: p[key] for key in ('credits', 'spend_credits', 'status_url', 'usage_cost', 'per_model', 'per_model_error') if key in p},
+                      **{key: p[key] for key in ('credits', 'spend_credits', 'status_url', 'usage_cost', 'per_model', 'per_model_error',
+                                                 'incident', 'billing', 'billing_error', 'model_quota') if key in p},
                       'wallet_extras': _plan_extras(p, show_status=p['pool'] not in AGY_ALLOWANCES,
                                                    empty=p['pool'] not in AGY_ALLOWANCES),
                       "means": _level_meaning(p["level"]),
@@ -2110,6 +2103,25 @@ STATUS_PAGES = {
 }
 
 
+INCIDENT_WORDS = {'maintenance': 'Maintenance', 'minor': 'Degraded', 'major': 'Major incident', 'critical': 'Outage'}
+SECRET_FORM = (
+    '<form class="secret-form" method="post" action="/secret" autocomplete="off">'
+    '<input type="hidden" name="name" value="openrouter-management">'
+    '<label for="secret-openrouter">OpenRouter management key</label>'
+    '<small>For spend by model. It needs Activity read access and is never shown again.</small>'
+    '<span class="secret-row"><input id="secret-openrouter" type="password" name="value" required minlength="8" maxlength="512" '
+    'autocomplete="off" spellcheck="false" placeholder="Paste key"><button type="submit">Save key</button></span>'
+    '<p class="secret-result" role="status"></p></form>')
+
+
+def date_day(value):
+    try:
+        day = dt.date.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    return f'{day.day} {day:%b}'
+
+
 def _plan_extras(pool, *, show_status=True, empty=True):
     esc = html.escape
     status = _benchmark_url(pool.get('status_url') or STATUS_PAGES.get(pool['pool'])) if show_status else None
@@ -2131,7 +2143,55 @@ def _plan_extras(pool, *, show_status=True, empty=True):
             return '—'
         return '<span class="wb-number">' + (f'${value:,.2f}' if not 0 < value < .01 else f'${value:.4f}') + '</span>'
 
-    pieces = []
+    pieces, folds = [], []   # folds (the <details> lists) go after the plain facts they expand
+    incident = pool.get('incident') or {}
+
+    def short(value):
+        try:
+            when = fleetctl.parse_iso(value).astimezone()
+            return f'{when.day} {when:%b, %H:%M}'
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    # Hidden when absent or clear: an all-clear badge is noise on a page about quota.
+    if show_status and incident.get('level') in INCIDENT_WORDS:
+        parts = [esc(incident.get('text') or 'See the status page for details')]
+        if incident.get('affected'):
+            parts.append(esc(', '.join(incident['affected'])))
+        if short(incident.get('since')):
+            parts.append(f'since {esc(short(incident["since"]))}')
+        if status:
+            parts.append(f'<a href="{esc(status)}" rel="noreferrer">Status page</a>')
+        pieces.append(f'<p class="incident lvl-{esc(incident["level"])}" role="status">'
+                      f'<b>{INCIDENT_WORDS[incident["level"]]}</b> · {" · ".join(parts)}</p>')
+        status = None
+    billing = pool.get('billing') or {}
+    if billing.get('active_until') or billing.get('renews_at'):
+        plan = esc(' · '.join(str(billing[key]).capitalize() for key in ('plan', 'period') if billing.get(key)) or 'Subscription')
+        if billing.get('renews_at'):
+            when = f'renews <b>{esc(date(billing["renews_at"]))}</b>'
+        else:
+            when = f'ends <b>{esc(date(billing.get("active_until")))}</b>' + ('' if billing.get('will_renew') is not False else ', not renewing')
+        pieces.append(f'<p>{plan}: {when}</p>')
+    for grant in billing.get('grants') or []:
+        left, total = _number(grant.get('credits')), _number(grant.get('granted'))
+        amount = f'{left:,.0f}' + (f' of {total:,.0f}' if total else '') if left is not None else '—'
+        pieces.append(f'<p>Funded credits <b>{esc(amount)}</b> left<br>Expire {esc(date(grant.get("expires_at")))}</p>')
+    if _number(billing.get('credits_30d')) is not None:
+        pieces.append(f'<p>Credits used: <b>{billing["credits_today"]:,.0f}</b> today · '
+                      f'<b>{billing["credits_7d"]:,.0f}</b> in 7 days · <b>{billing["credits_30d"]:,.0f}</b> in 30 days</p>')
+        days = [row for row in billing.get('credit_history') or [] if _number(row.get('credits')) is not None]
+        peak = max([row['credits'] for row in days] + [0])
+        if days and peak > 0:
+            bars = ''.join(f'<li><span class="nm">{esc(date_day(row["date"]))}</span>'
+                           f'<i style="--w:{row["credits"] / peak * 100:.1f}%"></i>'
+                           f'<span class="num">{row["credits"]:,.0f}</span></li>' for row in reversed(days[-14:]))
+            folds.append(f'<details><summary>Credit use by day · last 14 days</summary><ul class="daily">{bars}</ul></details>')
+    for quota in pool.get('model_quota') or []:
+        shared = f' · shares {esc(quota["shared_with"])}' if quota.get('shared_with') else ''
+        reset = f' · resets {esc(short(quota.get("reset_at")) or "unknown")}' if quota.get('reset_at') else ''
+        used = _number(quota.get('used_percent'))
+        pieces.append(f'<p>{esc(quota.get("label") or "Models")} <b>{"—" if used is None else f"{used:.0f}%"} used</b>{reset}{shared}</p>')
     for field, label in [('credits', 'Credit balance'), ('spend_credits', 'Spend credit balance')]:
         credits = pool.get(field) or {}
         balance = credits.get('balance')
@@ -2152,13 +2212,29 @@ def _plan_extras(pool, *, show_status=True, empty=True):
     rows = ''.join(f'<li><span class="nm">{esc(str(row.get("model") or "Unknown model"))}</span> '
                    f'{cash(row.get("usd_30d"))} · {esc(str(row.get("requests", "—")))} requests</li>'
                    for row in per_model)
+    local = ''.join(f'<li><span class="nm">{esc(str(row.get("model") or "Unknown model"))}</span> '
+                    f'{cash(row.get("usd"))} · {_number(row.get("tokens")) or 0:,.0f} tokens</li>'
+                    for row in usage.get('by_model') or [])
     if rows:
-        pieces.append(f'<details><summary>Spend by model · last 30 days</summary><ul>{rows}</ul></details>')
+        folds.append(f'<details><summary>Spend by model · last 30 days</summary><ul>{rows}</ul></details>')
+    elif local:
+        folds.append(f'<details><summary>Cost by model · last 30 days</summary><ul>{local}</ul></details>')
     elif pool.get('per_model_error'):
-        pieces.append('<p>Spend by model is not available for this connection.</p>')
+        if 'management key' in pool['per_model_error']:
+            pieces.append(SECRET_FORM)
+        else:
+            pieces.append('<p>Spend by model is not available for this connection.</p>')
+    pieces += folds
     if status:
         pieces.append(f'<a href="{esc(status)}" rel="noreferrer">Status page</a>')
     return ''.join(pieces)
+
+
+def _group_extras(group):
+    """One card for a subscription's pools: the plan-level facts come from whichever member carries them."""
+    first = lambda key: next((p[key] for p in group if p.get(key)), None)
+    return {'pool': group[0]['pool'], 'status_url': group[0].get('status_url'),
+            **{key: first(key) for key in ('usage_cost', 'incident', 'billing') if first(key)}}
 
 
 def _wallet(overview, token, workbench, order):
@@ -2231,9 +2307,10 @@ def _wallet(overview, token, workbench, order):
             f'data-pool="antigravity" data-pool-members="{members}" data-search-label="Antigravity Google AI Pro" tabindex="-1">'
             '<div class="wb-head"><h2>Google AI Pro</h2></div><small class="wb-plan">Antigravity</small>'
             '<p class="wb-error" role="status"></p>' + policy +
-            f'<div class="wallet-extras agy-extras">{_plan_extras({"pool":group[0]["pool"], "status_url":group[0].get("status_url")}, empty=not any(p.get("usage_cost") for p in group))}</div>'
+            f'<div class="wallet-extras agy-extras">{_plan_extras(_group_extras(group), empty=not any(p.get("usage_cost") for p in group))}</div>'
             '<div class="wb-allowances" id="antigravity-allowances">'
-            + ''.join(allowance_row(p, AGY_ALLOWANCES[p['pool']]) for p in group) + '</div></article>')
+            + ''.join(allowance_row({**p, 'usage_cost': None, 'billing': None, 'incident': None}, AGY_ALLOWANCES[p['pool']])
+                      for p in group) + '</div></article>')
 
     by_pool = {p['pool']: p for p in overview['pools']}
     agy = [by_pool[key] for key in AGY_ALLOWANCES if key in by_pool]
@@ -2662,7 +2739,8 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 return
             path = urllib.parse.urlsplit(self.path).path
             if path not in {'/settings/pro', '/settings/subscriptions', '/level', '/preference', '/refresh',
-                            '/model', '/model-archive', '/benchmark-link', '/order', '/provider/probe', '/provider/add', '/provider/remove'}:
+                            '/model', '/model-archive', '/benchmark-link', '/order', '/provider/probe', '/provider/add', '/provider/remove',
+                            '/secret'}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             try:
@@ -2678,6 +2756,17 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 return
             pool = fields.get("pool", [""])[0]
             level = fields.get('level', [''])[0]
+            if path == '/secret':
+                # The value goes to the secret store and is never echoed, logged or put in a redirect.
+                try:
+                    where = console.save_secret(fields.get('name', [''])[0], fields.get('value', [''])[0],
+                                                allow_file=fields.get('file', [''])[0] == '1')
+                except fleetctl.secret_store.SecretError as error:
+                    self._send(400, json.dumps({'error': str(error)}).encode(), 'application/json; charset=utf-8')
+                else:
+                    self._send(200, json.dumps({'message': f'Saved to {where}. Reading spend by model now.'}).encode(),
+                               'application/json; charset=utf-8')
+                return
             if path == '/benchmark-link':
                 model = fields.get('model', [''])[0]
                 try:

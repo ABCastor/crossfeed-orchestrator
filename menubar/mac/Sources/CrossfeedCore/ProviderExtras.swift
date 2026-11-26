@@ -13,17 +13,100 @@ public struct Credits: Decodable, Equatable {
     }
 }
 
+public struct CostModel: Decodable, Equatable {
+    public let model: String
+    public let usd: Double?
+    public let tokens: Int64?
+}
+
 public struct UsageCost: Decodable, Equatable {
     public let todayUSD: Double?
     public let last30DaysUSD: Double?
     public let todayTokens: Int64?
     public let last30DaysTokens: Int64?
     public let source: String?
+    /// Desktop-history cost by model (Antigravity); absent for providers that report none.
+    public let byModel: [CostModel]
 
     enum CodingKeys: String, CodingKey {
         case todayUSD = "today_usd", last30DaysUSD = "last_30d_usd", todayTokens = "today_tokens"
-        case last30DaysTokens = "last_30d_tokens", source
+        case last30DaysTokens = "last_30d_tokens", source, byModel = "by_model"
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        todayUSD = try? c.decodeIfPresent(Double.self, forKey: .todayUSD)
+        last30DaysUSD = try? c.decodeIfPresent(Double.self, forKey: .last30DaysUSD)
+        todayTokens = try? c.decodeIfPresent(Int64.self, forKey: .todayTokens)
+        last30DaysTokens = try? c.decodeIfPresent(Int64.self, forKey: .last30DaysTokens)
+        source = try? c.decodeIfPresent(String.self, forKey: .source)
+        byModel = (try? c.decode([CostModel].self, forKey: .byModel)) ?? []
+    }
+}
+
+/// A provider incident from its public status feed (statuspage JSON, Google Workspace incidents, ...).
+public struct Incident: Decodable, Equatable {
+    public let level: String
+    public let text: String?
+    public let affected: [String]
+    public let since: String?
+
+    enum CodingKeys: String, CodingKey { case level, text, affected, since }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        level = try c.decode(String.self, forKey: .level)
+        text = try? c.decodeIfPresent(String.self, forKey: .text)
+        affected = (try? c.decode([String].self, forKey: .affected)) ?? []
+        since = try? c.decodeIfPresent(String.self, forKey: .since)
+    }
+}
+
+public struct BillingGrant: Decodable, Equatable {
+    public let credits: Double?
+    public let granted: Double?
+    public let expiresAt: String?
+    enum CodingKeys: String, CodingKey { case credits, granted, expiresAt = "expires_at" }
+}
+
+/// Codex's paid period and credit history, read with the Codex CLI's own sign-in.
+public struct Billing: Decodable, Equatable {
+    public let plan: String?
+    public let period: String?
+    public let activeUntil: String?
+    public let renewsAt: String?
+    public let willRenew: Bool?
+    public let grants: [BillingGrant]
+    public let creditsToday: Double?
+    public let credits7d: Double?
+    public let credits30d: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case plan, period, grants, activeUntil = "active_until", renewsAt = "renews_at", willRenew = "will_renew"
+        case creditsToday = "credits_today", credits7d = "credits_7d", credits30d = "credits_30d"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        plan = try? c.decodeIfPresent(String.self, forKey: .plan)
+        period = try? c.decodeIfPresent(String.self, forKey: .period)
+        activeUntil = try? c.decodeIfPresent(String.self, forKey: .activeUntil)
+        renewsAt = try? c.decodeIfPresent(String.self, forKey: .renewsAt)
+        willRenew = try? c.decodeIfPresent(Bool.self, forKey: .willRenew)
+        grants = (try? c.decode([BillingGrant].self, forKey: .grants)) ?? []
+        creditsToday = try? c.decodeIfPresent(Double.self, forKey: .creditsToday)
+        credits7d = try? c.decodeIfPresent(Double.self, forKey: .credits7d)
+        credits30d = try? c.decodeIfPresent(Double.self, forKey: .credits30d)
+    }
+}
+
+/// Per-model quota from the provider (Argon models share the Gemini 5-hour pool).
+public struct ModelQuota: Decodable, Equatable {
+    public let label: String
+    public let usedPercent: Double?
+    public let resetAt: String?
+    public let sharedWith: String?
+    enum CodingKeys: String, CodingKey { case label, usedPercent = "used_percent", resetAt = "reset_at", sharedWith = "shared_with" }
 }
 
 public struct ModelSpend: Decodable, Equatable {
@@ -39,14 +122,30 @@ public struct ExtraRow: Equatable {
     public let detail: String
 }
 
+public struct IncidentLine: Equatable {
+    public let level: String
+    public let title: String
+    public let detail: String
+    public var isSevere: Bool { level == "major" || level == "critical" }
+}
+
 public struct ProviderExtras: Equatable {
     public let creditTitle: String
     public let credits: [String]
     public let usage: [ExtraRow]
     public let perModel: [ExtraRow]
     public let status: URL?
+    /// Nil unless the provider's status feed reports something other than all clear.
+    public let incident: IncidentLine?
+    public let billing: [String]
+    public let modelQuota: [ExtraRow]
+    public let costByModel: [ExtraRow]
 
-    init(pool: Pool) {
+    private static let incidentTitles = ["maintenance": "Maintenance", "minor": "Degraded", "major": "Major incident", "critical": "Outage"]
+
+    init(pool: Pool) { self.init(pool: pool, showIncident: true) }
+
+    init(pool: Pool, showIncident: Bool) {
         let date = Date.FormatStyle().month(.abbreviated).day().year()
         if let credits = pool.credits {
             if credits.kind == "extra_usage" { creditTitle = "Extra usage remaining" }
@@ -68,6 +167,42 @@ public struct ProviderExtras: Equatable {
         let cost = pool.usageCost
         usage = [Self.row("Today", cost?.todayUSD, cost?.todayTokens, "tokens"),
                  Self.row("Last 30 days", cost?.last30DaysUSD, cost?.last30DaysTokens, "tokens")].compactMap { $0 }
+        costByModel = (cost?.byModel ?? []).compactMap { Self.row($0.model, $0.usd, $0.tokens, "tokens") }
+        if showIncident, let incident = pool.incident, let title = Self.incidentTitles[incident.level] {
+            let when = incident.since.flatMap(Presenter.controlDate).map { "since \($0.formatted(Date.FormatStyle().month(.abbreviated).day().hour().minute()))" }
+            let parts = [incident.text, incident.affected.isEmpty ? nil : incident.affected.joined(separator: ", "), when]
+            self.incident = IncidentLine(level: incident.level, title: title,
+                                         detail: parts.compactMap { $0 }.joined(separator: " · "))
+        } else {
+            incident = nil
+        }
+        var lines: [String] = []
+        if let billing = pool.billing {
+            let plan = [billing.plan, billing.period].compactMap { $0?.capitalized }.joined(separator: " · ")
+            if let renews = billing.renewsAt.flatMap(Presenter.controlDate) {
+                lines.append("\(plan.isEmpty ? "Subscription" : plan) renews \(renews.formatted(date))")
+            } else if let until = billing.activeUntil.flatMap(Presenter.controlDate) {
+                lines.append("\(plan.isEmpty ? "Subscription" : plan) ends \(until.formatted(date))" + (billing.willRenew == false ? ", not renewing" : ""))
+            }
+            for grant in billing.grants {
+                guard let left = grant.credits else { continue }
+                let of = grant.granted.map { " of \($0.formatted(.number.precision(.fractionLength(0))))" } ?? ""
+                let expires = grant.expiresAt.flatMap(Presenter.controlDate).map { ", expire \($0.formatted(date))" } ?? ""
+                lines.append("Funded credits \(left.formatted(.number.precision(.fractionLength(0))))\(of) left\(expires)")
+            }
+            if let today = billing.creditsToday, let week = billing.credits7d, let month = billing.credits30d {
+                let n = { (v: Double) in v.formatted(.number.precision(.fractionLength(0))) }
+                lines.append("Credits used \(n(today)) today · \(n(week)) in 7 days · \(n(month)) in 30 days")
+            }
+        }
+        billing = lines
+        modelQuota = pool.modelQuota.compactMap { quota in
+            guard let used = quota.usedPercent else { return nil }
+            let reset = quota.resetAt.flatMap(Presenter.controlDate).map { "resets \($0.formatted(Date.FormatStyle().month(.abbreviated).day().hour().minute()))" }
+            let shared = quota.sharedWith.map { "shares \($0)" }
+            return ExtraRow(label: quota.label,
+                            detail: ([used.formatted(.number.precision(.fractionLength(0))) + "% used"] + [reset, shared].compactMap { $0 }).joined(separator: " · "))
+        }
         let hidden = Set((pool.archivedModels + pool.models.filter(\.archived)).flatMap { [$0.id ?? $0.name, $0.name] })
         perModel = pool.perModel.filter { !hidden.contains($0.model) }.sorted {
             let lhs = $0.usd30Days ?? -.infinity, rhs = $1.usd30Days ?? -.infinity
