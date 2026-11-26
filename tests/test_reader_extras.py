@@ -65,7 +65,8 @@ class ReaderExtras(unittest.TestCase):
             if request.full_url.endswith("/activity"):
                 return Response('{}', 403)
             return Response('{"data":{"total_credits":1,"total_usage":0,"usage_daily":0}}')
-        with patch.object(native, "_owner_file", return_value=TOKEN.encode()):
+        with patch.object(native, "_owner_file", return_value=TOKEN.encode()), \
+                patch.object(native, "_management_key", return_value=None):
             snapshot = native.observe_openrouter({"activity": True}, opener=opener)
         self.assertTrue(snapshot["available"])
         self.assertIn("management key", snapshot["per_model_error"])

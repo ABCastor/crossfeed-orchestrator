@@ -5355,6 +5355,46 @@ def model_overview(roster: dict[str, Any], runtime: dict[str, Any],
     return sorted(models.values(), key=lambda model: model["provider"].casefold())
 
 
+NAME_WORDS = {
+    "gpt": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "minimax": "MiniMax", "mimo": "MiMo",
+    "qwen": "Qwen", "kimi": "Kimi", "grok": "Grok", "gemini": "Gemini", "claude": "Claude", "oss": "OSS",
+    "openrouter": "OpenRouter", "github": "GitHub", "copilot": "Copilot",
+}
+CHAT_LEVELS = {"instant": "Instant", "medium": "Medium", "high": "High", "xhigh": "Extra High", "pro": "Pro"}
+
+
+def pretty_model_name(key: str) -> str:
+    """deepseek-v4-flash -> DeepSeek V4 Flash; used when the roster has no card with a name."""
+    words: list[str] = []
+    for part in key.split("-"):
+        low = part.casefold()
+        if part.isdigit() and words and re.fullmatch(r"\d+(\.\d+)*", words[-1]):
+            words[-1] += "." + part   # claude-opus-4-6 -> Claude Opus 4.6
+        elif words == ["GPT"] and part[:1].isdigit():
+            words[-1] += "-" + part   # gpt-6-sol -> GPT-6 Sol, as OpenAI writes it
+        elif low in NAME_WORDS:
+            words.append(NAME_WORDS[low])
+        elif re.fullmatch(r"[a-z]\d.*", low):
+            words.append(part[0].upper() + part[1:])
+        elif re.match(r"qwen\d", low):
+            words.append("Qwen " + part[4:])
+        elif re.fullmatch(r"[a-z]{2,4}\d+(\.\d+)*", low):
+            words.append(part[0].upper() + part[1:])   # hy3 -> Hy3, step-5 stays 5
+        elif low.isalpha():
+            words.append(part.capitalize())
+        else:
+            words.append(part)
+    return " ".join(words)
+
+
+def chat_row_name(model: dict[str, Any] | None) -> str | None:
+    """Crossfeed Chat's own words for a picker row: `GPT-6 · High`."""
+    for lane in (model or {}).get("lanes") or []:
+        if lane.get("harness") == "chatgpt-chat" and lane.get("worker_row") and lane.get("worker_level"):
+            return f'{lane["worker_row"]} · {CHAT_LEVELS.get(lane["worker_level"], pretty_model_name(lane["worker_level"]))}'
+    return None
+
+
 def model_family(roster: dict, key: str) -> str:
     card = model_cards(roster).get(key, {})
     return card.get("family") or model_line(key, card)[0] or key
@@ -6092,6 +6132,16 @@ def show_usage(
                 print(f"  {credit['balance']:g} {credit['unit']} ({credit['source']}{', ' + dates if dates else ''})")
         if info.get("per_model_error"):
             print(f"  per-model spend unavailable: {info['per_model_error']}")
+        if (incident := info.get("incident")) and incident.get("level") not in (None, "none"):
+            print(f"  incident ({incident['level']}): {incident.get('text') or 'see status page'}")
+        if billing := info.get("billing"):
+            renew = (f"renews {billing['renews_at']}" if billing.get("renews_at")
+                     else f"ends {billing['active_until']}" if billing.get("active_until") else "no period date")
+            print(f"  subscription {billing.get('plan', '?')} {billing.get('period', '')}: {renew}"
+                  + (f"; {billing['credits_30d']:g} credits used in 30 days" if "credits_30d" in billing else ""))
+        for quota in info.get("model_quota") or []:
+            shared = f", shares {quota['shared_with']}" if quota.get("shared_with") else ""
+            print(f"  {quota['label']}: {quota['used_percent']:g}% used, resets {quota.get('reset_at', 'unknown')}{shared}")
     for pool, info in metered_pools.items():
         print(
             f"{pool} (metered): {info['admission']} — "
@@ -6572,22 +6622,27 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
     payload = menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
     payload["subscriptions"] = overview.get("subscriptions", [])
     pools = {pool["pool"]: pool for pool in overview["pools"]}
-    names = {model["model"]: (model.get("card") or {}).get("name") for model in overview.get("models", [])}
+    by_model = {model["model"]: model for model in overview.get("models", [])}
+    names = {key: (model.get("card") or {}).get("name") for key, model in by_model.items()}
     for row in payload["pools"]:
         pool = pools[row["pool"]]
         row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "usage_cost", "per_model",
                                                "per_model_error", "account_usage", "reading_age_s", "reading_source",
-                                               "reading_observed_at", "reading_stale", "last_observed_windows")
+                                               "reading_observed_at", "reading_stale", "last_observed_windows",
+                                               "incident", "billing", "billing_error", "model_quota")
                     if key in pool})
         record = pool.get("control") or {}
         # Glance needs attribution, not free-form reasons, ceilings or history.
         row["level_control"] = {key: record[key] for key in ("actor", "when") if key in record} or None
         row.update(subscription=pool.get("subscription"), **control_attribution(record))
-        row["models"] = [{"name": option.get("name") or names.get(option["model"]) or option["model"],
+        row["models"] = [{"name": ("ChatGPT media" if option["model"] == "chatgpt:media-unattended" else None)
+                                  or (chat_row_name(by_model.get(option["model"])) if row["pool"] == "chatgpt-work" else None)
+                                  or names.get(option["model"]) or pretty_model_name(option["model"]),
                           "family": option.get("family"), "typical_cost_usd": option.get("typical_cost_usd"),
                           "archived": False} for option in pool.get("options", []) if option.get("current")]
         row["archived"] = [{key: option[key] for key in ("model", "name", "family", "typical_cost_usd",
                                                         "archived", "set_by", "set_at") if key in option}
+                           | {"name": names.get(option["model"]) or pretty_model_name(option["model"])}
                            for option in pool.get("archived", [])]
     return payload
 
@@ -6885,7 +6940,8 @@ def main() -> int:
                   render_brief(overview, verbose=args.verbose, roster=roster, runtime=runtime, lead=lead))
             return 0
         if args.command == "glance":
-            roster = read_overlay(args.overlay.expanduser(), state_dir, discover=False)
+            # Discovery is a local read of the gateway catalogue (~0.1 s); without it Crossfeed Chat has no models.
+            roster = read_overlay(args.overlay.expanduser(), state_dir)
             if args.force and not args.no_refresh:
                 refresh_stale_pools(state_dir, quota_sources(roster), roster=roster, force=True)
             else:

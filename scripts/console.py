@@ -888,11 +888,7 @@ def _model_id(provider: str, model: str) -> str:
 # current models are listed with one line each on what they are best for and a switch that says On
 # or Off, older models folded away. The mark follows the page's two colours: teal is the machine
 # deciding (everything on), terracotta is the human's hand (something switched off, as on Forced).
-NAME_WORDS = {
-    "gpt": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "minimax": "MiniMax", "mimo": "MiMo",
-    "qwen": "Qwen", "kimi": "Kimi", "grok": "Grok", "gemini": "Gemini", "claude": "Claude", "oss": "OSS",
-    "openrouter": "OpenRouter", "github": "GitHub", "copilot": "Copilot",
-}
+NAME_WORDS = fleetctl.NAME_WORDS
 ROLE_WORDS = {
     "default": "everyday tasks", "hard-reasoning": "hard reasoning", "implementation": "building",
     "review": "reviews", "debug": "debugging", "repo-map": "repo maps", "long-context": "long documents",
@@ -901,26 +897,7 @@ ROLE_WORDS = {
 }
 
 
-def _pretty(key: str) -> str:
-    """deepseek-v4-flash -> DeepSeek V4 Flash; used when the roster has no card with a name."""
-    words: list[str] = []
-    for part in key.split("-"):
-        low = part.casefold()
-        if part.isdigit() and words and re.fullmatch(r"\d+(\.\d+)*", words[-1]):
-            words[-1] += "." + part   # claude-opus-4-6 -> Claude Opus 4.6
-        elif words == ["GPT"] and part[:1].isdigit():
-            words[-1] += "-" + part   # gpt-6-sol -> GPT-6 Sol, as OpenAI writes it
-        elif low in NAME_WORDS:
-            words.append(NAME_WORDS[low])
-        elif re.fullmatch(r"[a-z]\d.*", low):
-            words.append(part[0].upper() + part[1:])
-        elif re.match(r"qwen\d", low):
-            words.append("Qwen " + part[4:])
-        elif low.isalpha():
-            words.append(part.capitalize())
-        else:
-            words.append(part)
-    return " ".join(words)
+_pretty = fleetctl.pretty_model_name
 
 
 def _name(model: dict[str, Any] | None, key: str | None = None) -> str:
@@ -1376,7 +1353,8 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
         actor, attribution = _level_attribution(p if p.get('set_by') else p.get('control'), overview['generated_at'])
         pools.append({"pool": p["pool"], "subscription": p.get('subscription'), "level": p["level"],
                       'set_by': p.get('set_by'), 'set_at': p.get('set_at'), 'archived': p.get('archived', []),
-                      **{key: p[key] for key in ('credits', 'spend_credits', 'status_url', 'usage_cost', 'per_model', 'per_model_error') if key in p},
+                      **{key: p[key] for key in ('credits', 'spend_credits', 'status_url', 'usage_cost', 'per_model', 'per_model_error',
+                                                 'incident', 'billing', 'billing_error', 'model_quota') if key in p},
                       'wallet_extras': _plan_extras(p, show_status=p['pool'] not in AGY_ALLOWANCES,
                                                    empty=p['pool'] not in AGY_ALLOWANCES),
                       "means": _level_meaning(p["level"]),
