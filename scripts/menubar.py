@@ -42,7 +42,8 @@ def _general(limits: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 def tightest(pool: dict[str, Any]) -> dict[str, Any] | None:
     """The limit that stops the pool first: the fullest whole-plan limit, the sooner reset on a tie.
     A provider refusal counts as full."""
-    limits = [l for l in pool.get("limits") or [] if l.get("kind") in {"window", "refusal", "budget"}]
+    limits = [l for l in pool.get("limits") or [] if l.get("kind") in {"window", "refusal", "budget"}
+              and not l.get("retired") and l.get("active") is not False]
     candidates = _general(limits) or limits
     if not candidates:
         return None
@@ -51,6 +52,9 @@ def tightest(pool: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def is_full(pool: dict[str, Any], limit: dict[str, Any] | None) -> bool:
+    mine = pool.get("limits") or []
+    if mine and all(l.get("retired") for l in mine):
+        return False   # only retired models' windows: nothing there can run out
     return pool.get("state") == "EXHAUSTED" or bool(limit and int(limit.get("used_percent") or 0) >= 100)
 
 
@@ -70,6 +74,8 @@ def _limit_words(limit: dict[str, Any]) -> str:
     title = str(limit.get("title") or "Limit")
     if limit.get("scope"):
         title += f" ({limit['scope']})"
+    if limit.get("active") is False:
+        return f"{title} · {limit.get('note') or 'not running'}"
     used = "full" if int(limit.get("used_percent") or 0) >= 100 else f"{int(limit.get('used_percent') or 0)}%"
     resets = limit.get("resets")
     pace = pace_words(limit.get("pace"))
@@ -115,15 +121,15 @@ def rows(overview: dict[str, Any], lead: str | None = None, *, include_unmeasure
 
 def title(overview: dict[str, Any], lead: str | None) -> str:
     """Short enough for a menu bar: the lead pool's percentage, every pool at least HOT_PERCENT used,
-    then the full ones by name ('Claude 26% · Go 85% · full: Codex, Argon')."""
+    then the full ones by name ('Claude 26% · Go 85% · Codex, Argon used up')."""
     parts, full = [], []
     for row in rows(overview, lead):
         if row["full"]:
-            (parts.append(f"{row['name']} full") if row["pool"] == lead else full.append(row["name"]))
+            (parts.append(f"{row['name']} used up") if row["pool"] == lead else full.append(row["name"]))
         elif row["pool"] == lead or (row["used_percent"] or 0) >= HOT_PERCENT:
             parts.append(f"{row['name']} {row['used_percent']}%" if row["used_percent"] is not None else f"{row['name']} ?")
     if full:
-        parts.append("full: " + ", ".join(full))
+        parts.append(", ".join(full) + " used up")
     return " · ".join(parts) or "Limits OK"
 
 
