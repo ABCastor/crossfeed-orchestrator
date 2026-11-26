@@ -778,7 +778,7 @@ h1{margin-top:calc(17px + var(--line-w))}
 .wallet-extras .incident.lvl-major b,.wallet-extras .incident.lvl-critical b{color:var(--human-text)}
 .wallet-extras .daily{list-style:none;margin:4px 0;padding:0;display:grid;gap:2px}
 .wallet-extras .daily li{display:grid;grid-template-columns:3.4rem minmax(0,1fr) 4.5rem;align-items:center;gap:.5rem}
-.wallet-extras .daily i{display:block;height:6px;width:var(--w);min-width:1px;background:var(--rule-strong)}
+.wallet-extras .daily .us-mbar{width:100%;height:8px}
 .wallet-extras .daily .num{text-align:right;font-variant-numeric:tabular-nums}
 .secret-form{margin:8px 0 2px;display:grid;gap:2px}
 .secret-form label{color:var(--ink);font-weight:600}
@@ -945,3 +945,83 @@ details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick
   .share-sheet{border:0;background:#fff;color:#000;padding:0}
 }
 .share-actions .wb-add{display:inline-flex;align-items:center;text-decoration:none;font-size:14px}
+
+/* ---- Round 8: simpler and more modern, the Castor look kept. One size up for reading, hairlines in place of boxes,
+   each subscription one row: what it has left on the left, how agents may spend it on the right. Nothing new is
+   drawn; what did not carry information (surface boxes, repeated captions, a second line of tokens) is gone. ---- */
+.dashboard main{font-size:15px;line-height:1.5}
+.dashboard main :is(small,.wb-muted){font-size:13px}
+.wb-head h1,.bench-page h1{font:600 30px/1.15 var(--read);letter-spacing:-.012em}
+.wb-head{margin-bottom:10px}
+.wb-head small{font-size:13px}
+.wb-toolbar{gap:8px 16px;margin-bottom:12px}
+.wb-toolbar label{font-size:14px}
+.wb-query select,.wb-toolbar select{min-height:36px;font-size:14px;border-radius:8px;padding:0 10px}
+.wb-mode{border-radius:8px;padding:3px}
+.wb-mode button{min-height:32px;padding:4px 14px;font-size:14px;border-radius:6px}
+.wb-mode-help{font-size:13.5px}
+.wb-pick{font-size:14px;padding:.55rem .9rem;border-radius:0 6px 6px 0}
+.wb-matrix :is(th,td){padding:9px 8px;border-bottom:1px solid var(--rule)}
+.wb-matrix thead th{background:none;border-top:0;border-bottom-color:var(--rule-strong)}
+.wb-matrix tbody th,.wb-matrix thead th:first-child{font-size:13.5px;font-weight:500;color:var(--quiet)}
+.wb-matrix select{font-size:14px;min-height:34px;border-radius:8px}
+@media (min-width:571px){.wb-matrix tr>th:first-child{width:8.2rem}}
+.wb-grade,.wb-number{font-size:14px}
+.wb-add{min-height:34px;font:400 13.5px var(--face);border-radius:8px;padding:0 12px}
+.wb-footnote{font-size:13px}
+
+.wb-wallet{margin-top:3rem}
+.wb-wallet-head{border-bottom:0;padding-bottom:0;margin-bottom:.4rem}
+.wb-wallet-head h2{font:600 24px/1.2 var(--read)}
+.wb-wallet-head .stamp{font:400 13px/1.4 var(--face)}
+.wb-tickets.pools{grid-template-columns:minmax(0,1fr);gap:0;border-top:1px solid var(--ink)}
+.wb-ticket.pool{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);column-gap:2.4rem;align-items:start;
+  grid-template-areas:"head head" "plan plan" "error error" "gauge policy" "gauge includes" "extras extras" "allow allow" "pick pick";
+  padding:1.25rem 0 .8rem;background:none;border:0;border-bottom:1px solid var(--rule);border-radius:0}
+.wb-ticket>.wb-head{grid-area:head;margin-bottom:.15rem}
+.wb-ticket>.wb-plan{grid-area:plan;margin:0}
+.wb-ticket>.wb-error{grid-area:error}
+.wb-ticket>.gauge{grid-area:gauge;margin-top:.3rem}
+.wb-ticket>.wallet-extras{grid-area:extras}
+.wb-ticket>.wb-includes{grid-area:includes}
+.wb-ticket>.wb-advanced{grid-area:policy;margin:.5rem 0 0;border-top:0;align-self:start}
+.wb-ticket>.wb-error:empty{display:none}
+.wb-ticket>.wb-allowances{grid-area:allow}
+.wb-ticket>.pick{grid-area:pick;margin-top:.6rem}
+.wb-ticket .wb-head h2{font:600 21px/1.25 var(--read)}
+.wb-plan,.wb-ticket .allow{font-size:13.5px;color:var(--quiet)}
+.wb-limit{grid-template-columns:minmax(0,1fr) auto;gap:0 .6rem;padding:.4rem 0;font-size:14px}
+.wb-limit>span:first-child{font-weight:500}
+.wb-limit b{font-size:14px}
+.wb-limit b .left{font:400 13px var(--face);color:var(--quiet)}
+.wb-limit .bar{height:6px;margin:.35rem 0 .2rem}
+.wb-limit small{font-size:13px;color:var(--quiet)}
+.wb-extra-limit{font-size:14px;font-weight:500;color:var(--ink);margin:.55rem 0}
+.wb-extra-limit small{font-weight:400;color:var(--quiet)}
+.wallet-extras{font-size:13.5px;line-height:1.5}
+.wallet-extras:not(:empty){margin-block:.7rem 0}
+.wallet-extras p,.wallet-extras ul{margin:.3rem 0}
+.wallet-extras summary,:is(.quota-explain,.efficient-effort)>summary{font-size:13.5px}
+.wallet-extras .incident{padding:.45rem .7rem;border-radius:6px;background:var(--surface);color:var(--ink)}
+.wallet-extras .incident:is(.lvl-major,.lvl-critical){background:color-mix(in srgb,var(--human) 10%,var(--paper))}
+.wb-cost b,.wb-cost .wb-number{color:var(--ink);font-weight:500}
+.wb-cost .wb-number{font-size:13px}
+.wb-includes{font-size:13.5px;color:var(--quiet);margin:.2rem 0 0;align-self:start}
+.wb-includes .nm{color:var(--ink)}
+.wb-wallet .lv{max-width:20rem;margin-block:.5rem 0}
+.wb-wallet .stop{font-size:13px;min-height:40px}
+.wb-wallet :is(.means,.level-actor){display:inline;text-align:left;font-size:13px;margin:0;color:var(--quiet)}
+.wb-wallet .level-actor{margin-inline:0}
+.wb-wallet .means::before{content:" · "}
+.wb-wallet .wb-advanced>summary{padding-inline:0}
+.wb-advanced,.pick,.wb-archived,.wb-more{border-top:0}
+.pick{border-top:1px solid var(--rule)}
+:is(.wb,.wb-wallet,.wb-more) summary{font-size:14px;font-weight:600;padding:.55rem 0}
+.wb-allowances>.pool{margin-top:.9rem;padding:.9rem 0 0;border-top:1px solid var(--rule)}
+.wb-allowances .wb-head h3{font:600 16px/1.3 var(--face)}
+@media (max-width:690px){
+  .wb-limits{max-width:30rem}
+  .wb-ticket.pool{grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "plan" "error" "gauge" "extras" "policy" "includes" "allow" "pick"}
+  .wb-ticket>.wb-advanced{margin-top:.9rem}
+  .wb-wallet .lv{max-width:none}
+}
