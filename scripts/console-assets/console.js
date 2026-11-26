@@ -1044,6 +1044,30 @@ function boot(document, window) {
     update();
   }
 
+  // Add a key: the value goes to the secret store and is cleared from the field at once; it is never shown again.
+  document.addEventListener('submit', async event => {
+    const form = event.target;
+    if (!form.matches('.secret-form')) return;
+    event.preventDefault();
+    const output = form.querySelector('.secret-result');
+    const body = new URLSearchParams(new FormData(form));
+    body.set('t', document.querySelector('input[name="t"]')?.value || '');
+    const field = form.elements.value, button = form.querySelector('button');
+    field.value = ''; field.disabled = true; button.disabled = true;
+    output.dataset.error = 'false'; output.textContent = 'Saving…';
+    try {
+      const response = await window.fetch('/secret', {method: 'POST', headers: {Accept: 'application/json'}, body});
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'The key was not saved. Reload the page and try again.');
+      output.textContent = result.message;
+    } catch (error) {
+      output.dataset.error = 'true';
+      output.textContent = error.message || 'Could not connect. Check the server and try again.';
+    } finally {
+      field.disabled = false; button.disabled = false;
+    }
+  });
+
   document.addEventListener('submit', async event => {
     const form = event.target;
     if (!form.matches('.provider-form, .provider-remove')) return;

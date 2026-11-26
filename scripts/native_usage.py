@@ -1630,7 +1630,7 @@ def parse_opencode_status(payload: Any) -> dict[str, Any] | None:
     bad = [_mapping(c) for c in root.get("components") or [] if _COMPONENT_LEVEL.get(str(_mapping(c).get("status")), "minor") != "none"]
     since = max((c.get("since") for c in bad if isinstance(c.get("since"), (int, float))), default=None)
     reasons = sorted({str(c.get("reason")) for c in bad if c.get("reason") not in (None, "none")})
-    text = f"{root['status'].capitalize()}: {', '.join(reasons)}" if reasons else root["status"].capitalize()
+    text = (", ".join(reasons)[:1].upper() + ", ".join(reasons)[1:]) if reasons else None
     return _status_record(level, text, since / 1000 if since else None,
                           [str(c.get("service")) for c in bad], "opencode")
 

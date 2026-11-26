@@ -291,7 +291,7 @@ class IncidentBadges(unittest.TestCase):
         opencode = {"status": "degraded", "components": [{"service": "console", "status": "degraded", "reason": "errors", "since": 1795619312497},
                                                            {"service": "go", "status": "operational", "reason": "none"}]}
         record = native.parse_opencode_status(opencode)
-        self.assertEqual((record["level"], record["text"], record["affected"]), ("minor", "Degraded: errors", ["console"]))
+        self.assertEqual((record["level"], record["text"], record["affected"]), ("minor", "Errors", ["console"]))
         incidents = [{"end": "2026-11-01T00:00:00Z", "status_impact": "SERVICE_OUTAGE",
                       "currently_affected_products": [{"id": native.GOOGLE_GEMINI_PRODUCT}]},
                      {"status_impact": "SERVICE_DISRUPTION", "external_desc": "**Summary**\nGemini API errors",
