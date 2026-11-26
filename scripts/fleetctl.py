@@ -6665,11 +6665,18 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
                                   or (chat_row_name(by_model.get(option["model"])) if row["pool"] == "chatgpt-work" else None)
                                   or names.get(option["model"]) or pretty_model_name(option["model"]),
                           "family": option.get("family"), "typical_cost_usd": option.get("typical_cost_usd"),
+                          "retired_on": option.get("retired_on"),
                           "archived": False} for option in pool.get("options", []) if option.get("current")]
         row["archived"] = [{key: option[key] for key in ("model", "name", "family", "typical_cost_usd",
                                                         "archived", "set_by", "set_at") if key in option}
                            | {"name": names.get(option["model"]) or pretty_model_name(option["model"])}
                            for option in pool.get("archived", [])]
+        # A model whose vendor withdrew it is no longer current; list it with its day so a reader
+        # (the menu) can tell a pool on its way out from one with nothing configured.
+        row["archived"] += [{"model": option["model"], "name": names.get(option["model"]) or pretty_model_name(option["model"]),
+                             "family": option.get("family"), "typical_cost_usd": option.get("typical_cost_usd"),
+                             "archived": True, "retired_on": option["retired_on"]}
+                            for option in pool.get("options", []) if option.get("retired_on") and not option.get("current")]
     return payload
 
 

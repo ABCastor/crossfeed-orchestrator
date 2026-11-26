@@ -82,6 +82,12 @@ class GlanceTests(unittest.TestCase):
         self.assertIsNone(menubar.tightest(argon))
         self.assertEqual(menubar.title(overview, "claude"), "Claude 26% · AGY Claude/GPT 85% · Codex used up")
         self.assertEqual(menubar.title(self.overview, "antigravity-argon").split(" · ")[0], "Argon used up")
+        # The Swift menu reads the same fact from the glance's model rows.
+        glance = fleetctl.glance_payload(Path(self.tmp.name) / "o.json", roster, overview, "claude")
+        argon_row = next(p for p in glance["pools"] if p["pool"] == "antigravity-argon")
+        listed = argon_row["models"] + argon_row["archived"]
+        self.assertTrue(listed)
+        self.assertTrue(all(m.get("retired_on") == "2026-11-01" for m in listed))
 
     def test_idle_claude_session_is_listed_with_its_note_and_never_headlines(self):
         state = runtime()
