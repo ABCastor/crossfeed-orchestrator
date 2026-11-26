@@ -5457,6 +5457,9 @@ def pool_model_options(roster: dict[str, Any], runtime: dict[str, Any], pool: st
         if card.get("hidden"):
             continue
         older = model_is_older(roster, pool, model["model"])
+        # BR-REFRESH-001: a catalog candidate that only borrowed this pool for display is not a usable model.
+        if direct and not older and not choosable.get(model["model"]) and pool not in model["current_pools"]:
+            continue
         if direct:
             current = not older
         else:

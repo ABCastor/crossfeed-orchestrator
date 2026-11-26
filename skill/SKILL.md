@@ -25,6 +25,8 @@ python3 scripts/fleetctl.py dispatch --role review --prompt-file /project/brief.
 
 `dispatch` selects pool/model/level, streams final text, passes through wrapper exit, names receipt on stderr. Inspect with `select --role R [--stakes S] --json`; `--family F` selects task/evidence family. `brief`, `select` and `dispatch` detect the lead's pool from the harness environment; pass `--lead POOL` when needed. A pressured lead pool is excluded except for irreversible stakes, which still respect off switches and hard quota gates. Writes: `--mode write` in a fresh worktree; `--dry-run` makes no model call. Selection may lack policy: load `references/routing-by-hand.md` for exceptions and explain overrides.
 
+Classify the material before `select` or `dispatch` (BR-DATA-001; the default is `private`). Pass `--data-class code` when every byte sent is project source or its docs, with no notes, memory, personal or client data and no secrets; `--data-class public` for public material only. The default `private` refuses every `code-ok` lane, which is the whole Antigravity Gemini 4 Neon and Hydrogen pool, so a code task left unlabelled can never be routed there.
+
 Admission stakes: `low` = cheap and reversible; `normal`; `high` = costly to redo; `irreversible` = cannot undo. Save through routing, never downgrading judgment; reduce parallelism before quality.
 
 Before viewing picks, label `--work-kind coding|review|research|writing` and `--difficulty easy|ordinary|hard`. Override routing failure stakes with `--rating-stakes routine|important|critical` (1×/5×/20× typical job price). Use `select --no-explore --json` to inspect the mean pick, and reuse an opaque `--task-id ID` across attempts of the same task.
