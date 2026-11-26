@@ -69,6 +69,12 @@ h1{font:600 32px/1.12 var(--read);letter-spacing:-.012em;margin:17px 0 .55rem}  
 .bar{display:block;width:100%;height:4px;margin:0 0 .5rem;overflow:visible}
 .bar .track{fill:var(--rule)}
 .bar.hot .fill{fill:var(--human)}
+/* Provider brand colours for charts and wallet meters; the page chrome keeps Castor's. */
+.pv-claude{--pv:light-dark(#C15F3C,#E58A66)}.pv-openai{--pv:light-dark(#0B8A6A,#3FD0A6)}
+.pv-google{--pv:light-dark(#1A66D6,#8AB4F8)}.pv-openrouter{--pv:light-dark(#5B50E0,#A79CFF)}
+.pv-opencode{--pv:light-dark(#0F7F8C,#4CC2CF)}.pv-copilot{--pv:light-dark(#C0358F,#F07CC0)}
+.pv-other{--pv:light-dark(#6E685C,#A8A295)}
+.us-pace.pv .us-track .f,.pv .bar:not(.hot) .fill,.bar.pv:not(.hot) .fill{fill:var(--pv)}
 .q{margin:0;font-size:16px;line-height:1.45;color:var(--quiet)}
 .q b.num{color:var(--ink);font-weight:500;font-size:max(13px,.9em)}
 .q .hot{color:var(--human-text)}
@@ -878,7 +884,7 @@ details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick
 .us-models .us-bar{min-width:11rem}
 .us-cell{display:flex;align-items:center;justify-content:flex-end;gap:.9rem}
 .us-mbar{flex:1;max-width:6.5rem;height:10px}
-.us-mbar .t{fill:var(--rule)}.us-mbar .f{fill:var(--machine);opacity:.75}
+.us-mbar .t{fill:var(--rule)}.us-mbar .f{fill:var(--machine);opacity:.75}.us-mbar.pv .f{fill:var(--pv);opacity:.9}
 .us-cell .num{min-width:4.6rem;text-align:right}
 .chart{margin:0}
 .chart figcaption{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.2rem 1.1rem;margin-bottom:.6rem;font-size:13px;color:var(--quiet)}
@@ -891,9 +897,13 @@ details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick
 .chart .xl{display:flex;justify-content:space-between;margin:.55rem 0 0 3.4rem;color:var(--quiet);font-size:12px}
 .chart .grid{stroke:var(--rule);stroke-width:1;vector-effect:non-scaling-stroke}
 .chart rect{fill:var(--s4)}.chart rect.s1{fill:var(--s1)}.chart rect.s2{fill:var(--s2)}.chart rect.s3{fill:var(--s3)}
+.chart rect.pv{fill:var(--pv)}.chart rect.v1{fill-opacity:.72}.chart rect.v2{fill-opacity:.5}
 .chart rect:hover{opacity:.78}
 .chart .line{fill:none;stroke:var(--s1);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .chart .line.s2{stroke:var(--s2)}.chart .line.s3{stroke:var(--s3)}.chart .line.s4{stroke:var(--s4)}
+.chart .line.pv{stroke:var(--pv)}.chart .line.v1{stroke-dasharray:6 3}.chart .line.v2{stroke-dasharray:1.5 3}
+.chart .area.pv{fill:color-mix(in srgb,var(--pv) 12%,transparent)}
+.key.pv{background:var(--pv)}.key.v1{opacity:.75}.key.v2{opacity:.55}
 .chart .area{fill:color-mix(in srgb,var(--s1) 12%,transparent);stroke:none}
 .chart .area.s2{fill:color-mix(in srgb,var(--s2) 12%,transparent)}.chart .area.s3{fill:color-mix(in srgb,var(--s3) 12%,transparent)}.chart .area.s4{fill:color-mix(in srgb,var(--s4) 12%,transparent)}
 .chart .keys{display:flex;flex-wrap:wrap;gap:.1rem 1rem}

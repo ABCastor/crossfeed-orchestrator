@@ -706,7 +706,9 @@ def _limit_row(limit: dict[str, Any], pool: str = "", *, spare_allowed: bool = T
                 f'<span class="rs" aria-hidden="true">{when}</span></li>')
     used = limit["used_percent"]
     hot = used >= 75
-    if limit["reset_at"] is None:
+    if limit.get("active") is False:
+        reset = limit.get("note") or "not running"
+    elif limit["reset_at"] is None:
         reset = "reset not reported" if limit.get("reset_unknown") else "not started yet"
     else:
         reset = f'resets {limit["resets"]}'
@@ -1766,10 +1768,11 @@ def _work_gauge(pool):
         note = ''
     rows = []
     windows = [limit for limit in limits if limit['kind'] == 'window']
+    live = [limit for limit in windows if not limit.get('retired') and limit.get('active') is not False] or windows
     weekly = [limit for limit in windows if 'weekly' in limit['title'].lower()]
     weekly.sort(key=lambda limit: bool(_scope_words(limit.get('scope'), pool['pool'])))
     prominent = ((weekly + [limit for limit in windows if limit not in weekly]) if pool['pool'] == 'opencode-go'
-                 else weekly or windows[:1])
+                 else weekly or live[:1])
     extra = []
     for limit in [*prominent, *(limit for limit in limits if limit not in prominent)]:
         if limit['kind'] != 'window':
@@ -1785,6 +1788,7 @@ def _work_gauge(pool):
             title = name + (f' · {scope}' if scope else '')
         used = limit['used_percent']
         reset = ('Resets ' + limit['resets'] if limit['reset_at'] else
+                 limit['note'] if limit.get('active') is False else
                  'Reset unknown' if limit.get('reset_unknown') or used else 'No active reset')
         count = f'{100 - used:g}%' if limit['reset_at'] or used or limit.get('reset_unknown') else ''
         if count and note:
@@ -2332,7 +2336,7 @@ def _wallet(overview, token, workbench, order):
         includes = (f'<p class="wb-includes"><small>Includes</small> <span class="nm">'
                     f'{esc(" · ".join(included))}</span></p>') if included else ''
         ticket = ' wb-ticket' if card else ''
-        return (f'<{container} class="pool wb-pool-control{ticket} lvl-{pool["level"]}" '
+        return (f'<{container} class="pool wb-pool-control{ticket} lvl-{pool["level"]} pv pv-{usage_page.brand(key)}" '
                 f'id="pool-{pool_id}" data-pool="{pool_id}" data-search-label="{esc(pool["label"])}" tabindex="-1">'
                 + f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}' +
                 '<p class="wb-error" role="status"></p>'
