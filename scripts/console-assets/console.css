@@ -889,7 +889,7 @@ details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick
 .chart{margin:0}
 .chart figcaption{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.2rem 1.1rem;margin-bottom:.6rem;font-size:13px;color:var(--quiet)}
 .chart figcaption b{font-weight:600;color:var(--ink);font-size:13.5px}
-.chart .key-label{display:inline-flex;align-items:center}
+.chart .key-label{display:inline-flex;align-items:center;gap:.3em;white-space:nowrap}
 .chart .plot{position:relative;height:8rem;margin-left:3.4rem}
 .chart .plot svg{display:block;width:100%;height:100%;overflow:visible}
 .chart .yl{position:absolute;left:-3.4rem;width:3rem;text-align:right;color:var(--quiet);font-size:11.5px;line-height:1}

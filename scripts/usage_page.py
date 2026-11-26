@@ -263,8 +263,8 @@ def history_charts(pools: list[dict[str, Any]], group_title: Callable[[str, list
             path, area = _steps(points, t0, span, now)
             cls = f"pv pv-{brand(pool['pool'])}" + (f" v{min(index, 2)}" if index else "")
             shapes.append(f'<path class="area {cls}" d="{area}"/><path class="line {cls}" d="{path}"/>')
-            keys.append(f'<span class="key-label"><i class="key {cls}" aria-hidden="true"></i>{html.escape(line_label(pool, limit))}'
-                        f' <span class="num">{limit["used_percent"]:g}%</span></span>')
+            keys.append(f'<span class="key-label"><i class="key {cls}" aria-hidden="true"></i><span>{html.escape(line_label(pool, limit))}</span>'
+                        f'<span class="num">{limit["used_percent"]:g}%</span></span>')
         name = group_title(group_id, members)
         out.append(
             f'<figure class="chart mini" role="img" aria-label="{html.escape(name)}: share of each allowance used over time">'
