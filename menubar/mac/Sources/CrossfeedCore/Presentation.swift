@@ -140,16 +140,24 @@ public struct SpendModel: Equatable {
     public var share: ShareModel?
 }
 
-/// The two tanks of the menu bar mark plus the number beside them.
+/// What the menu bar item draws: an icon (the two tanks, or the provider's logo) and a line of text that
+/// says which allowance the number belongs to.
 public struct BarSummary: Equatable {
-    public var text: String           // "88%", or "" when nothing is read
-    public var left: Double?          // used %, most pressed pool
-    public var right: Double?         // used %, next pool
+    public var text: String           // "Gemini 5h 59%", or "" when nothing is read or the text is off
+    public var left: Double?          // tank fill, most pressed allowance (used %, or left % when counting what is left)
+    public var right: Double?         // tank fill, the next pool
     public var deficit: Bool
     public var tooltip: String
+    public var logo: ProviderLogo?    // the focal provider's mark, when the icon is the logo
+    public var icon: BarPrefs.Icon
+    public var name: String           // "Gemini"
+    public var window: String         // "5h"
+    public var used: Double?          // used %, whatever the count
 
-    public init(text: String, left: Double?, right: Double?, deficit: Bool, tooltip: String) {
+    public init(text: String, left: Double?, right: Double?, deficit: Bool, tooltip: String,
+                logo: ProviderLogo? = nil, icon: BarPrefs.Icon = .tanks, name: String = "", window: String = "", used: Double? = nil) {
         self.text = text; self.left = left; self.right = right; self.deficit = deficit; self.tooltip = tooltip
+        self.logo = logo; self.icon = icon; self.name = name; self.window = window; self.used = used
     }
 }
 
@@ -433,18 +441,91 @@ public struct Presenter {
         return windows.map { Self.bar(used: min(100, max(0, $0.usedPercent ?? 0)), pace: $0.pace) }
     }
 
-    public var summary: BarSummary {
-        struct Ranked { var used: Double; var deficit: Double }
-        let ranked: [Ranked] = glance.pools.compactMap { pool in
-            guard pool.measured, let used = pool.usedPercent else { return nil }
-            let points = pool.pace?.status == "deficit" ? (pool.pace?.points ?? 0) : 0
-            return Ranked(used: used, deficit: Double(points))
-        }.sorted { ($0.deficit, $0.used) > ($1.deficit, $1.used) }
-        guard let focal = ranked.first else {
-            return BarSummary(text: "", left: nil, right: nil, deficit: false, tooltip: "Crossfeed · no quota read")
+    /// The default look: the most pressed allowance, named.
+    public var summary: BarSummary { barSummary(BarPrefs()) }
+
+    struct Pressed {
+        var pool: Pool
+        var limit: Limit?
+        var used: Double
+        var deficit: Double
+    }
+
+    /// Measured pools, most pressed first: a pool in deficit leads, then the most used. A chosen window ranks
+    /// the pools that have it by that window; a window nobody has falls back to each pool's tightest.
+    func pressedPools(window: String = BarPrefs.tightest) -> [Pressed] {
+        func windows(_ pool: Pool) -> [Limit] { pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil } }
+        func points(_ pace: Pace?) -> Double { pace?.status == "deficit" ? Double(pace?.points ?? 0) : 0 }
+        let chosen: [Pressed] = window == BarPrefs.tightest ? [] : glance.pools.compactMap { pool in
+            guard pool.measured, let hit = windows(pool).first(where: { Self.barWindow($0).short == window && ($0.scope ?? "").isEmpty })
+                    ?? windows(pool).first(where: { Self.barWindow($0).short == window }),
+                  let used = hit.usedPercent else { return nil }
+            return Pressed(pool: pool, limit: hit, used: used, deficit: points(hit.pace))
         }
+        let all: [Pressed] = chosen.isEmpty ? glance.pools.compactMap { pool in
+            guard pool.measured, let used = pool.usedPercent else { return nil }
+            let match = windows(pool).filter { abs(($0.usedPercent ?? -1) - used) < 0.5 }
+            let limit = match.first { ($0.scope ?? "").isEmpty } ?? match.first
+                ?? windows(pool).max { ($0.usedPercent ?? 0) < ($1.usedPercent ?? 0) }
+            return Pressed(pool: pool, limit: limit, used: used, deficit: points(pool.pace))
+        } : chosen
+        return all.sorted { ($0.deficit, $0.used) > ($1.deficit, $1.used) }
+    }
+
+    static let agyNames = ["antigravity-gemini": "Gemini", "antigravity-3p": "Claude/GPT", "antigravity-argon": "Argon"]
+
+    /// "Gemini", "Claude", "OpenCode": the short name of the allowance a bar number belongs to.
+    static func barName(_ pool: Pool) -> String {
+        if let name = agyNames[pool.pool] { return name }
+        let tab = groupID(pool)
+        if tab == "other" || titles[tab] == nil { return String(pool.name.prefix(14)) }
+        return titles[tab] ?? pool.name
+    }
+
+    /// ("5h", "5-hour") for a window: by its length when fleetctl sends one, else by its title.
+    static func barWindow(_ limit: Limit?) -> (short: String, long: String) {
+        if let m = limit?.minutes {
+            if m == 300 { return ("5h", "5-hour") }
+            if m == 1440 { return ("Day", "daily") }
+            if m == 10080 { return ("Week", "weekly") }
+            if m >= 40000 && m <= 45000 { return ("Month", "monthly") }
+            if m < 1440 { return ("\(Int((m / 60).rounded()))h", "\(Int((m / 60).rounded()))-hour") }
+        }
+        let title = (limit?.title ?? "").lowercased()
+        if title.contains("5-hour") || title.contains("5h") { return ("5h", "5-hour") }
+        if title.contains("week") { return ("Week", "weekly") }
+        if title.contains("month") { return ("Month", "monthly") }
+        if title.contains("day") { return ("Day", "daily") }
+        if title.contains("session") { return ("Session", "session") }
+        let word = (limit?.title ?? "Usage").split(separator: " ").first.map(String.init) ?? "Usage"
+        return (String(word.prefix(8)), word.lowercased())
+    }
+
+    /// Which tab ids can be chosen as the bar's provider, in tab order, with their titles.
+    public var barChoices: [(id: String, title: String)] {
+        tabs.map { ($0.id, $0.title) }
+    }
+
+    public func barSummary(_ chosen: BarPrefs) -> BarSummary {
+        let prefs = chosen.effective
+        let ranked = pressedPools(window: prefs.window)
         let tip = glance.title.isEmpty ? "Crossfeed" : "Crossfeed · " + glance.title
-        return BarSummary(text: "\(Int(focal.used.rounded()))%", left: focal.used,
-                          right: ranked.count > 1 ? ranked[1].used : nil, deficit: focal.deficit > 0, tooltip: tip)
+        // A provider that has no reading right now falls back to the most pressed allowance; the text names it.
+        let focal = (prefs.show == BarPrefs.pressed ? nil : ranked.first { Self.groupID($0.pool) == prefs.show }) ?? ranked.first
+        guard let focal else {
+            return BarSummary(text: "", left: nil, right: nil, deficit: false, tooltip: "Crossfeed · no quota read", icon: .tanks)
+        }
+        let name = Self.barName(focal.pool)
+        let window = Self.barWindow(focal.limit)
+        let next = ranked.first { $0.pool.pool != focal.pool.pool }
+        let fill = { (used: Double?) in used.map { prefs.count == .used ? $0 : 100 - $0 } }
+        var sentence = "\(name) \(window.long): \(Int(focal.used.rounded()))% used"
+        if let limit = focal.limit, let reset = resetText(limit), reset != "Reset unknown" { sentence += " · " + reset }
+        let logo = ProviderLogo.forPool(focal.pool.pool)
+        return BarSummary(
+            text: BarPrefs.format(name: name, window: window.short, used: focal.used, count: prefs.count, text: prefs.text),
+            left: fill(focal.used), right: fill(next?.used), deficit: focal.deficit > 0,
+            tooltip: sentence + "\n" + tip, logo: logo, icon: prefs.icon == .logo && logo == nil ? .tanks : prefs.icon,
+            name: name, window: window.short, used: focal.used)
     }
 }

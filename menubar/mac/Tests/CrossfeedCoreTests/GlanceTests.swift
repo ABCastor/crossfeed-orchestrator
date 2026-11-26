@@ -241,7 +241,7 @@ final class PresentationTests: XCTestCase {
 
     func testMenuBarSummaryLeadsWithTheDeficit() throws {
         let s = try presenter().summary
-        XCTAssertEqual(s.text, "88%")
+        XCTAssertEqual(s.text, "Codex Week 88%")   // round 8: the number says of what
         XCTAssertTrue(s.deficit)
         XCTAssertEqual(s.left, 88)
         XCTAssertEqual(s.right, 15)
