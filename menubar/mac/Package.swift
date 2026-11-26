@@ -15,5 +15,6 @@ let package = Package(
         // Renders the open menu offscreen (NSHostingView) so no pointer, focus or screen is touched.
         .executableTarget(name: "CrossfeedSnapshot", dependencies: ["CrossfeedCore", "CrossfeedUI"]),
         .testTarget(name: "CrossfeedCoreTests", dependencies: ["CrossfeedCore"]),
+        .testTarget(name: "CrossfeedUITests", dependencies: ["CrossfeedCore", "CrossfeedUI"]),
     ]
 )

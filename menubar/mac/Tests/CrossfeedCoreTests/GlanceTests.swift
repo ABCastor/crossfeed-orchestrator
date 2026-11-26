@@ -241,11 +241,11 @@ final class PresentationTests: XCTestCase {
 
     func testMenuBarSummaryLeadsWithTheDeficit() throws {
         let s = try presenter().summary
-        XCTAssertEqual(s.text, "Codex Week 88%")   // round 8: the number says of what
+        XCTAssertEqual(s.text, "Week 88%")   // round 9: the logo names the provider, the text the window
         XCTAssertTrue(s.deficit)
-        XCTAssertEqual(s.left, 88)
-        XCTAssertEqual(s.right, 15)
-        XCTAssertTrue(s.tooltip.contains("Codex 88%"))
+        XCTAssertNil(s.left)                 // Codex has no 5-hour window here
+        XCTAssertEqual(s.right, 88)
+        XCTAssertTrue(s.tooltip.hasPrefix("Codex weekly: 88% used"))
     }
 
     func testEmptyGlanceSaysNothingIsRead() throws {

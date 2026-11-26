@@ -25,11 +25,14 @@ public struct BarPrefs: Equatable {
     public var show = BarPrefs.pressed
     public var window = BarPrefs.tightest
     public var count = Count.used
-    public var icon = Icon.tanks
-    public var text = Text.full
+    public var icon = Icon.logo
+    public var text = Text.window
     public var extra = Extra.none
     public var reset = Reset.countdown
-    public var refreshSeconds = 60
+    public var refreshSeconds = 300
+    /// Notifications, off until the operator turns one on: an allowance nearly or fully used, and one that resets.
+    public var notifyLow = false
+    public var notifyReset = false
 
     public init() {}
 
@@ -60,6 +63,9 @@ public struct BarPrefsStore {
 
     public init(defaults: UserDefaults) { self.defaults = defaults }
 
+    /// Version of the saved choices. 2: the logo with the window is the default, and a reading every 5 minutes.
+    static let version = 2
+
     public func load() -> BarPrefs {
         var prefs = BarPrefs()
         if let show = defaults.string(forKey: Self.prefix + "show"), !show.isEmpty, show.count <= 40 { prefs.show = show }
@@ -71,8 +77,18 @@ public struct BarPrefsStore {
         prefs.reset = defaults.string(forKey: Self.prefix + "reset").flatMap(BarPrefs.Reset.init) ?? prefs.reset
         let refresh = defaults.integer(forKey: Self.prefix + "refresh")
         if BarPrefs.refreshChoices.contains(refresh) { prefs.refreshSeconds = refresh }
+        prefs.notifyLow = defaults.bool(forKey: Self.prefix + "notifyLow")
+        prefs.notifyReset = defaults.bool(forKey: Self.prefix + "notifyReset")
+        if defaults.integer(forKey: Self.prefix + "version") < Self.version {
+            // Once: the tanks with the window text (the old pick) become the logo, and a 1-minute reading becomes 5.
+            if prefs.icon == .tanks && prefs.text == .window { prefs.icon = .logo; defaults.set(prefs.icon.rawValue, forKey: Self.prefix + "icon") }
+            if prefs.refreshSeconds == 60 { prefs.refreshSeconds = 300; defaults.set(300, forKey: Self.prefix + "refresh") }
+            migrate()
+        }
         return prefs
     }
+
+    private func migrate() { defaults.set(Self.version, forKey: Self.prefix + "version") }
 
     public func save(_ prefs: BarPrefs) {
         defaults.set(prefs.show, forKey: Self.prefix + "show")
@@ -83,9 +99,30 @@ public struct BarPrefsStore {
         defaults.set(prefs.extra.rawValue, forKey: Self.prefix + "extra")
         defaults.set(prefs.reset.rawValue, forKey: Self.prefix + "reset")
         defaults.set(prefs.refreshSeconds, forKey: Self.prefix + "refresh")
+        defaults.set(prefs.notifyLow, forKey: Self.prefix + "notifyLow")
+        defaults.set(prefs.notifyReset, forKey: Self.prefix + "notifyReset")
+        migrate()
     }
 
     public func reset() {
-        for key in ["show", "window", "count", "icon", "text", "extra", "reset", "refresh"] { defaults.removeObject(forKey: Self.prefix + key) }
+        for key in ["show", "window", "count", "icon", "text", "extra", "reset", "refresh", "notifyLow", "notifyReset"] { defaults.removeObject(forKey: Self.prefix + key) }
     }
+}
+
+/// When the status item may be repainted. Setting its image or title while a click is landing, or while its menu
+/// is open, can swallow the click or leave the item half drawn; an unchanged summary is never painted at all.
+public struct PaintGate {
+    public private(set) var painted: BarSummary?
+
+    public init() {}
+
+    /// True when `summary` should be applied now. A refused paint is simply asked again on the next tick.
+    public mutating func shouldPaint(_ summary: BarSummary, busy: Bool) -> Bool {
+        guard summary != painted, !busy else { return false }
+        painted = summary
+        return true
+    }
+
+    /// Forget what is on screen, so the next paint always happens (after a display change, a Space switch, wake).
+    public mutating func forget() { painted = nil }
 }
