@@ -72,6 +72,11 @@ struct SettingsPane: View {
                         Chip(sample, selected: prefs.text == text, control: .text(text), state: state)
                     }
                 }
+                SettingRow("Add") {
+                    Chip("None", selected: prefs.extra == .none, control: .extra(.none), state: state)
+                    Chip("Reset", selected: prefs.extra == .reset, control: .extra(.reset), state: state)
+                    Chip("Pace", selected: prefs.extra == .pace, control: .extra(.pace), state: state)
+                }
                 SettingRow("Refresh") {
                     ForEach(BarPrefs.refreshChoices, id: \.self) { seconds in
                         Chip("\(seconds / 60) min", selected: prefs.refreshSeconds == seconds, control: .refreshEvery(seconds), state: state)

@@ -153,11 +153,15 @@ public struct BarSummary: Equatable {
     public var name: String           // "Gemini"
     public var window: String         // "5h"
     public var used: Double?          // used %, whatever the count
+    public var reset: String?         // "2h 13m": when the window resets, nil when unknown
+    public var pace: String?          // "46% over", "81% under", "on pace", nil without a pace
 
     public init(text: String, left: Double?, right: Double?, deficit: Bool, tooltip: String,
-                logo: ProviderLogo? = nil, icon: BarPrefs.Icon = .tanks, name: String = "", window: String = "", used: Double? = nil) {
+                logo: ProviderLogo? = nil, icon: BarPrefs.Icon = .tanks, name: String = "", window: String = "", used: Double? = nil,
+                reset: String? = nil, pace: String? = nil) {
         self.text = text; self.left = left; self.right = right; self.deficit = deficit; self.tooltip = tooltip
         self.logo = logo; self.icon = icon; self.name = name; self.window = window; self.used = used
+        self.reset = reset; self.pace = pace
     }
 }
 
@@ -522,10 +526,36 @@ public struct Presenter {
         var sentence = "\(name) \(window.long): \(Int(focal.used.rounded()))% used"
         if let limit = focal.limit, let reset = resetText(limit), reset != "Reset unknown" { sentence += " · " + reset }
         let logo = ProviderLogo.forPool(focal.pool.pool)
+        let reset = focal.limit.flatMap { limit in
+            limit.resetAt.flatMap { Self.iso.date(from: $0) }.map { Self.shortCountdown(to: $0, now: now) }
+        }
+        let pace = Self.shortPace(focal.limit?.pace ?? focal.pool.pace)
+        var text = BarPrefs.format(name: name, window: window.short, used: focal.used, count: prefs.count, text: prefs.text)
+        if !text.isEmpty, let extra = prefs.extra == .reset ? reset : (prefs.extra == .pace ? pace : nil) { text += " · " + extra }
         return BarSummary(
-            text: BarPrefs.format(name: name, window: window.short, used: focal.used, count: prefs.count, text: prefs.text),
+            text: text,
             left: fill(focal.used), right: fill(next?.used), deficit: focal.deficit > 0,
             tooltip: sentence + "\n" + tip, logo: logo, icon: prefs.icon == .logo && logo == nil ? .tanks : prefs.icon,
-            name: name, window: window.short, used: focal.used)
+            name: name, window: window.short, used: focal.used, reset: reset, pace: pace)
+    }
+
+    /// "4d 8h", "2h 13m", "13m": the countdown without its sentence, for the bar.
+    static func shortCountdown(to date: Date, now: Date) -> String {
+        let seconds = Int(date.timeIntervalSince(now))
+        if seconds <= 0 { return "now" }
+        let days = seconds / 86400, hours = (seconds % 86400) / 3600, minutes = (seconds % 3600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(max(1, minutes))m"
+    }
+
+    /// How far a window runs ahead of (over) or behind (under) an even burn.
+    static func shortPace(_ pace: Pace?) -> String? {
+        switch pace?.status {
+        case "deficit": return pace?.points.map { "\($0)% over" }
+        case "surplus": return pace?.points.map { "\($0)% under" }
+        case "on_pace": return "on pace"
+        default: return nil
+        }
     }
 }

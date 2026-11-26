@@ -9,6 +9,9 @@ public struct BarPrefs: Equatable {
     /// How much of "Gemini 5h 59%" to print. `.none` leaves the icon alone.
     public enum Text: String, CaseIterable { case full, window, number, none }
 
+    /// Something short after the number: when the window resets, or how far ahead of an even burn it is.
+    public enum Extra: String, CaseIterable { case none, reset, pace }
+
     public static let pressed = "pressed"
     public static let refreshChoices = [60, 300, 900]
     /// "tightest" (whichever window of the allowance is closest to its limit) or one window by its short name.
@@ -21,6 +24,7 @@ public struct BarPrefs: Equatable {
     public var count = Count.used
     public var icon = Icon.tanks
     public var text = Text.full
+    public var extra = Extra.none
     public var refreshSeconds = 60
 
     public init() {}
@@ -59,6 +63,7 @@ public struct BarPrefsStore {
         prefs.count = defaults.string(forKey: Self.prefix + "count").flatMap(BarPrefs.Count.init) ?? prefs.count
         prefs.icon = defaults.string(forKey: Self.prefix + "icon").flatMap(BarPrefs.Icon.init) ?? prefs.icon
         prefs.text = defaults.string(forKey: Self.prefix + "text").flatMap(BarPrefs.Text.init) ?? prefs.text
+        prefs.extra = defaults.string(forKey: Self.prefix + "extra").flatMap(BarPrefs.Extra.init) ?? prefs.extra
         let refresh = defaults.integer(forKey: Self.prefix + "refresh")
         if BarPrefs.refreshChoices.contains(refresh) { prefs.refreshSeconds = refresh }
         return prefs
@@ -70,10 +75,11 @@ public struct BarPrefsStore {
         defaults.set(prefs.count.rawValue, forKey: Self.prefix + "count")
         defaults.set(prefs.icon.rawValue, forKey: Self.prefix + "icon")
         defaults.set(prefs.text.rawValue, forKey: Self.prefix + "text")
+        defaults.set(prefs.extra.rawValue, forKey: Self.prefix + "extra")
         defaults.set(prefs.refreshSeconds, forKey: Self.prefix + "refresh")
     }
 
     public func reset() {
-        for key in ["show", "window", "count", "icon", "text", "refresh"] { defaults.removeObject(forKey: Self.prefix + key) }
+        for key in ["show", "window", "count", "icon", "text", "extra", "refresh"] { defaults.removeObject(forKey: Self.prefix + key) }
     }
 }

@@ -66,6 +66,20 @@ final class BarTitleTests: XCTestCase {
         XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59%")
     }
 
+    func testResetAndPaceCanFollowTheNumber() throws {
+        let p = try presenter(geminiPressed)
+        var prefs = BarPrefs()
+        prefs.extra = .reset
+        XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59% · 2h 13m")
+        prefs.extra = .pace                       // Gemini carries no pace: nothing is invented
+        XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59%")
+        let glance = try Glance.decode(fixture("glance-today.json"))
+        let codex = Presenter(glance: glance, loadedAt: now, now: now).barSummary(prefs)
+        XCTAssertEqual(codex.text, "Codex Week 88% · 46% over")
+        prefs.text = .none
+        XCTAssertEqual(p.barSummary(prefs).text, "")   // no text, no suffix
+    }
+
     func testAWindowCanBePinnedAndFallsBackWhenNobodyHasIt() throws {
         let p = try presenter(geminiPressed)
         var prefs = BarPrefs()
@@ -137,7 +151,7 @@ final class BarPrefsStoreTests: XCTestCase {
         let (d, suite) = defaults()
         defer { d.removePersistentDomain(forName: suite) }
         var prefs = BarPrefs()
-        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .logo; prefs.text = .window; prefs.refreshSeconds = 300
+        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .logo; prefs.text = .window; prefs.extra = .reset; prefs.refreshSeconds = 300
         BarPrefsStore(defaults: d).save(prefs)
         XCTAssertEqual(BarPrefsStore(defaults: UserDefaults(suiteName: suite)!).load(), prefs)
     }
@@ -148,6 +162,7 @@ final class BarPrefsStoreTests: XCTestCase {
         XCTAssertEqual(BarPrefsStore(defaults: d).load(), BarPrefs())
         d.set("sideways", forKey: "crossfeed.bar.count")
         d.set("hologram", forKey: "crossfeed.bar.icon")
+        d.set("emoji", forKey: "crossfeed.bar.extra")
         d.set(7, forKey: "crossfeed.bar.refresh")
         d.set("", forKey: "crossfeed.bar.show")
         XCTAssertEqual(BarPrefsStore(defaults: d).load(), BarPrefs())

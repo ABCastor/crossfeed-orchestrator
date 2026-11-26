@@ -211,6 +211,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .count(let count): prefs.count = count
         case .icon(let icon): prefs.icon = icon
         case .text(let text): prefs.text = text
+        case .extra(let extra): prefs.extra = extra
         case .refreshEvery(let seconds): prefs.refreshSeconds = seconds
         }
         guard prefs != state.prefs else { return }
@@ -442,16 +443,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 var wanted: [MenuControl] = [.back, .reset] + BarPrefs.windowChoices.map { .window($0) }
                 wanted += [.show(BarPrefs.pressed)] + (self.state.presenter?.tabs.map { .show($0.id) } ?? [])
                 wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
-                wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
+                wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
                 var settingsOK = wanted.allSatisfy { frames[$0] != nil }
                 func click(_ control: MenuControl) {
                     if let rect = frames[control] { _ = self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) } else { settingsOK = false }
                 }
                 click(.show("codex")); click(.window("Week")); click(.count(.left)); click(.icon(.logo))
-                click(.text(.window)); click(.refreshEvery(300))
+                click(.text(.window)); click(.extra(.reset)); click(.refreshEvery(300))
                 var expected = BarPrefs()
                 expected.show = "codex"; expected.window = "Week"; expected.count = .left; expected.icon = .logo
-                expected.text = .window; expected.refreshSeconds = 300
+                expected.text = .window; expected.extra = .reset; expected.refreshSeconds = 300
                 let saved = self.barStore.load()
                 settingsOK = settingsOK && self.state.prefs == expected && saved == expected
                 click(.reset)
