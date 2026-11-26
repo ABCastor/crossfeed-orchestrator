@@ -18,7 +18,7 @@ struct SettingsPane: View {
         let s = summary
         let used = s.used ?? 42
         return BarPrefs.Text.allCases.map { text in
-            (text, text == .none ? "None" : BarPrefs.format(name: s.name.isEmpty ? "Claude" : s.name,
+            (text, text == .none ? "Off" : BarPrefs.format(name: s.name.isEmpty ? "Claude" : s.name,
                                                             window: s.window.isEmpty ? "Week" : s.window,
                                                             used: used, count: state.prefs.count, text: text))
         }
@@ -65,7 +65,7 @@ struct SettingsPane: View {
                 SettingRow("Icon") {
                     Chip("Tanks", selected: prefs.icon == .tanks, control: .icon(.tanks), state: state)
                     Chip("Logo", selected: prefs.icon == .logo, control: .icon(.logo), state: state)
-                    Chip("None", selected: prefs.icon == .none, control: .icon(.none), state: state)
+                    Chip("Off", selected: prefs.icon == .none, control: .icon(.none), state: state)
                 }
                 SettingRow("Text") {
                     ForEach(texts, id: \.0) { text, sample in
@@ -76,6 +76,10 @@ struct SettingsPane: View {
                     Chip("None", selected: prefs.extra == .none, control: .extra(.none), state: state)
                     Chip("Reset", selected: prefs.extra == .reset, control: .extra(.reset), state: state)
                     Chip("Pace", selected: prefs.extra == .pace, control: .extra(.pace), state: state)
+                }
+                SettingRow("Resets") {
+                    Chip("Countdown", selected: prefs.reset == .countdown, control: .resets(.countdown), state: state)
+                    Chip("Clock", selected: prefs.reset == .clock, control: .resets(.clock), state: state)
                 }
                 SettingRow("Refresh") {
                     ForEach(BarPrefs.refreshChoices, id: \.self) { seconds in

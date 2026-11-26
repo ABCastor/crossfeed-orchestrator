@@ -11,7 +11,7 @@ import SwiftUI
 /// Every button the host routes by position, because a click inside an open NSMenu reaches the hosting view, not SwiftUI.
 public enum MenuControl: Hashable {
     case refresh, settings, back, reset
-    case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), refreshEvery(Int)
+    case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset), refreshEvery(Int)
 }
 
 /// What the menu needs from its host. All state lives here so a snapshot and the live menu share it.

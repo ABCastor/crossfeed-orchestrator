@@ -80,6 +80,31 @@ final class BarTitleTests: XCTestCase {
         XCTAssertEqual(p.barSummary(prefs).text, "")   // no text, no suffix
     }
 
+    func testOnlyProvidersWithAReadingCanBePinned() throws {
+        let p = try presenter(geminiPressed)
+        XCTAssertEqual(p.barChoices.map(\.id), ["claude", "agy"])
+        let none = try presenter(#"{"schema":1,"pools":[{"pool":"openrouter-free","name":"OpenRouter","measured":false}]}"#)
+        XCTAssertTrue(none.barChoices.isEmpty)
+    }
+
+    func testResetsCanReadAsAClockInTheViewersZone() throws {
+        let rome = TimeZone(identifier: "Europe/Rome")!     // UTC+1 in November: 14:13Z is 15:13 local
+        let glance = try Glance.decode(Data(geminiPressed.utf8))
+        let p = Presenter(glance: glance, loadedAt: now, now: now, resetClock: true, timeZone: rome)
+        XCTAssertEqual(p.card(for: "claude")?.sections.first?.rows.first?.resetText, "Resets Tue 13:00")
+        XCTAssertEqual(p.card(for: "agy")?.sections.first?.rows.last?.resetText, "Resets today 15:13")
+        var prefs = BarPrefs()
+        prefs.extra = .reset
+        XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59% · 15:13")
+        let utc = Presenter(glance: glance, loadedAt: now, now: now, resetClock: true, timeZone: TimeZone(identifier: "UTC")!)
+        XCTAssertEqual(utc.barSummary(prefs).text, "Gemini 5h 59% · 14:13")
+        // Tomorrow and within the week
+        let line = Presenter(glance: glance, loadedAt: now, now: now, resetClock: true, timeZone: rome)
+        XCTAssertEqual(line.clockText(now.addingTimeInterval(86400), today: ""), "tomorrow 13:00")
+        XCTAssertEqual(line.clockText(now.addingTimeInterval(3 * 86400), today: ""), "Sun 13:00")
+        XCTAssertEqual(line.clockText(now.addingTimeInterval(9 * 86400), today: ""), "5 Dec 13:00")
+    }
+
     func testAWindowCanBePinnedAndFallsBackWhenNobodyHasIt() throws {
         let p = try presenter(geminiPressed)
         var prefs = BarPrefs()
@@ -151,7 +176,7 @@ final class BarPrefsStoreTests: XCTestCase {
         let (d, suite) = defaults()
         defer { d.removePersistentDomain(forName: suite) }
         var prefs = BarPrefs()
-        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .logo; prefs.text = .window; prefs.extra = .reset; prefs.refreshSeconds = 300
+        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .logo; prefs.text = .window; prefs.extra = .reset; prefs.reset = .clock; prefs.refreshSeconds = 300
         BarPrefsStore(defaults: d).save(prefs)
         XCTAssertEqual(BarPrefsStore(defaults: UserDefaults(suiteName: suite)!).load(), prefs)
     }

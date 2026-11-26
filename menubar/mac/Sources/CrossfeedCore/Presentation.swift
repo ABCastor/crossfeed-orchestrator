@@ -170,10 +170,16 @@ public struct Presenter {
     public let loadedAt: Date
     public let now: Date
 
-    public init(glance: Glance, loadedAt: Date, now: Date) {
+    /// Write a reset as the clock time it happens ("Resets Mon 20:56") instead of a countdown.
+    public let resetClock: Bool
+    let timeZone: TimeZone
+
+    public init(glance: Glance, loadedAt: Date, now: Date, resetClock: Bool = false, timeZone: TimeZone = .current) {
         self.glance = glance
         self.loadedAt = loadedAt
         self.now = now
+        self.resetClock = resetClock
+        self.timeZone = timeZone
     }
 
     // MARK: Tabs
@@ -397,9 +403,25 @@ public struct Presenter {
 
     func resetText(_ limit: Limit) -> String? {
         if limit.resetUnknown == true { return "Reset unknown" }
-        if let at = limit.resetAt, let date = Self.iso.date(from: at) { return Self.countdown(to: date, now: now) }
+        if let at = limit.resetAt, let date = Self.iso.date(from: at) {
+            return resetClock ? "Resets " + clockText(date, today: "today ") : Self.countdown(to: date, now: now)
+        }
         if let text = limit.resets, !text.isEmpty { return "Resets " + text }
         return "Reset unknown"
+    }
+
+    /// "today 14:13", "tomorrow 09:00", "Mon 20:56" within a week, else "5 Dec 09:00", in the viewer's time zone.
+    func clockText(_ date: Date, today: String) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let time = DateFormatter()
+        time.locale = Locale(identifier: "en_GB"); time.timeZone = timeZone
+        time.dateFormat = "HH:mm"
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+        if days <= 0 { return today + time.string(from: date) }
+        if days == 1 { return "tomorrow " + time.string(from: date) }
+        time.dateFormat = days < 7 ? "EEE HH:mm" : "d MMM HH:mm"
+        return time.string(from: date)
     }
 
     public static func countdown(to date: Date, now: Date) -> String {
@@ -507,9 +529,10 @@ public struct Presenter {
         return (String(word.prefix(8)), word.lowercased())
     }
 
-    /// Which tab ids can be chosen as the bar's provider, in tab order, with their titles.
+    /// The providers the bar can follow: those with a percent to show right now, in tab order.
     public var barChoices: [(id: String, title: String)] {
-        tabs.map { ($0.id, $0.title) }
+        let readable = Set(pressedPools().map { Self.groupID($0.pool) })
+        return tabs.filter { readable.contains($0.id) }.map { ($0.id, $0.title) }
     }
 
     public func barSummary(_ chosen: BarPrefs) -> BarSummary {
@@ -529,7 +552,7 @@ public struct Presenter {
         if let limit = focal.limit, let reset = resetText(limit), reset != "Reset unknown" { sentence += " · " + reset }
         let logo = ProviderLogo.forPool(focal.pool.pool)
         let reset = focal.limit.flatMap { limit in
-            limit.resetAt.flatMap { Self.iso.date(from: $0) }.map { Self.shortCountdown(to: $0, now: now) }
+            limit.resetAt.flatMap { Self.iso.date(from: $0) }.map { resetClock ? clockText($0, today: "") : Self.shortCountdown(to: $0, now: now) }
         }
         let pace = Self.shortPace(focal.limit?.pace ?? focal.pool.pace)
         var text = BarPrefs.format(name: name, window: window.short, used: focal.used, count: prefs.count, text: prefs.text)

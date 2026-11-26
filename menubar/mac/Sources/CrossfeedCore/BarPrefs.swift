@@ -1,4 +1,4 @@
-// Crossfeed menu bar: what the operator chose to see in the bar itself, saved in app preferences.
+// Crossfeed menu bar: what the operator chose to see in the bar and how resets read, saved in app preferences.
 // Pure Foundation so the tests can read every rule. The same choices CodexBar offers (which provider,
 // used or left, icon or number), cut to the five that matter here.
 import Foundation
@@ -11,6 +11,9 @@ public struct BarPrefs: Equatable {
 
     /// Something short after the number: when the window resets, or how far ahead of an even burn it is.
     public enum Extra: String, CaseIterable { case none, reset, pace }
+
+    /// How a reset is written, in the card and after the bar number: "in 4d 8h" or the clock time it happens.
+    public enum Reset: String, CaseIterable { case countdown, clock }
 
     public static let pressed = "pressed"
     public static let refreshChoices = [60, 300, 900]
@@ -25,6 +28,7 @@ public struct BarPrefs: Equatable {
     public var icon = Icon.tanks
     public var text = Text.full
     public var extra = Extra.none
+    public var reset = Reset.countdown
     public var refreshSeconds = 60
 
     public init() {}
@@ -64,6 +68,7 @@ public struct BarPrefsStore {
         prefs.icon = defaults.string(forKey: Self.prefix + "icon").flatMap(BarPrefs.Icon.init) ?? prefs.icon
         prefs.text = defaults.string(forKey: Self.prefix + "text").flatMap(BarPrefs.Text.init) ?? prefs.text
         prefs.extra = defaults.string(forKey: Self.prefix + "extra").flatMap(BarPrefs.Extra.init) ?? prefs.extra
+        prefs.reset = defaults.string(forKey: Self.prefix + "reset").flatMap(BarPrefs.Reset.init) ?? prefs.reset
         let refresh = defaults.integer(forKey: Self.prefix + "refresh")
         if BarPrefs.refreshChoices.contains(refresh) { prefs.refreshSeconds = refresh }
         return prefs
@@ -76,10 +81,11 @@ public struct BarPrefsStore {
         defaults.set(prefs.icon.rawValue, forKey: Self.prefix + "icon")
         defaults.set(prefs.text.rawValue, forKey: Self.prefix + "text")
         defaults.set(prefs.extra.rawValue, forKey: Self.prefix + "extra")
+        defaults.set(prefs.reset.rawValue, forKey: Self.prefix + "reset")
         defaults.set(prefs.refreshSeconds, forKey: Self.prefix + "refresh")
     }
 
     public func reset() {
-        for key in ["show", "window", "count", "icon", "text", "extra", "refresh"] { defaults.removeObject(forKey: Self.prefix + key) }
+        for key in ["show", "window", "count", "icon", "text", "extra", "reset", "refresh"] { defaults.removeObject(forKey: Self.prefix + key) }
     }
 }

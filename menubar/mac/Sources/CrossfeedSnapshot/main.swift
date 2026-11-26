@@ -34,7 +34,8 @@ let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
 MainActor.assumeIsolated {
 do {
     let glance = try Glance.decode(Data(contentsOf: URL(fileURLWithPath: fixture)))
-    let presenter = Presenter(glance: glance, loadedAt: now, now: now)
+    let presenter = Presenter(glance: glance, loadedAt: now, now: now,
+                              resetClock: argument("--reset") == "clock", timeZone: TimeZone(identifier: argument("--zone") ?? "Europe/Rome") ?? .current)
     let scale: CGFloat = 2
     var prefs = BarPrefs()
     if let v = argument("--show") { prefs.show = v }
