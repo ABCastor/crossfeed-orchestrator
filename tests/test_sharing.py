@@ -9,7 +9,7 @@ RESET = NOW + 3 * 86400
 START = RESET - 7 * 86400
 
 
-def entry(key, name, monthly, share, other="Rocco", currency="EUR", pools=None, value=None):
+def entry(key, name, monthly, share, other="Sam", currency="EUR", pools=None, value=None):
     return {"id": key, "name": name, "amount": monthly, "monthly": monthly, "currency": currency, "period": "monthly",
             "operator_share_percent": share, "other_payer": other, "pools": pools or [key],
             "pool_value": {key: {"used_usd_equivalent": value, "capacity_usd_equivalent": "65.00", "source": "fixture"}}
@@ -41,7 +41,7 @@ class Sharing(unittest.TestCase):
         self.assertAlmostEqual(use["measured_usd"], 9.8)
         self.assertAlmostEqual(use["rest_usd"], 7.1)
         self.assertAlmostEqual(use["measured_share"], 58.0, places=0)
-        text = sharing.card_text(model, "rocco")
+        text = sharing.card_text(model, "sam")
         self.assertIn("Your share 50% of €100.00 a month: €50.00", text)
         self.assertIn("The account used 26% of its weekly allowance, about $16.90 at API list prices", text)
         self.assertIn("Measured on my Mac since the weekly reset on", text)
@@ -62,7 +62,7 @@ class Sharing(unittest.TestCase):
     def test_an_unpriced_model_makes_the_figure_a_floor_and_the_rest_a_ceiling(self):
         model = self.build([entry("claude", "Claude", "10", "50", value="5")],
                            {"claude": {"limits": weekly(10), "usage_cost": {"hourly": hours((1, 2.0)), "last_7d_usd": None}}})
-        text = sharing.card_text(model, "rocco")
+        text = sharing.card_text(model, "sam")
         self.assertIn("at least $2.00", text)
         self.assertIn("at most $3.00", text)
 
@@ -72,7 +72,7 @@ class Sharing(unittest.TestCase):
         use = model["plans"][0]["use"]
         self.assertEqual(use["rest_usd"], 0.0)
         self.assertTrue(use["overshoot"])
-        self.assertIn("only approximate", sharing.card_text(model, "rocco"))
+        self.assertIn("only approximate", sharing.card_text(model, "sam"))
 
     def test_without_a_dollar_value_or_a_usage_log_it_says_so_and_invents_nothing(self):
         model = self.build([entry("opencode-go", "OpenCode Go", "10", "100", other=None),
@@ -83,10 +83,10 @@ class Sharing(unittest.TestCase):
         self.assertIn("no usage log on this Mac", go["use"]["reason"])
         self.assertIsNone(go["use"]["rest_usd"])
         self.assertIsNone(claude["use"]["total_usd"])
-        text = sharing.card_text(model, "rocco")
+        text = sharing.card_text(model, "sam")
         self.assertNotIn("Not measured on my Mac", text)       # no dollar total, so no remainder
         self.assertIn("Measured on my Mac", text)
-        self.assertNotIn("OpenCode Go", text)                  # the operator keeps 100%: not on Rocco's card
+        self.assertNotIn("OpenCode Go", text)                  # the operator keeps 100%: not on Sam's card
 
     def test_a_plan_with_several_weekly_allowances_uses_the_rolling_week_and_states_no_account_total(self):
         model = self.build([entry("antigravity", "Google AI Pro", "20", "70", pools=["agy-a", "agy-b"])],
@@ -96,17 +96,17 @@ class Sharing(unittest.TestCase):
         self.assertIsNone(use["percent"])
         self.assertEqual(use["basis"], "in the last 7 days")
         self.assertAlmostEqual(use["measured_usd"], 2.5)
-        text = sharing.card_text(model, "rocco")
+        text = sharing.card_text(model, "sam")
         self.assertNotIn("weekly allowance", text)
         self.assertIn("in the last 7 days: $2.50", text)
 
     def test_people_totals_per_currency_and_unsplit_plans_stay_with_the_operator(self):
-        model = self.build([entry("a", "A", "100", "50", other="Rocco"), entry("b", "B", "30", "40", other="Rocco"),
-                            entry("c", "C", "10", "50", other="Ale", currency="USD"), entry("d", "D", "5", None)], {})
-        self.assertEqual([p["name"] for p in model["people"]], ["Me", "Ale", "Rocco"])
+        model = self.build([entry("a", "A", "100", "50", other="Sam"), entry("b", "B", "30", "40", other="Sam"),
+                            entry("c", "C", "10", "50", other="Alex", currency="USD"), entry("d", "D", "5", None)], {})
+        self.assertEqual([p["name"] for p in model["people"]], ["Me", "Alex", "Sam"])
         owed = {p["key"]: p["owed"] for p in model["people"]}
-        self.assertEqual(owed["rocco"], {"EUR": "68.00"})
-        self.assertEqual(owed["ale"], {"USD": "5.00"})
+        self.assertEqual(owed["sam"], {"EUR": "68.00"})
+        self.assertEqual(owed["alex"], {"USD": "5.00"})
         self.assertEqual(owed["me"], {"EUR": "62.00", "USD": "5.00"})   # d has no share, so it adds nothing to "owed"
         self.assertIn("Share not set", sharing.card_text(model, "me"))
 
@@ -119,7 +119,7 @@ class Sharing(unittest.TestCase):
     def test_money_and_names_are_formatted_for_a_message(self):
         self.assertEqual(sharing.money("EUR", "1234.5"), "€1,234.50")
         self.assertEqual(sharing.money("CHF", "5"), "CHF 5.00")
-        self.assertEqual(sharing.slug("Rocco B."), "rocco-b")
+        self.assertEqual(sharing.slug("Sam B."), "sam-b")
         self.assertEqual(sharing.usd(0.0004), "$0.0004")
 
 

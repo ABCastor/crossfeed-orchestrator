@@ -96,17 +96,17 @@ class Pure(unittest.TestCase):
 
     def test_pages_carry_no_style_attribute_script_or_remote_url(self):
         model = sharing.build({"subscriptions": [{"id": "claude", "name": "Claude Max", "amount": "100", "monthly": "100.00",
-                               "currency": "EUR", "operator_share_percent": "50", "other_payer": "<b>Rocco</b>", "pools": ["claude"]}]},
+                               "currency": "EUR", "operator_share_percent": "50", "other_payer": "<b>Sam</b>", "pools": ["claude"]}]},
                               overview(), NOW)
         cards = [usage_page.card_html(model, p, sharing.card_lines(model, p["key"]), sharing.card_text(model, p["key"]))
                  for p in model["people"]]
         for page in (render(), usage_page.render_share(model, cards),
-                     usage_page.render_print(sharing.card_lines(model, "b-rocco-b"))):
+                     usage_page.render_print(sharing.card_lines(model, "b-sam-b"))):
             self.assertNotRegex(page, r"\sstyle=")
             self.assertNotRegex(page, r"<script|https?://")
         shown = usage_page.render_share(model, cards)
-        self.assertNotIn("<b>Rocco</b>", shown)                            # a name is text, never markup
-        self.assertIn("&lt;b&gt;Rocco&lt;/b&gt;", shown)
+        self.assertNotIn("<b>Sam</b>", shown)                            # a name is text, never markup
+        self.assertIn("&lt;b&gt;Sam&lt;/b&gt;", shown)
 
     def test_share_page_says_what_cannot_be_known_and_empty_states_are_plain(self):
         empty = usage_page.render_share({"people": [], "unavailable": False}, [])

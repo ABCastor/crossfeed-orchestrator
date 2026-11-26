@@ -15,15 +15,32 @@ import socketserver
 import stat
 from pathlib import Path
 
+try:
+    import sharing
+except ImportError:  # imported from the console as scripts.phone_view
+    from scripts import sharing
+
 CSS = ("html{color-scheme:light dark;font:16px system-ui}body{margin:0 auto;padding:1rem;max-width:32rem}"
        "h1{margin:.35rem 0;font-size:1.65rem}h2{font-size:1rem;margin:1.4rem 0 .5rem}"
        "p{margin:.3rem 0}ul{padding:0;list-style:none;margin:0}li{padding:.65rem 0;"
        "border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent)}"
        "strong{overflow-wrap:anywhere}.line{display:flex;justify-content:space-between;gap:.75rem;"
        "align-items:baseline}.reading{white-space:nowrap;font-variant-numeric:tabular-nums}"
-       "small{display:block;margin-top:.2rem;font-size:.86rem}")
+       "small{display:block;margin-top:.2rem;font-size:.86rem}"
+       "pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.5;margin:.6rem 0;padding:.9rem;"
+       "border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:.6rem}"
+       "button{font:inherit;min-height:2.75rem;padding:0 1.1rem;border-radius:.6rem;"
+       "border:1px solid color-mix(in srgb,currentColor 30%,transparent);background:none;color:inherit}"
+       "a.go{display:inline-block;margin-top:1rem}")
 CSS_HASH = base64.b64encode(hashlib.sha256(CSS.encode()).digest()).decode()
 CSP = f"default-src 'none'; style-src 'sha256-{CSS_HASH}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+# The share page's one script: the phone's own share sheet, else the clipboard. It reads only the text on the page.
+SHARE_SCRIPT = ("for(const b of document.querySelectorAll('[data-share]')){b.onclick=async()=>{"
+                "const t=document.getElementById(b.dataset.share).textContent;"
+                "try{if(navigator.share){await navigator.share({text:t});return}}catch(e){if(e&&e.name==='AbortError')return}"
+                "try{await navigator.clipboard.writeText(t);b.textContent='Copied'}catch(e){b.textContent='Select the text and copy'}}}")
+SCRIPT_HASH = base64.b64encode(hashlib.sha256(SHARE_SCRIPT.encode()).digest()).decode()
+SHARE_CSP = CSP.replace("frame-ancestors", f"script-src 'sha256-{SCRIPT_HASH}'; frame-ancestors")
 LOGIN = re.compile(r"[!-~]{1,320}\Z")
 
 
@@ -33,6 +50,35 @@ def cached_snapshot(fleet, overlay: Path, state: Path) -> dict:
     runtime = fleet.load_json(state / 'runtime.json', {}) or {}
     overview = fleet.fleet_overview(roster, runtime, state)
     return fleet.glance_payload(overlay, roster, overview, fleet.resolve_lead_pool(roster, None))
+
+
+def cached_share(fleet, overlay: Path, state: Path) -> dict:
+    """Who owes what, from the saved readings only; no discovery, no refresh, no background scan."""
+    import time
+    roster = fleet.read_overlay(overlay, state, discover=False)
+    runtime = fleet.load_json(state / 'runtime.json', {}) or {}
+    overview = fleet.fleet_overview(roster, runtime, state, refresh_extras=False)
+    ledger = fleet.subscriptions.view(fleet.subscriptions.path_for(overlay), roster, overview)
+    return sharing.build(ledger, overview, time.time())
+
+
+def render_share(model: dict) -> str:
+    out = ['<!doctype html><html lang="en"><head><meta charset="utf-8">',
+           '<meta name="viewport" content="width=device-width, initial-scale=1">',
+           f'<title>Crossfeed · Share</title><style>{CSS}</style></head>',
+           '<body><main><h1>Share</h1><p>Copy a card and send it. Read only.</p>']
+    if model.get('unavailable'):
+        out.append('<p>The subscriptions file is unreadable.</p>')
+    elif not model.get('people'):
+        out.append('<p>Nothing to share yet. Enter prices and shares in the console, under Settings.</p>')
+    for person in model.get('people', []):
+        key = html.escape(person['key'])
+        name = html.escape(person['name'] if not person['self'] else 'My own summary')
+        out.append(f'<h2>{name}</h2><pre id="card-{key}">{html.escape(sharing.card_text(model, person["key"]))}</pre>'
+                   f'<button type="button" data-share="card-{key}">Share</button>')
+    out.append('<p><a class="go" href=".">Back</a></p>')
+    out.append(f'</main><script>{SHARE_SCRIPT}</script></body></html>')
+    return ''.join(out)
 
 
 def render(snapshot: dict) -> str:
@@ -71,6 +117,7 @@ def render(snapshot: dict) -> str:
         out.append('</ul>')
         if spend['unpriced']:
             out.append(f'<p>Partial total · {spend["unpriced"]} without a price</p>')
+        out.append('<p><a class="go" href="share">Share costs</a></p>')
     out.append('</main></body></html>')
     return ''.join(out)
 
@@ -91,7 +138,7 @@ def operator_login(path: Path) -> str:
     return login
 
 
-def make_handler(login, snapshot):
+def make_handler(login, snapshot, share=None):
     class Phone(http.server.BaseHTTPRequestHandler):
         server_version = 'Crossfeed'
         sys_version = ''
@@ -100,13 +147,13 @@ def make_handler(login, snapshot):
         def log_message(self, format, *args):
             pass  # request paths and identity headers do not enter logs
 
-        def send_page(self, status, body, media='text/plain; charset=utf-8'):
+        def send_page(self, status, body, media='text/plain; charset=utf-8', csp=CSP):
             data = body.encode('utf-8')
             self.send_response(status)
             self.send_header('Content-Type', media)
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'private, no-store')
-            self.send_header('Content-Security-Policy', CSP)
+            self.send_header('Content-Security-Policy', csp)
             self.send_header('X-Frame-Options', 'DENY')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
@@ -119,15 +166,16 @@ def make_handler(login, snapshot):
             if len(identities) != 1 or not LOGIN.fullmatch(identities[0]) or not hmac.compare_digest(identities[0], login):
                 self.send_page(403, 'Crossfeed is available only to the configured tailnet login.\n')
                 return
-            if self.path not in {'/', '/crossfeed', '/crossfeed/'}:
+            sharing_page = self.path in {'/share', '/crossfeed/share', '/share/', '/crossfeed/share/'}
+            if self.path not in {'/', '/crossfeed', '/crossfeed/'} and not (sharing_page and share):
                 self.send_page(404, 'Not found.\n')
                 return
             try:
-                body = render(snapshot())
+                body = render_share(share()) if sharing_page else render(snapshot())
             except Exception:  # the read failure may include local paths or config values
                 self.send_page(503, 'Readings unavailable.\n')
                 return
-            self.send_page(200, body, 'text/html; charset=utf-8')
+            self.send_page(200, body, 'text/html; charset=utf-8', SHARE_CSP if sharing_page else CSP)
 
         do_HEAD = do_GET
 
@@ -148,19 +196,19 @@ class LoopbackPhoneServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 
-def open_loopback_server(port: int, login: str, snapshot):
+def open_loopback_server(port: int, login: str, snapshot, share=None):
     if not 1024 <= port <= 65535:
         raise ValueError('loopback port must be 1024-65535')
-    return LoopbackPhoneServer(('127.0.0.1', port), make_handler(login, snapshot))
+    return LoopbackPhoneServer(('127.0.0.1', port), make_handler(login, snapshot, share))
 
 
-def open_server(path: Path, login: str, snapshot):
+def open_server(path: Path, login: str, snapshot, share=None):
     if not path.is_absolute():
         raise ValueError('socket path must be absolute')
     parent = path.parent.lstat()
     if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700):
         raise ValueError('socket directory must be private')
-    server = PhoneServer(str(path), make_handler(login, snapshot))
+    server = PhoneServer(str(path), make_handler(login, snapshot, share))
     try:
         path.chmod(0o600)
     except OSError:
@@ -184,8 +232,9 @@ def main() -> int:
     try:
         login = operator_login(cfg.config.expanduser())
         view = lambda: cached_snapshot(fleetctl, overlay, state)
-        server = (open_loopback_server(cfg.loopback_port, login, view) if cfg.loopback_port
-                  else open_server(cfg.socket, login, view))
+        cards = lambda: cached_share(fleetctl, overlay, state)
+        server = (open_loopback_server(cfg.loopback_port, login, view, cards) if cfg.loopback_port
+                  else open_server(cfg.socket, login, view, cards))
     except (ValueError, OSError, RecursionError):
         print('Crossfeed phone view needs a private mode-600 config and an unused socket in a mode-700 directory.')
         return 2
