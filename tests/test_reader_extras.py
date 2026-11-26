@@ -147,6 +147,45 @@ class LocalCost(unittest.TestCase):
         self.assertEqual(cost["today_tokens"], 38)
         self.assertAlmostEqual(cost["today_usd"], (4*10 + 20*8 + .2*10 + 5*5 + 8*5)/1e6)
 
+    def test_breakdown_gives_seven_days_daily_series_hours_and_cost_by_model(self):
+        prices = {"claude-big": {"cost": {"input": 10, "output": 50}}, "claude-small": {"cost": {"input": 1, "output": 5}}}
+
+        def record(when, model, out, tag):
+            return {"type": "assistant", "timestamp": native._iso(when), "requestId": tag,
+                    "message": {"id": tag, "model": model, "usage": {"input_tokens": 1000, "output_tokens": out}}}
+        rows = [record(NOW, "claude-big", 1000, "a"),                                  # today
+                record(NOW - dt.timedelta(days=3), "claude-small", 1000, "b"),         # inside 7 days
+                record(NOW - dt.timedelta(days=20), "claude-big", 1000, "c"),          # only in 30 days
+                record(NOW - dt.timedelta(days=2), "claude-unpriced", 1000, "d")]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "claude.jsonl"
+            path.write_text("\n".join(map(json.dumps, rows)))
+            os.utime(path, (NOW.timestamp(), NOW.timestamp()))
+            full = native.local_usage_cost("claude", [Path(folder)], prices, NOW)
+            path.write_text("\n".join(map(json.dumps, rows[:3])))
+            clean = native.local_usage_cost("claude", [Path(folder)], prices, NOW)
+        big, small = (10 * 1000 + 50 * 1000) / 1e6, (1000 + 5000) / 1e6
+        self.assertAlmostEqual(clean["today_usd"], big)
+        self.assertAlmostEqual(clean["last_7d_usd"], big + small)
+        self.assertAlmostEqual(clean["last_30d_usd"], 2 * big + small)
+        self.assertEqual(clean["last_7d_tokens"], 4000)
+        self.assertEqual(len(clean["daily"]), 30)
+        self.assertEqual(clean["daily"][-1]["day"], NOW.astimezone().date().isoformat())
+        self.assertAlmostEqual(sum(day["usd"] for day in clean["daily"]), clean["last_30d_usd"])
+        self.assertEqual([row["model"] for row in clean["by_model"]][:1], ["claude-big"])
+        top = {row["model"]: row for row in clean["by_model"]}
+        self.assertAlmostEqual(top["claude-big"]["usd"], 2 * big)
+        self.assertAlmostEqual(top["claude-big"]["usd_7d"], big)
+        self.assertAlmostEqual(top["claude-small"]["usd_7d"], small)
+        self.assertEqual(top["claude-small"]["usd_today"], 0)
+        # Hourly buckets keep only the last 8 days; the 20-day-old row is not there.
+        self.assertEqual(len(clean["hourly"]), 2)
+        self.assertAlmostEqual(sum(row[2] for row in clean["hourly"]), big + small)
+        # One unpriced model hides the dollar total of every window it falls in, never turns into zero.
+        self.assertIsNone(full["last_7d_usd"])
+        self.assertIsNone(full["last_30d_usd"])
+        self.assertAlmostEqual(full["today_usd"], big)
+
     def test_failed_scan_keeps_portable_last_good_cost_stale(self):
         config = {"oracle": "claude", "local_usage_cost": True}
         with tempfile.TemporaryDirectory() as folder:
