@@ -1619,3 +1619,19 @@ test('BR-SWITCH-001 actor labels follow confirmed saves and later snapshots', as
   assert.equal(f.document.querySelector('.level-actor').textContent, 'you, 20 Oct 11:05');
   assert.equal(f.astra.querySelector('.model-actor').textContent, 'agent, 20 Oct 11:06');
 });
+
+test('share card layout wraps long rows to the card width and keeps rules and order', () => {
+  const measure = (text) => text.length * 8;                       // a fake 8px-per-character font
+  const lines = [['title', 'Shared subscriptions'], ['sub', "Ale's share · as of 26 Nov"], ['plan', 'Claude Max'],
+    ['row', 'Measured on my Mac since the weekly reset on 23 Nov: $11.16 (64% of the account\'s use)'],
+    ['total', 'You owe €50.00 a month'], ['note', 'Estimates at API list prices.']];
+  const layout = Crossfeed.cardLayout(lines, measure, 400, 20);
+  const text = layout.ops.filter(op => op.text);
+  assert.deepEqual(text.map(op => op.kind).filter((k, i, all) => k !== all[i - 1]), ['title', 'sub', 'plan', 'row', 'total', 'note']);
+  assert.ok(text.filter(op => op.kind === 'row').length >= 2, 'the long row wraps');
+  for (const op of text) assert.ok(measure(op.text) <= 400 - 40, `${op.text} fits`);
+  assert.deepEqual(text.map(op => op.y), [...text.map(op => op.y)].sort((a, b) => a - b), 'top to bottom');
+  assert.equal(layout.ops.filter(op => op.kind === 'rule').length, 2, 'one rule above the plan and one above the total');
+  assert.ok(layout.height > text.at(-1).y);
+  assert.deepEqual(Crossfeed.wrapWords('', 100, measure, 'x'), ['']);
+});

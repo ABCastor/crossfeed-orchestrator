@@ -83,6 +83,57 @@ const Crossfeed = (() => {
     return done;
   }
 
+  // The share card as a picture. `measure(text, font)` gives a width in px, so the layout is testable without a canvas.
+  // lines: [[kind, text], ...] as written by sharing.py; returns the draw operations and the card's height.
+  const CARD_STYLE = {
+    title: {font: '600 26px Georgia, serif', gap: 0, line: 34}, sub: {font: '400 15px system-ui, sans-serif', gap: 4, line: 22},
+    plan: {font: '600 17px system-ui, sans-serif', gap: 26, line: 24, rule: true}, row: {font: '400 16px system-ui, sans-serif', gap: 6, line: 23},
+    total: {font: '600 20px Georgia, serif', gap: 28, line: 28, rule: true}, note: {font: '400 13px system-ui, sans-serif', gap: 22, line: 19},
+  };
+  function wrapWords(text, width, measure, font) {
+    const out = [];
+    let line = '';
+    for (const word of String(text).split(/\s+/).filter(Boolean)) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && measure(next, font) > width) { out.push(line); line = word; } else line = next;
+    }
+    if (line) out.push(line);
+    return out.length ? out : [''];
+  }
+  function cardLayout(lines, measure, width = 720, pad = 36) {
+    const ops = [];
+    let y = pad;
+    for (const [kind, text] of lines) {
+      const style = CARD_STYLE[kind] || CARD_STYLE.row;
+      y += style.gap;
+      if (style.rule) ops.push({kind: 'rule', y: y - style.gap / 2, x: pad, width: width - 2 * pad, strong: kind === 'total'});
+      for (const line of wrapWords(text, width - 2 * pad, measure, style.font)) {
+        y += style.line;
+        ops.push({kind, text: line, x: pad, y: y - 6, font: style.font});
+      }
+    }
+    return {ops, width, height: y + pad};
+  }
+  function drawCard(doc, lines, colors) {
+    const canvas = doc.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const layout = cardLayout(lines, (text, font) => { ctx.font = font; return ctx.measureText(text).width; });
+    const scale = 2;
+    canvas.width = layout.width * scale; canvas.height = layout.height * scale;
+    ctx.scale(scale, scale);
+    ctx.fillStyle = colors.paper; ctx.fillRect(0, 0, layout.width, layout.height);
+    for (const op of layout.ops) {
+      if (op.kind === 'rule') {
+        ctx.fillStyle = op.strong ? colors.strong : colors.rule; ctx.fillRect(op.x, op.y, op.width, 1);
+        continue;
+      }
+      ctx.font = op.font;
+      ctx.fillStyle = op.kind === 'sub' || op.kind === 'note' ? colors.quiet : colors.ink;
+      ctx.fillText(op.text, op.x, op.y);
+    }
+    return canvas;
+  }
+
   // FLIP: read the visible positions, move the real nodes, then animate back from those positions.
   // WAAPI never writes inline transforms; cancel/finish leaves the final layout immediately usable.
   function createOrderMotion(doc, win) {
@@ -214,7 +265,7 @@ const Crossfeed = (() => {
     });
   }
 
-  return {searchShortcut, isTyping, isMac, keyHint, createSaver, switchView, splitChange, copyText, wireOrderHandle, createOrderMotion};
+  return {searchShortcut, isTyping, isMac, keyHint, createSaver, switchView, splitChange, copyText, cardLayout, wrapWords, drawCard, wireOrderHandle, createOrderMotion};
 })();
 
 function setupComparison(section) {
@@ -1206,6 +1257,31 @@ function boot(document, window) {
       button.removeAttribute('aria-disabled'); form.removeAttribute('aria-busy'); form.classList.remove('busy');
     }
   });
+
+  // ---- share cards: copy as text, save as an image, print ----
+  for (const card of document.querySelectorAll('.share-card')) {
+    const say = (text) => { const out = card.querySelector('.share-status'); if (out) out.textContent = text; };
+    card.querySelector('[data-share-copy]')?.addEventListener('click', async () => {
+      const text = card.querySelector('.share-text')?.value || '';
+      say((await Crossfeed.copyText(text, window.navigator, document)) ? 'Copied.' : 'Could not copy. Use Print or Save image.');
+    });
+    card.querySelector('[data-share-image]')?.addEventListener('click', () => {
+      try {
+        // A card sent to someone else is always paper and ink, whatever the viewer's theme.
+        const canvas = Crossfeed.drawCard(document, JSON.parse(card.dataset.lines), {paper: '#FAF9F4', ink: '#14130F', quiet: '#4D493F', rule: '#DDD8CC', strong: '#8C877C'});
+        canvas.toBlob((blob) => {
+          if (!blob) { say('Could not make the image.'); return; }
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = `shared-subscriptions-${card.dataset.person}.png`;
+          document.body.append(link); link.click(); link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+          say('Image saved.');
+        }, 'image/png');
+      } catch (_) { say('Could not make the image.'); }
+    });
+  }
+  document.querySelector('[data-print]')?.addEventListener('click', () => window.print());
 
   // ---- copy what agents read: the control at the block's top right, with a "Copied" state ----
   for (const button of document.querySelectorAll('[data-copy-block]')) {

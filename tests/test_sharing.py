@@ -88,6 +88,18 @@ class Sharing(unittest.TestCase):
         self.assertIn("Measured on my Mac", text)
         self.assertNotIn("OpenCode Go", text)                  # the operator keeps 100%: not on Rocco's card
 
+    def test_a_plan_with_several_weekly_allowances_uses_the_rolling_week_and_states_no_account_total(self):
+        model = self.build([entry("antigravity", "Google AI Pro", "20", "70", pools=["agy-a", "agy-b"])],
+                           {"agy-a": {"limits": weekly(30), "usage_cost": {"hourly": hours((1, 2.0)), "last_7d_usd": 2.5}},
+                            "agy-b": {"limits": weekly(60)}})
+        use = model["plans"][0]["use"]
+        self.assertIsNone(use["percent"])
+        self.assertEqual(use["basis"], "in the last 7 days")
+        self.assertAlmostEqual(use["measured_usd"], 2.5)
+        text = sharing.card_text(model, "rocco")
+        self.assertNotIn("weekly allowance", text)
+        self.assertIn("in the last 7 days: $2.50", text)
+
     def test_people_totals_per_currency_and_unsplit_plans_stay_with_the_operator(self):
         model = self.build([entry("a", "A", "100", "50", other="Rocco"), entry("b", "B", "30", "40", other="Rocco"),
                             entry("c", "C", "10", "50", other="Ale", currency="USD"), entry("d", "D", "5", None)], {})

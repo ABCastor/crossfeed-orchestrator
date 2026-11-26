@@ -53,9 +53,11 @@ def _day(epoch: float) -> str:
 def _use(entry: dict[str, Any], pools: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """The account's reading and what this machine measured for one subscription, with the reason for any gap."""
     members = [pools[key] for key in entry.get("pools", []) if key in pools]
-    weekly = next((limit for pool in members for limit in pool.get("limits", [])
-                   if limit.get("kind") == "window" and limit.get("minutes") == WEEK_MINUTES and not limit.get("scope")
-                   and limit.get("reset_at") and isinstance(limit.get("used_percent"), (int, float))), None)
+    weekly_all = [(pool["pool"], limit) for pool in members for limit in pool.get("limits", [])
+                  if limit.get("kind") == "window" and limit.get("minutes") == WEEK_MINUTES and not limit.get("scope")
+                  and limit.get("reset_at") and isinstance(limit.get("used_percent"), (int, float))]
+    # A plan with several weekly allowances (Google AI Pro) has no one account figure to compare with.
+    weekly = weekly_all[0][1] if len({pool for pool, _ in weekly_all}) == 1 else None
     cost = next((pool["usage_cost"] for pool in members if pool.get("usage_cost")), None)
     out: dict[str, Any] = {"percent": None, "total_usd": None, "measured_usd": None, "measured_tokens": None,
                            "rest_usd": None, "measured_share": None, "basis": None, "exact": True, "stale": False,
