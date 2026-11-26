@@ -36,6 +36,55 @@ KNOWN = {
 VALUE = re.compile(r"[A-Za-z0-9._~+/=:-]{8,512}\Z")
 OP_REF = re.compile(r"op://[A-Za-z0-9_.-]{1,64}/[^/\r\n\0\"'\\]{1,200}/[^/\r\n\0\"'\\]{1,200}\Z")
 Runner = Callable[..., "subprocess.CompletedProcess[bytes]"]
+# A terminal wraps a paste in ESC[200~ ... ESC[201~ when bracketed paste is on. The ESC byte can be
+# swallowed or shown as ^[ along the way, so the visible remainder is stripped too: no key contains `[`.
+PASTE_MARKER = re.compile(r"(?:\x1b|\^\[)?\[20[01]~")
+# Zero-width characters, byte-order mark and soft hyphen travel with copied text and are invisible.
+INVISIBLE = re.compile("[\u00ad\u200b-\u200f\u2060\u2066-\u2069\ufeff]")
+QUOTE_PAIRS = (("\"", "\""), ("'", "'"), ("`", "`"), ("\u201c", "\u201d"), ("\u2018", "\u2019"))
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def clean_value(raw: str) -> str:
+    """The key inside a pasted string, or a SecretError that says what was wrong without echoing it.
+
+    Removes bracketed-paste markers, carriage returns and surrounding whitespace (also an invisible
+    character or one pair of matching quotes around the key). Any other control character is
+    refused rather than guessed at.
+    """
+    if not isinstance(raw, str):
+        raise SecretError("The value must be text.")
+    value = INVISIBLE.sub("", PASTE_MARKER.sub("", raw)).strip()
+    for opening, closing in QUOTE_PAIRS:
+        if len(value) > 1 and value.startswith(opening) and value.endswith(closing):
+            value = value[1:-1].strip()
+            break
+    if not value:
+        raise SecretError("Nothing was pasted: the value is empty once paste markers and spaces are removed.")
+    controls = sum(1 for ch in value if ch.isprintable() is False and not ch.isspace())
+    if controls:
+        raise SecretError(f"The paste contains {_plural(controls, 'control character')} that cannot be part of a key "
+                          "(usually an escape sequence from the terminal). Nothing was stored; paste again or type the key.")
+    if any(ch.isspace() for ch in value):
+        raise SecretError("The paste contains a space or line break in the middle of the key. "
+                          "Nothing was stored; paste the key as one line.")
+    if not VALUE.fullmatch(value):
+        stray = sum(1 for ch in value if not re.fullmatch(r"[A-Za-z0-9._~+/=:-]", ch))
+        if stray:
+            raise SecretError(f"The key contains {_plural(stray, 'character')} outside letters, digits and . _ ~ + / = : - "
+                              "(a quote, bracket or accented letter, for example). Nothing was stored.")
+        raise SecretError("That does not look like a key: keys are 8 to 512 characters long.")
+    return value
+
+
+def _tolerant(raw: str | None) -> str:
+    try:
+        return clean_value(raw or "")
+    except SecretError:
+        return ""
 
 
 class SecretError(ValueError):
@@ -187,8 +236,8 @@ class Store:
             ("file", lambda: self._read_file(name)),
         ]
         for source, read in candidates:
-            value = (read() or "").strip()
-            if value and VALUE.fullmatch(value):
+            value = _tolerant(read())
+            if value:
                 return value, source
         return None, "none"
 
@@ -210,9 +259,7 @@ class Store:
 
     def put(self, name: str, value: str, *, allow_file: bool = False) -> str:
         _check_name(name)
-        value = value.strip()
-        if not VALUE.fullmatch(value):
-            raise SecretError("That does not look like a key: use 8-512 letters, digits and . _ ~ + / = : -")
+        value = clean_value(value)
         backend = self.writable_backend()
         if backend == "keychain":
             self._write_keychain(name, value)

@@ -169,5 +169,82 @@ class SecretStoreTests(unittest.TestCase):
         self.assertEqual(ss.main(["set", "openrouter-management"], store=store, stdin=io.StringIO("bad\n"), out=io.StringIO()), 2)
 
 
+class PasteCleaningTests(unittest.TestCase):
+    """What a terminal adds around a pasted key. Synthetic values only."""
+
+    def test_removes_bracketed_paste_markers_returns_and_surrounding_space(self):
+        for raw in (f"\x1b[200~{KEY}\x1b[201~", f"\x1b[200~{KEY}\x1b[201~\r\n", f"  {KEY}\r\n",
+                    f"[200~{KEY}[201~", f"^[[200~{KEY}^[[201~", f"\x1b[200~ {KEY} \x1b[201~\r",
+                    f"\u200b{KEY}\ufeff\n", f"\xa0{KEY}\xa0", f'"{KEY}"', f"'{KEY}'\n", f"\u201c{KEY}\u201d"):
+            self.assertEqual(ss.clean_value(raw), KEY, repr(raw))
+
+    def test_other_control_characters_are_refused_without_echoing_the_value(self):
+        for raw in (f"{KEY}\x1b[A", f"\x03{KEY}", f"{KEY[:8]}\x00{KEY[8:]}", f"{KEY}\x7f", f"{KEY}\x9b"):
+            with self.assertRaises(ss.SecretError) as caught:
+                ss.clean_value(raw)
+            message = str(caught.exception)
+            self.assertIn("control character", message, repr(raw))
+            self.assertNotIn(KEY, message)
+            self.assertNotIn(KEY[:8], message)
+            self.assertTrue(message.isprintable(), message)
+
+    def test_each_wrong_value_says_what_was_wrong(self):
+        cases = {"": "Nothing was pasted", "\x1b[200~\x1b[201~\r\n": "Nothing was pasted",
+                 f"{KEY} {OTHER}": "space or line break", f"{KEY}\n{OTHER}": "space or line break",
+                 f"{KEY}]": "outside letters", "sk-\u00e9-1234567890": "outside letters",
+                 "short": "8 to 512", "x" * 600: "8 to 512"}
+        for raw, words in cases.items():
+            with self.assertRaises(ss.SecretError) as caught:
+                ss.clean_value(raw)
+            self.assertIn(words, str(caught.exception), repr(raw))
+            self.assertNotIn(KEY, str(caught.exception))
+            self.assertNotIn(raw.strip() or "\0", str(caught.exception))
+
+    def test_store_put_and_cli_accept_a_bracketed_paste(self):
+        for raw in (f"\x1b[200~{KEY}\x1b[201~\r\n", f"{KEY}\r\n"):
+            system = FakeSystem(keychain={})
+            store = ss.Store(env={}, runner=system, platform="darwin", which=system.which,
+                             directory=Path(tempfile.mkdtemp()), op_env=lambda: None)
+            out = io.StringIO()
+            code = ss.main(["set", "openrouter-management"], store=store, stdin=io.StringIO(raw), out=out)
+            self.assertEqual(code, 0, repr(raw))
+            self.assertEqual(system.keychain["openrouter-management"], KEY)
+            for argv, _stdin in system.calls:
+                self.assertFalse(any(KEY in part for part in argv))
+            self.assertNotIn(KEY, out.getvalue())
+
+    def test_hidden_prompt_path_cleans_a_paste_too(self):
+        from unittest import mock
+        system = FakeSystem(keychain={})
+        store = ss.Store(env={}, runner=system, platform="darwin", which=system.which,
+                         directory=Path(tempfile.mkdtemp()), op_env=lambda: None)
+
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+        with mock.patch("getpass.getpass", return_value=f"\x1b[200~{KEY}\x1b[201~"):
+            self.assertEqual(ss.main(["set", "openrouter-management"], store=store, stdin=Terminal(), out=io.StringIO()), 0)
+        self.assertEqual(system.keychain["openrouter-management"], KEY)
+
+    def test_cli_error_for_a_bad_paste_names_the_problem_and_not_the_value(self):
+        system = FakeSystem(keychain={})
+        store = ss.Store(env={}, runner=system, platform="darwin", which=system.which,
+                         directory=Path(tempfile.mkdtemp()), op_env=lambda: None)
+        from contextlib import redirect_stderr
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = ss.main(["set", "openrouter-management"], store=store, stdin=io.StringIO(f"{KEY}\x1b[A\n"), out=io.StringIO())
+        self.assertEqual(code, 2)
+        self.assertIn("control character", err.getvalue())
+        self.assertNotIn(KEY, err.getvalue())
+        self.assertEqual(system.keychain, {})
+
+    def test_stored_value_with_paste_residue_still_reads_clean(self):
+        system = FakeSystem(keychain={"openrouter-management": f"\x1b[200~{KEY}\x1b[201~"})
+        store = ss.Store(env={}, runner=system, platform="darwin", which=system.which,
+                         directory=Path(tempfile.mkdtemp()), op_env=lambda: None)
+        self.assertEqual(store.resolve("openrouter-management"), (KEY, "keychain"))
+
+
 if __name__ == "__main__":
     unittest.main()

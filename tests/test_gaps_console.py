@@ -143,6 +143,17 @@ class SecretDoor(unittest.TestCase):
             self.assertNotIn(fields["value"], payload.decode())
         self.assertEqual(self.system.keychain, {})
 
+    def test_a_bracketed_paste_is_cleaned_and_a_control_character_is_named(self):
+        status, payload, *_ = self.post({"name": "openrouter-management", "value": f"\x1b[200~{KEY}\x1b[201~\r\n"}, self.signed())
+        self.assertEqual(status, 200)
+        self.assertEqual(self.system.keychain["openrouter-management"], KEY)
+        self.system.keychain.clear()
+        status, payload, *_ = self.post({"name": "openrouter-management", "value": f"{KEY}\x1b[A"}, self.signed())
+        self.assertEqual(status, 400)
+        self.assertIn("control character", json.loads(payload)["error"])
+        self.assertNotIn(KEY, payload.decode())
+        self.assertEqual(self.system.keychain, {})
+
 
 if __name__ == "__main__":
     unittest.main()
