@@ -30,7 +30,7 @@ struct PolicyControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text("Spend policy").font(CF.face(11.5, .semibold))
+                Text("Spend policy").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
                 if selected == nil {
                     Spacer()
                     Text("Mixed").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)

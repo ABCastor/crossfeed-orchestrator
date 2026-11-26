@@ -27,7 +27,7 @@ public struct RowModel: Equatable, Identifiable {
     public var title: String
     public var usedText: String       // "2% used", "Not read"
     public var resetText: String?     // "Resets in 3d 20h"
-    public var paceText: String?      // "Pace: 46% in deficit · runs out in 9h 39m"
+    public var paceText: String?      // "46% in deficit · runs out in 9h 39m"
     public var bar: BarModel?
 }
 
@@ -369,10 +369,12 @@ public struct Presenter {
         }
     }
 
-    /// fleetctl's own words, once: "46% in deficit, runs out in 9h 39m" -> "Pace: 46% in deficit · runs out in 9h 39m".
+    /// fleetctl's own words, once: "46% in deficit, runs out in 9h 39m" -> "46% in deficit · runs out in 9h 39m".
+    /// The dot beside it says it is the pace; the word does not repeat.
     static func paceLine(_ pace: Pace?) -> String? {
         guard let words = pace?.words, !words.isEmpty else { return nil }
-        return "Pace: " + words.components(separatedBy: ", ").filter { !$0.isEmpty }.joined(separator: " · ")
+        let line = words.components(separatedBy: ", ").filter { !$0.isEmpty }.joined(separator: " · ")
+        return line.prefix(1).uppercased() + line.dropFirst()
     }
 
     // MARK: Reset countdown

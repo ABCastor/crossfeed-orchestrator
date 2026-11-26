@@ -124,7 +124,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(bar.pace, .deficit)
         XCTAssertTrue(bar.hot)
         XCTAssertEqual(try XCTUnwrap(bar.expected), 42.2, accuracy: 0.001)
-        XCTAssertEqual(row.paceText, "Pace: 46% in deficit · runs out in 9h 39m")
+        XCTAssertEqual(row.paceText, "46% in deficit · runs out in 9h 39m")
         XCTAssertEqual(row.resetText, "Resets in 4d 1h")   // 349,818 s after the fixture's clock
         XCTAssertEqual(card.badge, "Conserve")
     }
@@ -133,14 +133,14 @@ final class PresentationTests: XCTestCase {
         let row = try XCTUnwrap(presenter().card(for: "copilot")?.sections.first?.rows.first)
         XCTAssertEqual(row.bar?.pace, .surplus)
         XCTAssertEqual(row.bar?.hot, false)
-        XCTAssertEqual(row.paceText, "Pace: 81% surplus")
+        XCTAssertEqual(row.paceText, "81% surplus")
         XCTAssertEqual(row.title, "Monthly · Premium")
     }
 
     func testScopedWindowIsLabelled() throws {
         let rows = try XCTUnwrap(presenter().card(for: "claude")?.sections.first?.rows)
         XCTAssertEqual(rows.map(\.title), ["Weekly", "Weekly · Fable only"])
-        XCTAssertEqual(rows[1].paceText, "Pace: on pace")
+        XCTAssertEqual(rows[1].paceText, "On pace")
     }
 
     func testAGYShowsUnreadPoolsWithTheirReasonAndTheReadOne() throws {

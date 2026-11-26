@@ -316,8 +316,7 @@ struct UsageCard: View {
                     HeaderButton(symbol: "slider.horizontal.3", label: "Menu bar settings", control: .settings, state: state)
                 }
             }
-            .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 8)
-            MenuDivider(inset: true).padding(.bottom, 6)
+            .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 12)
             ForEach(Array(card.allowanceSections.enumerated()), id: \.element.id) { index, section in
                 if index > 0 { MenuDivider(inset: true).padding(.vertical, 5) }
                 SectionView(section: section, state: state, now: now, isAllowance: card.isAntigravity)
@@ -379,6 +378,9 @@ struct SectionView: View {
     let now: Date
     let isAllowance: Bool
 
+    /// Every window unread: the reason joins the "Not read" line instead of standing under it.
+    private var mergesNote: Bool { !section.rows.isEmpty && section.rows.allSatisfy { $0.bar == nil } }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             if let title = section.title {
@@ -390,9 +392,16 @@ struct SectionView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 9) {
-                ForEach(section.rows) { row in MetricRow(row: row) }
+                ForEach(section.rows) { row in
+                    // A window with nothing to draw says "Not read" and why on one line, not two.
+                    var shown = row
+                    if row.bar == nil, let note = section.note, mergesNote {
+                        shown.usedText = row.usedText + " · " + note
+                    }
+                    return MetricRow(row: shown)
+                }
             }
-            if let note = section.note {
+            if let note = section.note, !mergesNote {
                 Text(isAllowance && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
                     .font(CF.face(11)).foregroundStyle(CF.quiet)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).help(note)
@@ -442,7 +451,7 @@ struct ProviderExtrasView: View {
                 }
                 if !extras.billing.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Subscription").font(CF.face(12, .semibold))
+                        Text("Subscription").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
                         ForEach(extras.billing, id: \.self) { line in
                             Measure(line, size: 11.5).foregroundStyle(CF.quiet)
                         }
@@ -451,7 +460,7 @@ struct ProviderExtrasView: View {
                 if !extras.modelQuota.isEmpty { extraRows("Per-model allowance", rows: extras.modelQuota, stacked: true) }
                 if !extras.credits.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(extras.creditTitle).font(CF.face(12, .semibold))
+                        Text(extras.creditTitle).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
                         ForEach(extras.credits, id: \.self) { line in
                             Measure(line, size: 11.5).foregroundStyle(CF.quiet)
                         }
@@ -483,7 +492,7 @@ struct ProviderExtrasView: View {
 
     private func extraRows(_ heading: String, rows: [ExtraRow], stacked: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(heading).font(CF.face(12, .semibold))
+            Text(heading).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
             ForEach(rows.indices, id: \.self) { index in
                 let row = rows[index]
                 if stacked {
@@ -508,34 +517,39 @@ struct ProviderExtrasView: View {
     }
 }
 
-/// CodexBar's MetricRow: medium title, 6 pt bar, "% used" left and reset countdown right, pace line below.
+/// One allowance window in three lines: its name and when it resets, the bar, then how much is used
+/// beside the pace. (CodexBar's MetricRow spends a fourth line on the pace.)
 struct MetricRow: View {
     let row: RowModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(row.title).font(CF.face(13, .medium)).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(row.title).font(CF.face(13, .medium)).lineLimit(1)
+                Spacer(minLength: 4)
+                if let reset = row.resetText {
+                    Measure(reset, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1).fixedSize()
+                }
+            }
             if let bar = row.bar {
                 UsageProgressBar(percent: bar.used, tint: bar.pace == .unknown && bar.hot ? CF.human : CF.machine,
                                  accessibilityLabel: row.title, pacePercent: bar.expected,
                                  paceOnTop: bar.pace != .deficit, paceColor: CF.paceColor(bar.pace))
             }
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if row.bar != nil {
-                    Measure(row.usedText, size: 11.5, weight: .medium)
+                    Measure(row.usedText, size: 11.5, weight: .medium).fixedSize()
                 } else {
                     Text(row.usedText).font(CF.face(11)).foregroundStyle(CF.quiet)
                 }
-                Spacer(minLength: 8)
-                if let reset = row.resetText {
-                    Measure(reset, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1)
-                }
-            }
-            if let pace = row.paceText, let bar = row.bar {
-                HStack(spacing: 5) {
-                    Circle().fill(CF.dotColor(bar.pace)).frame(width: 6, height: 6)
-                    Text(pace).font(CF.face(11)).foregroundStyle(bar.pace == .deficit ? CF.humanText : CF.quiet)
-                        .lineLimit(1).minimumScaleFactor(0.85)
+                Spacer(minLength: 4)
+                if let pace = row.paceText, let bar = row.bar {
+                    HStack(spacing: 5) {
+                        Circle().fill(CF.dotColor(bar.pace)).frame(width: 6, height: 6)
+                        Text(pace).font(CF.face(11)).foregroundStyle(bar.pace == .deficit ? CF.humanText : CF.quiet)
+                            .lineLimit(1).fixedSize()
+                    }
+                    .accessibilityElement(children: .combine).accessibilityLabel("Pace: " + pace)
                 }
             }
         }
@@ -550,7 +564,7 @@ struct ShareCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(model.title).font(CF.face(13, .medium))
+            Text(model.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
             ShareBar(share: model.fraction, label: model.title)
             HStack(alignment: .firstTextBaseline) {
                 Measure(model.left, size: 11.5)
@@ -569,7 +583,7 @@ struct SpendCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(model.title).font(CF.face(13, .medium))
+            Text(model.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
             ForEach(model.lines, id: \.self) { line in
                 Measure(line, size: 11.5)
             }
