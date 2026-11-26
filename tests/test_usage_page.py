@@ -52,6 +52,26 @@ def render(series=None):
 
 
 class Pure(unittest.TestCase):
+    def test_each_provider_draws_in_its_own_brand_and_a_repeat_is_a_variant(self):
+        self.assertEqual([usage_page.brand(p) for p in ("claude", "codex", "chatgpt-work", "antigravity-3p", "openrouter-free",
+                                                        "opencode-go", "github-copilot-student", "mystery")],
+                         ["claude", "openai", "openai", "google", "openrouter", "opencode", "copilot", "other"])
+        self.assertEqual(usage_page.brand_classes(["antigravity-gemini", "claude", "antigravity-3p"]),
+                         ["pv pv-google", "pv pv-claude", "pv pv-google v1"])
+        chart = usage_page.daily_chart(usage_page.cost_rows(overview()["pools"], lambda p: p["label"]))
+        self.assertIn('class="pv pv-claude"', chart)
+        self.assertIn('class="key pv pv-openai"', chart)
+
+    def test_idle_window_says_its_note_and_the_console_shows_it(self):
+        idle = {"name": "session", "title": "5-hour", "scope": None, "kind": "window", "minutes": 300, "used_percent": 0,
+                "reset_at": None, "resets": None, "active": False, "note": "Starts with your next message", "state": "abundant"}
+        page = usage_page.pace_rows([{"pool": "claude", "label": "Claude", "limits": [idle]}], lambda p: p["label"])
+        self.assertIn("Starts with your next message", page)
+        self.assertIn("pv-claude", page)
+        self.assertIn("Starts with your next message", console._limit_row({**idle, "reset_unknown": False}, "claude"))
+        gauge = console._work_gauge({"pool": "claude", "state": "NORMAL", "limits": [window("weekly", "Weekly", 10080, 36, 20), idle]})
+        self.assertIn("starts with your next message", gauge)
+
     def test_cost_table_has_today_week_month_per_provider_and_a_total_and_says_the_basis_once(self):
         page = render()
         self.assertEqual(page.count("API list prices"), 1)
@@ -88,7 +108,7 @@ class Pure(unittest.TestCase):
         page = usage_page.history_charts(overview()["pools"], lambda g, m: m[0]["label"],
                                          lambda p, l: l["title"], SERIES, NOW)
         self.assertEqual(page.count('<figure class="chart mini"'), 1)      # only Claude has two readings or more
-        self.assertIn('class="line s1"', page)
+        self.assertIn('class="line pv pv-claude"', page)
         self.assertNotIn("5-hour", page)                                   # five-hour windows are not charted
         young = usage_page.history_charts(overview()["pools"], lambda g, m: m[0]["label"], lambda p, l: l["title"], {}, NOW)
         self.assertNotIn("<svg", young)

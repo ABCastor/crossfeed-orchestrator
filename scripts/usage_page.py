@@ -12,6 +12,26 @@ from typing import Any, Callable
 
 W, H = 300, 96          # chart viewBox; stretched to the column, so type lives in HTML, never in the SVG
 SERIES = ("s1", "s2", "s3", "s4")
+# Each provider draws in its own brand colour (console.css `.pv-*`); the page chrome keeps Castor's.
+BRANDS = (("claude", "claude"), ("anthropic", "claude"), ("codex", "openai"), ("chatgpt", "openai"),
+          ("openai", "openai"), ("antigravity", "google"), ("gemini", "google"), ("google", "google"),
+          ("openrouter", "openrouter"), ("opencode", "opencode"), ("copilot", "copilot"), ("github", "copilot"))
+
+
+def brand(pool_id: str) -> str:
+    return next((name for needle, name in BRANDS if needle in str(pool_id).lower()), "other")
+
+
+def brand_classes(pool_ids: list[str]) -> list[str]:
+    """One class string per pool: its brand, and v1, v2... when the same brand is drawn again."""
+    seen: dict[str, int] = {}
+    out = []
+    for pool_id in pool_ids:
+        name = brand(pool_id)
+        n = seen.get(name, 0)
+        seen[name] = n + 1
+        out.append(f"pv pv-{name}" + (f" v{min(n, 2)}" if n else ""))
+    return out
 TAGS = {"title": "h3", "sub": "p", "plan": "h4", "row": "p", "total": "p", "note": "p"}
 BASIS = "Estimates at published API list prices, from usage logs on this Mac. Not what you pay: plans are flat."
 
@@ -72,11 +92,12 @@ def _total(rows: list[dict[str, Any]], key: str) -> str:
 
 def cost_table(rows: list[dict[str, Any]]) -> str:
     body = []
+    classes = brand_classes([row.get("pool") or row["name"] for row in rows])
     for index, row in enumerate(rows):
         cost = row["cost"]
         count = tokens(cost.get("last_30d_tokens"))
         body.append(
-            f'<tr><th scope="row"><i class="key {SERIES[min(index, 3)]}" aria-hidden="true"></i>{html.escape(row["name"])}'
+            f'<tr><th scope="row"><i class="key {classes[index]}" aria-hidden="true"></i>{html.escape(row["name"])}'
             + (f'<small>{count} tokens in 30 days</small>' if count else '') + '</th>'
             f'<td>{money(cost.get("today_usd"))}</td><td>{money(cost.get("last_7d_usd"))}</td>'
             f'<td>{money(cost.get("last_30d_usd"))}</td></tr>')
@@ -90,6 +111,7 @@ def cost_table(rows: list[dict[str, Any]]) -> str:
 def daily_chart(rows: list[dict[str, Any]]) -> str:
     """Stacked bars: one per day for 30 days, one colour per provider."""
     series = [(index, row) for index, row in enumerate(rows) if row["cost"].get("daily")]
+    classes = brand_classes([row.get("pool") or row["name"] for row in rows])
     if not series:
         return '<p class="us-empty">Daily cost appears after the next usage scan.</p>'
     days = [item["day"] for item in series[0][1]["cost"]["daily"]]
@@ -109,9 +131,9 @@ def daily_chart(rows: list[dict[str, Any]]) -> str:
                 continue
             h = H * value / top
             y -= h
-            bars.append(f'<rect class="{SERIES[min(index, 3)]}" x="{i * step + gap / 2:.2f}" y="{y:.2f}" '
+            bars.append(f'<rect class="{classes[index]}" x="{i * step + gap / 2:.2f}" y="{y:.2f}" '
                         f'width="{step - gap:.2f}" height="{max(h, .6):.2f}"><title>{_day_label(days[i])}: ${value:,.2f}</title></rect>')
-    keys = ''.join(f'<span class="key-label"><i class="key {SERIES[min(index, 3)]}" aria-hidden="true"></i>'
+    keys = ''.join(f'<span class="key-label"><i class="key {classes[index]}" aria-hidden="true"></i>'
                    f'{html.escape(row["name"])}</span>' for index, row in series)
     return (f'<figure class="chart" role="group" aria-label="Cost per day over the last 30 days">'
             f'<figcaption>{keys}</figcaption>'
@@ -127,7 +149,7 @@ def model_table(rows: list[dict[str, Any]], pretty: Callable[[str], str]) -> str
         for item in row["cost"].get("by_model") or []:
             usd = _num(item.get("usd"))
             entries.append({"name": pretty(str(item.get("model") or "Unknown model")), "pool": row["name"],
-                            "usd": usd, "week": item.get("usd_7d"), "today": item.get("usd_today"),
+                            "usd": usd, "pool_id": row.get("pool") or row["name"], "week": item.get("usd_7d"), "today": item.get("usd_today"),
                             "tokens": item.get("tokens")})
     if not entries:
         return ''
@@ -136,7 +158,7 @@ def model_table(rows: list[dict[str, Any]], pretty: Callable[[str], str]) -> str
     peak = max([e["usd"] or 0 for e in entries] + [0.0001])
     body = ''.join(
         f'<tr><th scope="row">{html.escape(e["name"])}<small>{html.escape(e["pool"])}</small></th>'
-        f'<td class="us-bar"><span class="us-cell">{bar((e["usd"] or 0) / peak * 100, None, "us-mbar")}{money(e["usd"])}</span></td>'
+        f'<td class="us-bar"><span class="us-cell">{bar((e["usd"] or 0) / peak * 100, None, "us-mbar pv pv-" + brand(e["pool_id"]))}{money(e["usd"])}</span></td>'
         f'<td>{money(e["week"])}</td><td>{money(e["today"])}</td></tr>' for e in entries)
     return ('<table class="us-table us-models"><thead><tr><th scope="col">Model</th><th scope="col">30 days</th>'
             f'<th scope="col">7 days</th><th scope="col">Today</th></tr></thead><tbody>{body}</tbody></table>')
@@ -175,13 +197,14 @@ def pace_rows(pools: list[dict[str, Any]], title: Callable[[dict[str, Any]], str
             elapsed = _num(pace.get("elapsed_percent"))
             behind = pace.get("status") == "deficit" or used >= 100
             words = pace.get("words") or ("full" if used >= 100 else "")
-            reset = f'resets {limit["resets"]}' if limit.get("resets") else "reset unknown"
+            reset = (limit.get("note") if limit.get("active") is False else
+                     f'resets {limit["resets"]}' if limit.get("resets") else "reset unknown")
             items.append(
                 f'<li class="{"behind" if behind else ""}"><span class="nm">{html.escape(_label(limit))}</span>'
                 f'{bar(used, elapsed)}'
                 f'<span class="num pc">{used:g}%</span><small>{html.escape(" · ".join(filter(None, [reset, words])))}</small></li>')
         if items:
-            groups.append(f'<section class="us-pace"><h3>{html.escape(title(pool))}</h3><ul>{"".join(items)}</ul></section>')
+            groups.append(f'<section class="us-pace pv pv-{brand(pool["pool"])}"><h3>{html.escape(title(pool))}</h3><ul>{"".join(items)}</ul></section>')
     return ''.join(groups) + ('<p class="us-note">The tick is how much of the window has passed; a fill beyond it is running ahead of an even pace.</p>'
                               if groups else '')
 
@@ -238,7 +261,7 @@ def history_charts(pools: list[dict[str, Any]], group_title: Callable[[str, list
             if not points or points[-1][0] < now - 1:
                 points.append((now, float(limit["used_percent"])))
             path, area = _steps(points, t0, span, now)
-            cls = SERIES[min(index, 3)]
+            cls = f"pv pv-{brand(pool['pool'])}" + (f" v{min(index, 2)}" if index else "")
             shapes.append(f'<path class="area {cls}" d="{area}"/><path class="line {cls}" d="{path}"/>')
             keys.append(f'<span class="key-label"><i class="key {cls}" aria-hidden="true"></i>{html.escape(line_label(pool, limit))}'
                         f' <span class="num">{limit["used_percent"]:g}%</span></span>')

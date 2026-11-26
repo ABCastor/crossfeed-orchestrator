@@ -70,7 +70,34 @@ class GlanceTests(unittest.TestCase):
 
     def test_title_names_lead_then_hot_then_full(self):
         self.assertEqual(menubar.title(self.overview, "claude"),
-                         "Claude 26% · AGY Claude/GPT 85% · full: Argon, Codex")
+                         "Claude 26% · AGY Claude/GPT 85% · Argon, Codex used up")
+
+    def test_retired_models_window_never_headlines_the_pool(self):
+        roster = json.loads(json.dumps(self.roster))
+        roster["model_cards"]["gemini-4-argon"]["retired_on"] = "2026-11-01"
+        with patch.object(fleetctl, "utc_now", return_value=NOW):
+            overview = fleetctl.fleet_overview(roster, runtime(), Path(self.tmp.name), NOW)
+        argon = next(p for p in overview["pools"] if p["pool"] == "antigravity-argon")
+        self.assertTrue(all(l.get("retired") for l in argon["limits"]))
+        self.assertIsNone(menubar.tightest(argon))
+        self.assertEqual(menubar.title(overview, "claude"), "Claude 26% · AGY Claude/GPT 85% · Codex used up")
+        self.assertEqual(menubar.title(self.overview, "antigravity-argon").split(" · ")[0], "Argon used up")
+
+    def test_idle_claude_session_is_listed_with_its_note_and_never_headlines(self):
+        state = runtime()
+        state["quota_snapshots"]["claude"]["windows"].pop("session")
+        state["quota_snapshots"]["claude"]["idle_windows"] = {"session": {
+            "used_percent": 0, "window_minutes": 300, "label": "Session", "active": False,
+            "note": "Starts with your next message"}}
+        with patch.object(fleetctl, "utc_now", return_value=NOW):
+            overview = fleetctl.fleet_overview(self.roster, state, Path(self.tmp.name), NOW)
+        glance = fleetctl.glance_payload(Path(self.tmp.name) / "o.json", self.roster, overview, "claude")
+        claude = next(p for p in glance["pools"] if p["pool"] == "claude")
+        idle = next(l for l in claude["limits"] if l["name"] == "session")
+        self.assertEqual((idle["active"], idle["used_percent"], idle["reset_at"], idle["resets"], idle["note"]),
+                         (False, 0, None, None, "Starts with your next message"))
+        self.assertEqual(claude["used_percent"], 26)
+        self.assertIn("--5-hour · Starts with your next message", menubar.swiftbar(overview, "claude"))
 
     def test_title_without_lead_or_pressure(self):
         quiet = {"pools": [p for p in self.overview["pools"] if p["pool"] == "antigravity-gemini"]}

@@ -5171,6 +5171,8 @@ def pool_limits(
             "state": _state_for_used(int(window.get("used_percent", 0))).lower(),
             "reset_at": None, "resets_in_s": None, "resets": "", "spend_down": False,
             **({"reset_unknown": True} if window.get("reset_unknown") else {}),
+            **({"active": False, "resets": None, "note": window.get("note") or "Not running"}
+               if window.get("active") is False else {}),
             "pace": None,
         })
     limits.sort(key=lambda item: (item["minutes"] is None, item["minutes"] or 0, bool(item["scope"]), item["name"]))
@@ -5695,6 +5697,14 @@ def fleet_overview(
         options = pool_model_options(roster, runtime, pool, models, rows)
         entry["archived"] = [option for option in options if option["archived"]]
         entry["options"] = [option for option in options if not option["archived"]]
+        live = [o["model"] for o in options if not o["archived"] and not o.get("retired_on")]
+        if len(live) < len(options):
+            # A retired or archived model's window never speaks for the pool (BR-SELECT-002).
+            known = {**(snapshots.get(pool) or {}).get("idle_windows", {}), **(snapshots.get(pool) or {}).get("windows", {})}
+            for limit in entry["limits"]:
+                if limit.get("kind") == "window" and not any(
+                        quota_window_applies(roster, pool, limit["name"], known.get(limit["name"], {}), m) for m in live):
+                    limit["retired"] = True
         switches = {key: value for key, value in switches.items() if not model_archived(roster, runtime, pool, key)}
         current = [option["model"] for option in entry["options"] if option["current"] and option["run_as"]]
         for option in entry["options"]:

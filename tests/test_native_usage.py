@@ -125,6 +125,31 @@ class ClaudeTests(unittest.TestCase):
         self.assertEqual(snap["windows"]["claude-weekly-scoped-fable"]["label"], "Fable only")
         self.assertEqual(snap["plan"], "Claude Max 20x")
 
+    def test_idle_session_is_kept_as_an_inactive_five_hour_window(self):
+        body = {"five_hour": None, "seven_day": {"utilization": 36, "resets_at": "2026-12-01T12:59:59+00:00"},
+                "limits": [{"kind": "weekly_all", "percent": 36, "resets_at": "2026-12-01T12:59:59+00:00"},
+                           {"kind": "weekly_scoped", "percent": 16, "resets_at": "2026-12-01T12:59:59+00:00",
+                            "scope": {"model": {"display_name": "Fable"}, "surface": None}}]}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual(set(snap["windows"]), {"weekly", "claude-weekly-scoped-fable"})
+        self.assertEqual(snap["idle_windows"]["session"], {
+            "used_percent": 0, "window_minutes": 300, "label": "Session",
+            "active": False, "note": "Starts with your next message"})
+        running = native.parse_claude(fixture("claude-usage.json"), observed_at=NOW)
+        self.assertNotIn("idle_windows", running)
+
+    def test_every_scoped_weekly_and_extra_usage_expiry_are_kept(self):
+        at = "2026-11-03T13:00:00Z"
+        body = {"seven_day": {"utilization": 9, "resets_at": at},
+                **{f"seven_day_{k}": {"utilization": 5, "resets_at": at} for k in ("sonnet", "opus", "oauth_apps", "cowork")},
+                "extra_usage": {"is_enabled": True, "monthly_limit": 5000, "used_credits": 1000, "currency": "USD",
+                                "renews_at": "2026-12-01T00:00:00Z"}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual(set(snap["windows"]), {"weekly", "claude-weekly-scoped-sonnet", "claude-weekly-scoped-opus",
+                                                "claude-weekly-scoped-oauth-apps", "claude-weekly-scoped-cowork"})
+        self.assertEqual(snap["credits"]["renews_at"], "2026-12-01T00:00:00Z")
+        self.assertEqual(snap["idle_windows"]["session"]["active"], False)
+
     def test_older_answer_without_limits_list(self):
         snap = native.parse_claude(fixture("claude-usage-legacy.json"))
         self.assertEqual({k: v["used_percent"] for k, v in snap["windows"].items()}, {"session": 48, "weekly": 3})

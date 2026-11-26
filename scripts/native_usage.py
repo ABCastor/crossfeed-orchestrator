@@ -670,6 +670,10 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
             if isinstance(window, dict):
                 _add(windows, idle, name, _percent(window.get("utilization")),
                      _parse_time(window.get("resets_at")), minutes, label)
+    if (windows or idle) and "session" not in windows and "session" not in idle:
+        # The API sends no 5-hour window until a message starts one; it still exists on the plan.
+        idle["session"] = {"used_percent": 0, "window_minutes": 300, "label": "Session",
+                           "active": False, "note": "Starts with your next message"}
     extra = _mapping(payload.get("extra_usage"))
     cap, spent = (_finite_amount(extra.get(key)) for key in ("monthly_limit", "used_credits"))
     result = _snapshot(CLAUDE_SOURCE, windows, idle, plan, observed_at)
