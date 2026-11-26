@@ -43,6 +43,8 @@ do {
     if let v = argument("--count").flatMap(BarPrefs.Count.init) { prefs.count = v }
     if let v = argument("--icon").flatMap(BarPrefs.Icon.init) { prefs.icon = v }
     if let v = argument("--text").flatMap(BarPrefs.Text.init) { prefs.text = v }
+    if let v = argument("--extra").flatMap(BarPrefs.Extra.init) { prefs.extra = v }
+    if let v = argument("--reset").flatMap(BarPrefs.Reset.init) { prefs.reset = v }
     let settings = CommandLine.arguments.contains("--settings")
     if let stripsOut = argument("--strips-out") {
         // One row per look: the bar item alone, on a light and a dark bar.
@@ -56,10 +58,17 @@ do {
             ("Logo + percent (compact)", { (p: inout BarPrefs) in p.icon = .logo; p.text = .number }),
             ("Tanks only", { (p: inout BarPrefs) in p.text = .none }),
             ("Text only, what is left", { (p: inout BarPrefs) in p.icon = .none; p.count = .left }),
+            ("Add: reset", { (p: inout BarPrefs) in p.extra = .reset }),
+            ("Add: reset, as a clock", { (p: inout BarPrefs) in p.extra = .reset; p.reset = .clock }),
+            ("Add: pace", { (p: inout BarPrefs) in p.extra = .pace }),
+            ("Add: cost today", { (p: inout BarPrefs) in p.extra = .cost }),
+            ("Logo + percent + pace", { (p: inout BarPrefs) in p.icon = .logo; p.text = .number; p.extra = .pace }),
         ] as [(String, (inout BarPrefs) -> Void)] {
             var p = prefs
             change(&p)
-            looks.append((title, presenter.barSummary(p)))
+            let source = p.reset == .clock ? Presenter(glance: glance, loadedAt: now, now: now, resetClock: true,
+                                                       timeZone: TimeZone(identifier: argument("--zone") ?? "Europe/Rome") ?? .current) : presenter
+            looks.append((title, source.barSummary(p)))
         }
         let image = Compose.strips(looks, scale: 2)
         guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),

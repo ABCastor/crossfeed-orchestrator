@@ -142,7 +142,7 @@ enum Compose {
 
     /// Menu bar items on a plain light and a plain dark bar, one row per look, labelled in the margin.
     static func strips(_ looks: [(title: String, summary: BarSummary)], scale: CGFloat) -> NSImage {
-        let rowHeight: CGFloat = 28, labelWidth: CGFloat = 188, stripWidth: CGFloat = 212, pad: CGFloat = 12
+        let rowHeight: CGFloat = 28, labelWidth: CGFloat = 188, stripWidth: CGFloat = 300, pad: CGFloat = 12
         let size = NSSize(width: pad * 2 + labelWidth + stripWidth * 2 + 8,
                           height: pad * 2 + 22 + rowHeight * CGFloat(looks.count))
         return bitmap(points: size, scale: scale) {
