@@ -57,7 +57,7 @@ public struct GlanceModel: Decodable, Equatable {
     public let family: String?
     public let typicalCostUSD: Double?
     public let archived: Bool
-    /// The day the maker withdraws the model ("2026-12-01"), when fleetctl says so.
+    /// The day the maker withdraws the model (YYYY-MM-DD), when fleetctl says so.
     public let retiredOn: String?
 
     /// Archived, or withdrawn (even if the day is still ahead): never the allowance the bar shows.
