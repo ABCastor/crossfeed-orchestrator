@@ -29,6 +29,8 @@ public struct RowModel: Equatable, Identifiable {
     public var resetText: String?     // "Resets in 3d 20h"
     public var paceText: String?      // "46% in deficit · runs out in 9h 39m"
     public var bar: BarModel?
+    /// A window the plan has that is not running yet: one line, its note where the reset would be, no bar.
+    public var inactive = false
 }
 
 public struct SectionModel: Equatable, Identifiable {
@@ -144,8 +146,8 @@ public struct SpendModel: Equatable {
 /// says which allowance the number belongs to.
 public struct BarSummary: Equatable {
     public var text: String           // "Gemini 5h 59%", or "" when nothing is read or the text is off
-    public var left: Double?          // tank fill, most pressed allowance (used %, or left % when counting what is left)
-    public var right: Double?         // tank fill, the next pool
+    public var left: Double?          // left tank: the shown provider's short window (5-hour, session); nil draws an empty outline
+    public var right: Double?         // right tank: the same provider's weekly window; nil draws an empty outline
     public var deficit: Bool
     public var tooltip: String
     public var logo: ProviderLogo?    // the focal provider's mark, when the icon is the logo
@@ -305,7 +307,7 @@ public struct Presenter {
         }
         var note: String?
         var badge = titled ? stateWord(pool.state) : nil
-        if rows.allSatisfy({ $0.bar == nil }) {
+        if rows.allSatisfy({ $0.bar == nil && !$0.inactive }) {
             // Nothing to draw a bar for: say so once, with fleetctl's reason when it gave one.
             let said = pool.measured || pool.gaugeError != nil ? "Not read" : "No quota window"
             badge = titled ? said : nil
@@ -355,11 +357,18 @@ public struct Presenter {
         let used = limit.usedPercent.map { min(100, max(0, $0)) }
         var title = limit.title ?? "Usage"
         if let scope = limit.scope, !scope.isEmpty { title += " · " + scope }
+        if !limit.isActive {
+            return RowModel(id: "\(poolID):\(limit.name ?? String(index))", title: title, usedText: "",
+                            resetText: limit.note ?? "Not started", paceText: nil, bar: nil, inactive: true)
+        }
         return RowModel(id: "\(poolID):\(limit.name ?? String(index))", title: title,
-                        usedText: used.map { "\(Int($0.rounded()))% used" } ?? "Not read",
+                        usedText: used.map { $0 >= Self.usedUp ? "Used up" : "\(Int($0.rounded()))% used" } ?? "Not read",
                         resetText: resetText(limit), paceText: Self.paceLine(limit.pace),
                         bar: used.map { Self.bar(used: $0, pace: limit.pace) })
     }
+
+    /// From here an allowance reads as used up, not as a percent.
+    static let usedUp = 99.5
 
     static func bar(used: Double, pace: Pace?) -> BarModel {
         let kind = paceKind(pace)
@@ -465,8 +474,8 @@ public struct Presenter {
     // MARK: Menu bar
 
     func poolBars(_ pool: Pool) -> [BarModel] {
-        let windows = pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil }
-        if windows.isEmpty, let used = pool.usedPercent, pool.measured { return [Self.bar(used: used, pace: pool.pace)] }
+        let windows = pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil && $0.isActive }
+        if windows.isEmpty, pool.limits.isEmpty, let used = pool.usedPercent, pool.measured { return [Self.bar(used: used, pace: pool.pace)] }
         return windows.map { Self.bar(used: min(100, max(0, $0.usedPercent ?? 0)), pace: $0.pace) }
     }
 
@@ -483,15 +492,17 @@ public struct Presenter {
     /// Measured pools, most pressed first: a pool in deficit leads, then the most used. A chosen window ranks
     /// the pools that have it by that window; a window nobody has falls back to each pool's tightest.
     func pressedPools(window: String = BarPrefs.tightest) -> [Pressed] {
-        func windows(_ pool: Pool) -> [Limit] { pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil } }
+        func windows(_ pool: Pool) -> [Limit] { pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil && $0.isActive } }
+        // A pool whose models are all archived or withdrawn (Argon, from 1 Dec) never leads the bar.
+        let live = glance.pools.filter { !$0.isRetired }.isEmpty ? glance.pools : glance.pools.filter { !$0.isRetired }
         func points(_ pace: Pace?) -> Double { pace?.status == "deficit" ? Double(pace?.points ?? 0) : 0 }
-        let chosen: [Pressed] = window == BarPrefs.tightest ? [] : glance.pools.compactMap { pool in
+        let chosen: [Pressed] = window == BarPrefs.tightest ? [] : live.compactMap { pool in
             guard pool.measured, let hit = windows(pool).first(where: { Self.barWindow($0).short == window && ($0.scope ?? "").isEmpty })
                     ?? windows(pool).first(where: { Self.barWindow($0).short == window }),
                   let used = hit.usedPercent else { return nil }
             return Pressed(pool: pool, limit: hit, used: used, deficit: points(hit.pace))
         }
-        let all: [Pressed] = chosen.isEmpty ? glance.pools.compactMap { pool in
+        let all: [Pressed] = chosen.isEmpty ? live.compactMap { pool in
             guard pool.measured, let used = pool.usedPercent else { return nil }
             let match = windows(pool).filter { abs(($0.usedPercent ?? -1) - used) < 0.5 }
             let limit = match.first { ($0.scope ?? "").isEmpty } ?? match.first
@@ -536,10 +547,25 @@ public struct Presenter {
         return tabs.filter { readable.contains($0.id) }.map { ($0.id, $0.title) }
     }
 
+    /// "Sun 29 Nov 12:04": the full day and time, for an allowance that is used up.
+    func fullClock(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_GB"); f.timeZone = timeZone
+        f.dateFormat = "EEE d MMM HH:mm"
+        return f.string(from: date)
+    }
+
+    /// The tanks: this pool's short window (5-hour, session) on the left, its weekly window on the right.
+    /// A window the plan lacks, or one that is not running, is nil: an empty outline.
+    func tankWindows(_ pool: Pool) -> (short: Limit?, weekly: Limit?) {
+        let windows = pool.limits.filter { $0.kind == "window" && $0.isActive && $0.usedPercent != nil && ($0.scope ?? "").isEmpty }
+        func pick(_ names: Set<String>) -> Limit? { windows.first { names.contains(Self.barWindow($0).short) } }
+        return (pick(["5h", "Session"]) ?? windows.first { ($0.minutes ?? 99999) < 1440 }, pick(["Week"]))
+    }
+
     public func barSummary(_ chosen: BarPrefs) -> BarSummary {
         let prefs = chosen.effective
         let ranked = pressedPools(window: prefs.window)
-        let tip = glance.title.isEmpty ? "Crossfeed" : "Crossfeed · " + glance.title
         // A provider that has no reading right now falls back to the most pressed allowance; the text names it.
         let focal = (prefs.show == BarPrefs.pressed ? nil : ranked.first { Self.groupID($0.pool) == prefs.show }) ?? ranked.first
         guard let focal else {
@@ -547,14 +573,17 @@ public struct Presenter {
         }
         let name = Self.barName(focal.pool)
         let window = Self.barWindow(focal.limit)
-        let next = ranked.first { $0.pool.pool != focal.pool.pool }
-        let fill = { (used: Double?) in used.map { prefs.count == .used ? $0 : 100 - $0 } }
+        let tanks = tankWindows(focal.pool)
+        let fill = { (limit: Limit?) in limit?.usedPercent.map { prefs.count == .used ? $0 : 100 - $0 } }
+        let resetDate = focal.limit?.resetAt.flatMap { Self.iso.date(from: $0) }
         var sentence = "\(name) \(window.long): \(Int(focal.used.rounded()))% used"
-        if let limit = focal.limit, let reset = resetText(limit), reset != "Reset unknown" { sentence += " · " + reset }
-        let logo = ProviderLogo.forPool(focal.pool.pool)
-        let reset = focal.limit.flatMap { limit in
-            limit.resetAt.flatMap { Self.iso.date(from: $0) }.map { resetClock ? clockText($0, today: "") : Self.shortCountdown(to: $0, now: now) }
+        if focal.used >= Self.usedUp {
+            sentence = "\(name) used up" + (resetDate.map { " · resets " + fullClock($0) } ?? "")
+        } else if let limit = focal.limit, let reset = resetText(limit), reset != "Reset unknown" {
+            sentence += " · " + reset
         }
+        let logo = ProviderLogo.forPool(focal.pool.pool)
+        let reset = resetDate.map { resetClock ? clockText($0, today: "") : Self.shortCountdown(to: $0, now: now) }
         let pace = Self.shortPace(focal.limit?.pace ?? focal.pool.pace)
         let spent = glance.pools.compactMap { $0.usageCost?.todayUSD }
         let cost = spent.isEmpty ? nil : String(format: "US$%.2f today", spent.reduce(0, +))
@@ -563,8 +592,8 @@ public struct Presenter {
         if !text.isEmpty, let extra { text += " · " + extra }
         return BarSummary(
             text: text,
-            left: fill(focal.used), right: fill(next?.used), deficit: focal.deficit > 0,
-            tooltip: sentence + "\n" + tip, logo: logo, icon: prefs.icon == .logo && logo == nil ? .tanks : prefs.icon,
+            left: fill(tanks.short), right: fill(tanks.weekly), deficit: focal.deficit > 0,
+            tooltip: sentence, logo: logo, icon: prefs.icon == .logo && logo == nil ? .tanks : prefs.icon,
             name: name, window: window.short, used: focal.used, reset: reset, pace: pace, cost: cost)
     }
 

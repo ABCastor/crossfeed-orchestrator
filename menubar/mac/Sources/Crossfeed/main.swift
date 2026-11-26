@@ -7,6 +7,7 @@ import AppKit
 import CrossfeedCore
 import CrossfeedUI
 import SwiftUI
+import UserNotifications
 
 struct Config {
     var python = "python3"
@@ -113,7 +114,7 @@ final class MenuHostingView: NSHostingView<CrossfeedMenuView> {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     let config: Config
     let state = MenuState()
     let menu = NSMenu()
@@ -129,12 +130,20 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The menu bar choices. A self test writes to a throwaway domain, never to the operator's preferences.
     let barStore: BarPrefsStore
     let console: ConsoleSession
+    let alertStore: AlertStore
+    var alertState: AlertState
+    var gate = PaintGate()
+    var repaintScheduled = false
+    /// The one panel height of the next menu: tallest tab or settings, held to the screen. It changes only while the menu is closed.
+    var panelHeight: CGFloat?
 
     init(config: Config) {
         self.config = config
         self.console = ConsoleSession(config: config)
         self.barStore = BarPrefsStore(defaults: config.selftest
             ? (UserDefaults(suiteName: "org.crossfeed.selftest.bar." + UUID().uuidString) ?? .standard) : .standard)
+        self.alertStore = AlertStore(defaults: .standard)
+        self.alertState = config.selftest ? AlertState() : alertStore.load()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -155,12 +164,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         console.onFailure = { [weak self] failure in
             guard let self, self.state.actionFailure != failure else { return }
             self.state.actionFailure = failure
-            if self.menuIsOpen { self.remeasure() } else { self.rebuildMenu() }
+            self.remeasureHeights()
+            self.syncMenu()
         }
         state.failure = "Reading quotas…"
         if config.selftest { state.selected = config.selftestTab }
         menu.delegate = self
         menu.autoenablesItems = false
+        if !config.selftest && Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+        }
         rebuildMenu()
         if config.selftest { selftest(); return }
         let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -192,6 +205,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let status = item else { return }
         status.isVisible = true
         status.length = NSStatusItem.variableLength
+        gate.forget()
         paintStatusItem()
     }
 
@@ -202,8 +216,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch control {
         case .refresh: reload(); return
         case .settings, .back:
-            state.showsSettings = control == .settings
-            if !config.selftest { rebuildMenu() }
+            // Same panel height on both panes, so the menu does not move.
+            withAnimation(MenuState.animation) { state.showsSettings = control == .settings }
             return
         case .reset: barStore.reset(); prefs = BarPrefs()
         case .show(let id): prefs.show = id
@@ -214,13 +228,57 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .extra(let extra): prefs.extra = extra
         case .resets(let reset): prefs.reset = reset
         case .refreshEvery(let seconds): prefs.refreshSeconds = seconds
+        case .notifyLow: prefs.notifyLow.toggle()
+        case .notifyReset: prefs.notifyReset.toggle()
         }
+        if (control == .notifyLow && prefs.notifyLow) || (control == .notifyReset && prefs.notifyReset) { askForNotifications(control) }
         guard prefs != state.prefs else { return }
         state.prefs = prefs
         barStore.save(prefs)
         if prefs.refreshSeconds != reloadTimer.map({ Int($0.timeInterval) }) { scheduleReload() }
         paintStatusItem()
-        if !config.selftest { rebuildMenu() }
+        remeasureHeights()
+        syncMenu()
+    }
+
+    // MARK: Notifications
+
+    /// Permission is asked when the operator turns a notification on, never before. If it is refused the toggle goes back off.
+    func askForNotifications(_ control: MenuControl) {
+        guard !config.selftest, Bundle.main.bundleIdentifier != nil else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
+            guard !granted else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                var prefs = self.state.prefs
+                if control == .notifyLow { prefs.notifyLow = false } else { prefs.notifyReset = false }
+                self.state.prefs = prefs
+                self.barStore.save(prefs)
+                self.state.actionFailure = "Notifications are off for Crossfeed in System Settings"
+                self.remeasureHeights()
+            }
+        }
+    }
+
+    /// One new reading in: what to tell, once. Memory moves on even with both toggles off.
+    func evaluateAlerts(_ presenter: Presenter) {
+        guard config.fixture.isEmpty, !config.selftest else { return }
+        let result = AlertEngine.step(alertState, AlertEngine.windows(of: presenter), now: presenter.now,
+                                      low: state.prefs.notifyLow, reset: state.prefs.notifyReset)
+        alertState = result.state
+        alertStore.save(result.state)
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        for event in result.events {
+            let content = UNMutableNotificationContent()
+            content.title = event.title
+            content.body = event.body
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: event.id, content: content, trigger: nil))
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner])
     }
 
     // MARK: Data
@@ -271,6 +329,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             glance = data
             loadedAt = Date()
             state.failure = nil
+            let presenter = Presenter(glance: data, loadedAt: loadedAt, now: loadedAt, resetClock: state.prefs.reset == .clock)
+            evaluateAlerts(presenter)
         case .failure:
             // Keep showing the last reading: its age grows in the header instead of vanishing.
             if glance == nil { state.failure = "Quotas unavailable" }
@@ -294,23 +354,32 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             state.presenter = nil
         }
         paintStatusItem()
-        if menuIsOpen { remeasure() } else { rebuildMenu() }
+        if panelHeight == nil || !menuIsOpen { remeasureHeights() }
+        syncMenu()
     }
 
-    /// A new reading can change the card's height while the menu is open; AppKit does not resize a custom
-    /// view, so swap the item for one of the right size when (and only when) the height changed.
-    func remeasure() {
-        RunLoop.main.perform(inModes: [.common, .eventTracking]) { [weak self] in
-            guard let self, let host = self.host else { return }
-            if abs(ceil(host.fittingSize.height) - host.frame.height) > 0.5 { self.rebuildMenu() }
-        }
+    /// The tallest tab (or the settings pane), held to the screen. Measured from the reading, never while a menu is
+    /// tracking: the height is applied when the menu is next built, so the panel never moves under the pointer.
+    func remeasureHeights() {
+        guard let presenter = state.presenter else { panelHeight = nil; return }
+        let screen = item?.button?.window?.screen ?? NSScreen.main
+        // Room for the menu bar, the three native rows under the card and a margin.
+        let cap = max(360, (screen?.visibleFrame.height ?? 800) - 150)
+        let measured = MainActor.assumeIsolated { PanelSizing.measure(presenter: presenter, prefs: state.prefs, failure: nil, cap: cap) }
+        if menuIsOpen, panelHeight != nil { return }
+        panelHeight = measured.panel
+    }
+
+    /// Rebuilds the menu only when its height should change, and never under an open menu that already has one.
+    func syncMenu() {
+        if menuIsOpen && host != nil && state.panelHeight != nil { return }
+        if host == nil || (panelHeight ?? 0) != (state.panelHeight ?? 0) { rebuildMenu() }
     }
 
     func select(_ id: String) {
         guard id != state.selected else { return }
-        state.selected = id
+        state.choose(id)
         UserDefaults.standard.set(id, forKey: Self.tabKey)
-        rebuildMenu()
     }
 
     func reorder(_ source: String, onto target: String) {
@@ -325,6 +394,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = item?.button else { return }
         let summary = state.presenter?.barSummary(state.prefs)
             ?? BarSummary(text: "", left: nil, right: nil, deficit: false, tooltip: "Crossfeed · reading quotas")
+        // Not while the menu is open or a click is landing, and not when nothing changed: repainting the item under
+        // the pointer can swallow the click. A refused paint is asked again on the next tick and when the menu closes.
+        let busy = menuIsOpen || NSEvent.pressedMouseButtons != 0
+        guard gate.shouldPaint(summary, busy: busy) else {
+            if busy && summary != gate.painted && !repaintScheduled {
+                repaintScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    self?.repaintScheduled = false
+                    self?.paintStatusItem()
+                }
+            }
+            return
+        }
         let icon = MenuBarIcon.image(for: summary)
         button.image = icon
         button.imagePosition = icon == nil ? .noImage : .imageLeft
@@ -334,7 +416,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if summary.deficit { attrs[.foregroundColor] = CF.humanNS }
         let lead = icon == nil ? "" : " "
         button.attributedTitle = NSAttributedString(string: summary.text.isEmpty ? "" : lead + summary.text, attributes: attrs)
-        button.toolTip = summary.tooltip
+        // No hover tooltip: a tooltip window can outlive the item's repaint and stay on screen after the menu closes.
+        // The sentence stays available to VoiceOver.
+        button.toolTip = nil
         button.setAccessibilityLabel(summary.tooltip.replacingOccurrences(of: "\n", with: ". "))
         button.setAccessibilityRoleDescription("Crossfeed quota")
     }
@@ -344,7 +428,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
-        reload()
+        // The cached reading is on screen already; read again only when it is older than 30 s, and update in place.
+        if glance == nil || Date().timeIntervalSince(loadedAt) > 30 { reload() }
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -352,13 +437,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         state.showsSettings = false
         state.isReloading = false
         state.cancelPointer()
+        paintStatusItem()
+        remeasureHeights()
         rebuildMenu()
     }
 
     func rebuildMenu() {
         menu.removeAllItems()
+        state.panelHeight = panelHeight
         let host = MenuHostingView(model: state)
-        host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
+        host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: panelHeight ?? ceil(host.fittingSize.height))
         self.host = host
         let card = NSMenuItem()
         card.view = host
@@ -437,25 +525,28 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             self.state.onControl = realControl
             self.state.showsSettings = true
+            host.invalidateIntrinsicContentSize(); host.needsLayout = true
             host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
-            host.layoutSubtreeIfNeeded()
-            DispatchQueue.main.async {
+            host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let frames = self.state.controlFrames
                 var wanted: [MenuControl] = [.back, .reset] + BarPrefs.windowChoices.map { .window($0) }
-                wanted += [.show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
+                wanted += [.notifyLow, .notifyReset, .show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
                 wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
                 wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) } + BarPrefs.Reset.allCases.map { .resets($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
                 var settingsOK = wanted.allSatisfy { frames[$0] != nil }
+                if !settingsOK { print("selftest: frames \(frames.count) settings \(self.state.showsSettings) \(frames.keys.map { "\($0)" }.prefix(5))") }
                 func click(_ control: MenuControl) {
                     if let rect = frames[control] { _ = self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) } else { settingsOK = false }
                 }
                 click(.show("codex")); click(.window("Week")); click(.count(.left)); click(.icon(.logo))
-                click(.text(.window)); click(.extra(.reset)); click(.resets(.clock)); click(.refreshEvery(300))
+                click(.text(.window)); click(.notifyLow); click(.notifyReset); click(.extra(.reset)); click(.resets(.clock)); click(.refreshEvery(300))
                 var expected = BarPrefs()
                 expected.show = "codex"; expected.window = "Week"; expected.count = .left; expected.icon = .logo
-                expected.text = .window; expected.extra = .reset; expected.reset = .clock; expected.refreshSeconds = 300
+                expected.text = .window; expected.notifyLow = true; expected.notifyReset = true; expected.extra = .reset; expected.reset = .clock; expected.refreshSeconds = 300
                 let saved = self.barStore.load()
                 settingsOK = settingsOK && self.state.prefs == expected && saved == expected
+                if !settingsOK { print("selftest: prefs \(self.state.prefs) saved \(saved)") }
                 click(.reset)
                 settingsOK = settingsOK && self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs()
                 click(.back)

@@ -132,6 +132,8 @@ public struct IncidentLine: Equatable {
 public struct ProviderExtras: Equatable {
     public let creditTitle: String
     public let credits: [String]
+    /// The same credits as one line each, the date on the right: "Extra usage left · US$12.54" / "Renews 6 Dec".
+    public let creditRows: [ExtraRow]
     public let usage: [ExtraRow]
     public let perModel: [ExtraRow]
     public let status: URL?
@@ -160,9 +162,16 @@ public struct ProviderExtras: Equatable {
             let expires = credits.expiresAt.flatMap(Presenter.controlDate).map { "Expires on \($0.formatted(date))" }
             let renews = credits.renewsAt.flatMap(Presenter.controlDate).map { "New credits on \($0.formatted(date))" }
             self.credits = [balance, expires, renews].compactMap { $0 }
+            let day = Date.FormatStyle().day().month(.abbreviated)
+            let renewDay = credits.renewsAt.flatMap(Presenter.controlDate).map { "Renews " + $0.formatted(day) }
+            let expiryDay = credits.expiresAt.flatMap(Presenter.controlDate).map { "Expires " + $0.formatted(day) }
+            let label = creditTitle.replacingOccurrences(of: " remaining", with: " left") + (balance.map { " · " + $0 } ?? "")
+            creditRows = [ExtraRow(label: label, detail: renewDay ?? expiryDay ?? "")]
+                + (renewDay != nil ? [expiryDay].compactMap { $0 }.map { ExtraRow(label: "", detail: $0) } : [])
         } else {
             creditTitle = "Credits"
             credits = []
+            creditRows = []
         }
         let cost = pool.usageCost
         usage = [Self.row("Today", cost?.todayUSD, cost?.todayTokens, "tokens"),

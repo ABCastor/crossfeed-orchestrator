@@ -38,11 +38,17 @@ public struct Limit: Decodable, Equatable {
     public var resetUnknown: Bool?
     public var pace: Pace?
     public var state: String?
+    /// False for a window that exists on the plan but is not running (Claude's 5-hour before the first message);
+    /// then `note` says why. A missing key means active.
+    public var active: Bool?
+    public var note: String?
 
     enum CodingKeys: String, CodingKey {
         case kind, name, title, scope, minutes, usedPercent = "used_percent", resets, resetAt = "reset_at"
-        case resetsInS = "resets_in_s", resetUnknown = "reset_unknown", pace, state
+        case resetsInS = "resets_in_s", resetUnknown = "reset_unknown", pace, state, active, note
     }
+
+    public var isActive: Bool { active != false }
 }
 
 public struct GlanceModel: Decodable, Equatable {
@@ -51,9 +57,14 @@ public struct GlanceModel: Decodable, Equatable {
     public let family: String?
     public let typicalCostUSD: Double?
     public let archived: Bool
+    /// The day the maker withdraws the model ("2026-12-01"), when fleetctl says so.
+    public let retiredOn: String?
+
+    /// Archived, or withdrawn (even if the day is still ahead): never the allowance the bar shows.
+    public var isRetired: Bool { archived || retiredOn != nil }
 
     enum CodingKeys: String, CodingKey {
-        case name, model, family, typicalCostUSD = "typical_cost_usd", archived
+        case name, model, family, typicalCostUSD = "typical_cost_usd", archived, retiredOn = "retired_on"
     }
 
     public init(from decoder: Decoder) throws {
@@ -61,7 +72,7 @@ public struct GlanceModel: Decodable, Equatable {
         if let name = try? decoder.singleValueContainer().decode(String.self) {
             self.name = name
             id = nil
-            family = nil; typicalCostUSD = nil; archived = false
+            family = nil; typicalCostUSD = nil; archived = false; retiredOn = nil
             return
         }
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -70,6 +81,7 @@ public struct GlanceModel: Decodable, Equatable {
         family = try c.decodeIfPresent(String.self, forKey: .family)
         typicalCostUSD = try c.decodeIfPresent(Double.self, forKey: .typicalCostUSD)
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
+        retiredOn = (try? c.decodeIfPresent(String.self, forKey: .retiredOn)).flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -115,6 +127,12 @@ public struct Pool: Decodable, Equatable {
     /// fleetctl sends null, a string, or an object with a `reason`; only the words survive.
     public var gaugeError: String?
     public var staleAgeS: Double?
+
+    /// A pool whose every model is archived or withdrawn is on its way out: the bar never leads with it.
+    public var isRetired: Bool {
+        let all = models + archivedModels
+        return !all.isEmpty && all.allSatisfy(\.isRetired)
+    }
 
     enum CodingKeys: String, CodingKey {
         case pool, subscription, name, label, level, state, measured, full, usedPercent = "used_percent", resets

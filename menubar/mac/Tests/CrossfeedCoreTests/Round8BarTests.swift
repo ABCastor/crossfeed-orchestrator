@@ -25,32 +25,38 @@ private let geminiPressed = """
 ]}
 """
 
+/// The round-8 expectations were written for the full text; the default is now the window and the percent.
+private func fullText() -> BarPrefs {
+    var prefs = BarPrefs()
+    prefs.text = .full
+    return prefs
+}
+
 final class BarTitleTests: XCTestCase {
     func testTheNumberSaysWhichAllowanceAndWindow() throws {
-        let s = try presenter(geminiPressed).barSummary(BarPrefs())
+        let s = try presenter(geminiPressed).barSummary(fullText())
         XCTAssertEqual(s.text, "Gemini 5h 59%")
         XCTAssertEqual(s.name, "Gemini")
         XCTAssertEqual(s.window, "5h")
         XCTAssertEqual(s.logo, .antigravity)
-        XCTAssertTrue(s.tooltip.hasPrefix("Gemini 5-hour: 59% used · Resets in 2h 13m"), s.tooltip)
-        XCTAssertTrue(s.tooltip.contains("Crossfeed · Claude 12% · Gemini 59%"))
+        XCTAssertEqual(s.tooltip, "Gemini 5-hour: 59% used · Resets in 2h 13m")
     }
 
     func testEveryTextChoice() throws {
         let p = try presenter(geminiPressed)
-        var prefs = BarPrefs()
+        var prefs = fullText()
         let texts = BarPrefs.Text.allCases.map { text -> String in prefs.text = text; return p.barSummary(prefs).text }
         XCTAssertEqual(texts, ["Gemini 5h 59%", "5h 59%", "59%", ""])
     }
 
     func testLeftCountsWhatRemainsAndSaysSo() throws {
         let p = try presenter(geminiPressed)
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.count = .left
         let s = p.barSummary(prefs)
         XCTAssertEqual(s.text, "Gemini 5h 41% left")
         XCTAssertEqual(s.left, 41)
-        XCTAssertEqual(s.right, 88)       // Claude, 12% used
+        XCTAssertEqual(s.right, 97)       // Gemini's weekly, 3% used
         XCTAssertEqual(s.used, 59)
         prefs.text = .number
         XCTAssertEqual(p.barSummary(prefs).text, "41% left")
@@ -58,17 +64,18 @@ final class BarTitleTests: XCTestCase {
 
     func testAProviderCanBePinnedAndFallsBackWhenUnread() throws {
         let p = try presenter(geminiPressed)
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.show = "claude"
         XCTAssertEqual(p.barSummary(prefs).text, "Claude Week 12%")
-        XCTAssertEqual(p.barSummary(prefs).right, 59)
+        XCTAssertNil(p.barSummary(prefs).left)        // Claude has no 5-hour window here: an empty tank
+        XCTAssertEqual(p.barSummary(prefs).right, 12)
         prefs.show = "codex"                // no Codex in this reading: the text names what it shows instead
         XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59%")
     }
 
     func testResetAndPaceCanFollowTheNumber() throws {
         let p = try presenter(geminiPressed)
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.extra = .reset
         XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59% · 2h 13m")
         prefs.extra = .pace                       // Gemini carries no pace: nothing is invented
@@ -81,7 +88,7 @@ final class BarTitleTests: XCTestCase {
     }
 
     func testTodaysCostAddsUpAcrossProvidersAndIsNeverInvented() throws {
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.extra = .cost
         XCTAssertEqual(try presenter(geminiPressed).barSummary(prefs).text, "Gemini 5h 59%")     // no cost reported
         let priced = try Glance.decode(fixture("glance-round7.json"))
@@ -102,7 +109,7 @@ final class BarTitleTests: XCTestCase {
         let p = Presenter(glance: glance, loadedAt: now, now: now, resetClock: true, timeZone: rome)
         XCTAssertEqual(p.card(for: "claude")?.sections.first?.rows.first?.resetText, "Resets Tue 13:00")
         XCTAssertEqual(p.card(for: "agy")?.sections.first?.rows.last?.resetText, "Resets today 15:13")
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.extra = .reset
         XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59% · 15:13")
         let utc = Presenter(glance: glance, loadedAt: now, now: now, resetClock: true, timeZone: TimeZone(identifier: "UTC")!)
@@ -116,7 +123,7 @@ final class BarTitleTests: XCTestCase {
 
     func testAWindowCanBePinnedAndFallsBackWhenNobodyHasIt() throws {
         let p = try presenter(geminiPressed)
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.window = "Week"
         XCTAssertEqual(p.barSummary(prefs).text, "Claude Week 12%")   // Gemini's weekly is 3%
         prefs.show = "agy"
@@ -125,17 +132,17 @@ final class BarTitleTests: XCTestCase {
         XCTAssertEqual(p.barSummary(prefs).text, "Gemini 5h 59%")
     }
 
-    func testDeficitLeadsAndKeepsTheOldTanks() throws {
+    func testDeficitLeadsAndTheTanksAreThisProvidersWindows() throws {
         let glance = try Glance.decode(fixture("glance-today.json"))
-        let s = Presenter(glance: glance, loadedAt: now, now: now).barSummary(BarPrefs())
+        let s = Presenter(glance: glance, loadedAt: now, now: now).barSummary(fullText())
         XCTAssertEqual(s.text, "Codex Week 88%")
         XCTAssertTrue(s.deficit)
-        XCTAssertEqual(s.left, 88)
-        XCTAssertEqual(s.right, 15)
+        XCTAssertNil(s.left)              // Codex has only a weekly window
+        XCTAssertEqual(s.right, 88)
     }
 
     func testTheItemIsNeverEmpty() throws {
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.icon = .none; prefs.text = .none
         XCTAssertEqual(prefs.effective.icon, .tanks)
         let s = try presenter(geminiPressed).barSummary(prefs)
@@ -150,7 +157,7 @@ final class BarTitleTests: XCTestCase {
         {"schema":1,"pools":[{"pool":"some-lab","name":"Some Lab","measured":true,"used_percent":30,"limits":[
           {"kind":"window","title":"Monthly","minutes":43200,"used_percent":30}]}]}
         """)
-        var prefs = BarPrefs()
+        var prefs = fullText()
         prefs.icon = .logo
         let s = p.barSummary(prefs)
         XCTAssertEqual(s.icon, .tanks)
@@ -158,7 +165,7 @@ final class BarTitleTests: XCTestCase {
     }
 
     func testNothingReadSaysNothing() throws {
-        let s = try presenter(#"{"schema":1,"pools":[]}"#).barSummary(BarPrefs())
+        let s = try presenter(#"{"schema":1,"pools":[]}"#).barSummary(fullText())
         XCTAssertEqual(s.text, "")
         XCTAssertNil(s.left)
     }
@@ -185,7 +192,8 @@ final class BarPrefsStoreTests: XCTestCase {
         let (d, suite) = defaults()
         defer { d.removePersistentDomain(forName: suite) }
         var prefs = BarPrefs()
-        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .logo; prefs.text = .window; prefs.extra = .reset; prefs.reset = .clock; prefs.refreshSeconds = 300
+        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .none; prefs.text = .full; prefs.extra = .reset; prefs.reset = .clock; prefs.refreshSeconds = 900
+        prefs.notifyLow = true; prefs.notifyReset = true
         BarPrefsStore(defaults: d).save(prefs)
         XCTAssertEqual(BarPrefsStore(defaults: UserDefaults(suiteName: suite)!).load(), prefs)
     }

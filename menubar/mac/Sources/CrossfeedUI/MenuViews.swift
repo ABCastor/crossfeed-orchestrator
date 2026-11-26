@@ -5,12 +5,13 @@
 // bar), UsageMenuCardView + UsageMenuCardHeaderAndUsageSectionView (header, labelled usage rows),
 // MenuCardMetricRow (title, bar, "% used" and reset line), UsagePaceText (the pace line) and the
 // footer action rows. Rewritten for Crossfeed's glance JSON and restyled with the console's palette.
+import AppKit
 import CrossfeedCore
 import SwiftUI
 
 /// Every button the host routes by position, because a click inside an open NSMenu reaches the hosting view, not SwiftUI.
 public enum MenuControl: Hashable {
-    case refresh, settings, back, reset
+    case refresh, settings, back, reset, notifyLow, notifyReset
     case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset), refreshEvery(Int)
 }
 
@@ -25,7 +26,21 @@ public final class MenuState: ObservableObject {
     @Published public var prefs = BarPrefs()
     @Published public var showsSettings = false
     @Published public var isReloading = false
+    /// One height for every tab and the settings pane, set by the host so the panel never jumps; the content scrolls inside.
+    /// Nil sizes the menu to its content (what the height is measured from).
+    @Published public var panelHeight: CGFloat?
     public var onControl: (MenuControl) -> Void = { _ in }
+
+    /// A short crossfade and a few points of slide; none when the system asks for less motion.
+    public static var animation: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.18)
+    }
+
+    /// Switch provider tab. The card fades and slides in; the panel keeps its height.
+    public func choose(_ id: String) {
+        guard id != selected else { return }
+        withAnimation(Self.animation) { selected = id }
+    }
     public var canEditPolicy = true
     public var onPolicyChange: (PolicyChange) -> Void = { _ in }
     public var onSelect: (String) -> Void = { _ in }
@@ -144,29 +159,9 @@ public struct CrossfeedMenuView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if state.showsSettings {
-                SettingsPane(state: state)
-            } else if let presenter = state.presenter {
-                ProviderSwitcher(state: state)
-                    .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 6)
-                MenuDivider()
-                if let tab = state.selected, let card = presenter.card(for: tab) {
-                    UsageCard(card: card, state: state, now: presenter.now).padding(.top, 6)
-                }
-                MenuDivider(inset: true)
-                if let share = presenter.spend.share {
-                    ShareCard(model: share).padding(.top, 4)
-                    MenuDivider(inset: true).padding(.top, 4)
-                }
-                SpendCard(model: presenter.spend).padding(.vertical, 4)
-            } else {
-                EmptyCard(text: state.failure ?? "Reading quotas…")
-            }
-            if let failure = state.actionFailure {
-                MenuDivider(inset: true)
-                Text(failure).font(CF.face(11)).foregroundStyle(CF.humanText)
-                    .padding(.horizontal, MenuMetrics.horizontal).padding(.vertical, 6)
-            }
+            VStack(alignment: .leading, spacing: 0) { panes }
+                .frame(width: MenuMetrics.width, height: state.panelHeight, alignment: .topLeading)
+                .clipped()
             if showsActions {
                 MenuDivider(inset: true)
                 VStack(alignment: .leading, spacing: 0) {
@@ -180,7 +175,7 @@ public struct CrossfeedMenuView: View {
                 .padding(.bottom, 4)
             }
         }
-        .frame(width: MenuMetrics.width, alignment: .leading)
+        .frame(width: MenuMetrics.width, alignment: .topLeading)
         .coordinateSpace(name: MenuMetrics.space)
         .onPreferenceChange(TileFrames.self) { state.tileFrames = $0 }
         .onPreferenceChange(PolicyFrames.self) { state.policyFrames = $0 }
@@ -188,6 +183,54 @@ public struct CrossfeedMenuView: View {
         .onPreferenceChange(ControlFrames.self) { state.controlFrames = $0 }
         .background(CF.paper.opacity(0.9))
         .foregroundStyle(CF.ink)
+    }
+
+    @ViewBuilder private var panes: some View {
+            if state.showsSettings {
+                scrolling { SettingsPane(state: state) }
+            } else if let presenter = state.presenter {
+                ProviderSwitcher(state: state)
+                    .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 6)
+                MenuDivider()
+                scrolling {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ZStack(alignment: .topLeading) {
+                            if let tab = state.selected, let card = presenter.card(for: tab) {
+                                UsageCard(card: card, state: state, now: presenter.now).padding(.top, 6)
+                                    .id(tab)
+                                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 5)), removal: .opacity))
+                            }
+                        }
+                        MenuDivider(inset: true)
+                        if let share = presenter.spend.share {
+                            ShareCard(model: share).padding(.top, 4)
+                            MenuDivider(inset: true).padding(.top, 4)
+                        }
+                        SpendCard(model: presenter.spend).padding(.vertical, 4)
+                        failureBanner
+                    }
+                }
+            } else {
+                scrolling { VStack(alignment: .leading, spacing: 0) { EmptyCard(text: state.failure ?? "Reading quotas…"); failureBanner } }
+            }
+    }
+
+    /// With a fixed panel height the content scrolls inside it; without one it is simply laid out (and measured).
+    @ViewBuilder private func scrolling<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        if state.panelHeight != nil {
+            ScrollView(.vertical, showsIndicators: false) { content().frame(width: MenuMetrics.width, alignment: .leading) }
+                .frame(maxHeight: .infinity, alignment: .top)
+        } else {
+            content()
+        }
+    }
+
+    @ViewBuilder private var failureBanner: some View {
+        if let failure = state.actionFailure {
+            MenuDivider(inset: true)
+            Text(failure).font(CF.face(11)).foregroundStyle(CF.humanText)
+                .padding(.horizontal, MenuMetrics.horizontal).padding(.vertical, 6)
+        }
     }
 }
 
@@ -245,7 +288,6 @@ struct ProviderTile: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("\(tab.title) · Drag to reorder")
         .accessibilityLabel(tab.id == "agy" ? "Google AI Pro (Antigravity)" : tab.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -348,7 +390,7 @@ struct HeaderButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).routed(control).onHover { hovering = $0 }
-        .help(label).accessibilityLabel(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -379,7 +421,7 @@ struct SectionView: View {
     let isAllowance: Bool
 
     /// Every window unread: the reason joins the "Not read" line instead of standing under it.
-    private var mergesNote: Bool { !section.rows.isEmpty && section.rows.allSatisfy { $0.bar == nil } }
+    private var mergesNote: Bool { !section.rows.isEmpty && section.rows.allSatisfy { $0.bar == nil && !$0.inactive } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -404,7 +446,7 @@ struct SectionView: View {
             if let note = section.note, !mergesNote {
                 Text(isAllowance && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
                     .font(CF.face(11)).foregroundStyle(CF.quiet)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true).help(note)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             if isAllowance, !section.models.isEmpty {
                 Text(section.models.joined(separator: " · ")).font(CF.face(11)).foregroundStyle(CF.quiet)
@@ -458,11 +500,16 @@ struct ProviderExtrasView: View {
                     }
                 }
                 if !extras.modelQuota.isEmpty { extraRows("Per-model allowance", rows: extras.modelQuota, stacked: true) }
-                if !extras.credits.isEmpty {
+                if !extras.creditRows.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(extras.creditTitle).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
-                        ForEach(extras.credits, id: \.self) { line in
-                            Measure(line, size: 11.5).foregroundStyle(CF.quiet)
+                        ForEach(extras.creditRows.indices, id: \.self) { index in
+                            let row = extras.creditRows[index]
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Measure(row.label, size: 12.5, weight: .medium).lineLimit(1)
+                                Spacer(minLength: 4)
+                                Measure(row.detail, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1).fixedSize()
+                            }
+                            .accessibilityElement(children: .combine)
                         }
                     }
                 }
@@ -523,6 +570,20 @@ struct MetricRow: View {
     let row: RowModel
 
     var body: some View {
+        if row.inactive {
+            // A window the plan has but that is not running: one line, no bar.
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(row.title).font(CF.face(13, .medium)).lineLimit(1)
+                Spacer(minLength: 4)
+                if let note = row.resetText { Text(note).font(CF.face(11.5)).foregroundStyle(CF.quiet).lineLimit(1) }
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            running
+        }
+    }
+
+    private var running: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(row.title).font(CF.face(13, .medium)).lineLimit(1)

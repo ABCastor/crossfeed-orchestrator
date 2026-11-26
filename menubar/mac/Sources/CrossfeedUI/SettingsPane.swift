@@ -62,6 +62,10 @@ struct SettingsPane: View {
                     Chip("Used", selected: prefs.count == .used, control: .count(.used), state: state)
                     Chip("Left", selected: prefs.count == .left, control: .count(.left), state: state)
                 }
+                SettingRow("Tanks") {
+                    Text("Left: 5-hour window. Right: weekly. Empty when not running.")
+                        .font(CF.face(11)).foregroundStyle(CF.quiet).fixedSize(horizontal: false, vertical: true)
+                }
                 SettingRow("Icon") {
                     Chip("Tanks", selected: prefs.icon == .tanks, control: .icon(.tanks), state: state)
                     Chip("Logo", selected: prefs.icon == .logo, control: .icon(.logo), state: state)
@@ -81,6 +85,10 @@ struct SettingsPane: View {
                 SettingRow("Resets") {
                     Chip("Countdown", selected: prefs.reset == .countdown, control: .resets(.countdown), state: state)
                     Chip("Clock", selected: prefs.reset == .clock, control: .resets(.clock), state: state)
+                }
+                SettingRow("Notify") {
+                    Chip("Running low", selected: prefs.notifyLow, control: .notifyLow, state: state)
+                    Chip("Reset", selected: prefs.notifyReset, control: .notifyReset, state: state)
                 }
                 SettingRow("Refresh") {
                     ForEach(BarPrefs.refreshChoices, id: \.self) { seconds in

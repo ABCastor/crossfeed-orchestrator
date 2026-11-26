@@ -50,13 +50,13 @@ do {
         // One row per look: the bar item alone, on a light and a dark bar.
         var looks: [(title: String, summary: BarSummary)] = []
         for (title, change) in [
-            ("Before: just the percent", { (p: inout BarPrefs) in p.text = .number }),
-            ("Tanks + provider, window, percent", { (p: inout BarPrefs) in }),
-            ("Tanks + window, percent", { (p: inout BarPrefs) in p.text = .window }),
-            ("Logo + window, percent", { (p: inout BarPrefs) in p.icon = .logo; p.text = .window }),
-            ("Logo + provider, window, percent", { (p: inout BarPrefs) in p.icon = .logo }),
+            ("Tanks: just the percent", { (p: inout BarPrefs) in p.icon = .tanks; p.text = .number }),
+            ("Tanks + provider, window, percent", { (p: inout BarPrefs) in p.icon = .tanks; p.text = .full }),
+            ("Tanks + window, percent", { (p: inout BarPrefs) in p.icon = .tanks }),
+            ("Logo + window, percent (default)", { (p: inout BarPrefs) in }),
+            ("Logo + provider, window, percent", { (p: inout BarPrefs) in p.text = .full }),
             ("Logo + percent (compact)", { (p: inout BarPrefs) in p.icon = .logo; p.text = .number }),
-            ("Tanks only", { (p: inout BarPrefs) in p.text = .none }),
+            ("Tanks only", { (p: inout BarPrefs) in p.icon = .tanks; p.text = .none }),
             ("Text only, what is left", { (p: inout BarPrefs) in p.icon = .none; p.count = .left }),
             ("Add: reset", { (p: inout BarPrefs) in p.extra = .reset }),
             ("Add: reset, as a clock", { (p: inout BarPrefs) in p.extra = .reset; p.reset = .clock }),
@@ -79,9 +79,15 @@ do {
     }
     let tabs = (argument("--tabs") ?? argument("--tab") ?? "").split(separator: ",").map(String.init)
     var panels: [(title: String, image: NSImage)] = []
+    // One panel height for every tab, as the live menu uses (--no-fixed draws the old content-sized menu).
+    let heights = PanelSizing.measure(presenter: presenter, prefs: prefs, cap: argument("--cap").flatMap { Double($0) }.map { CGFloat($0) } ?? 760)
+    if CommandLine.arguments.contains("--heights") {
+        print("panel \(Int(heights.panel)) settings \(Int(heights.settings)) tabs " + heights.perTab.sorted { $0.key < $1.key }.map { "\($0.key) \(Int($0.value))" }.joined(separator: " "))
+    }
     for tab in tabs.isEmpty ? [presenter.defaultTab ?? ""] : tabs {
         let state = MenuState(presenter: presenter, selected: tab.isEmpty ? nil : tab)
         state.prefs = prefs
+        if !CommandLine.arguments.contains("--no-fixed") { state.panelHeight = heights.panel }
         state.showsSettings = settings
         let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale)
         let screen = Compose.screen(menu: menu, summary: presenter.barSummary(prefs), appearance: appearance, scale: scale)
