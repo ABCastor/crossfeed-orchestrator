@@ -36,12 +36,45 @@ do {
     let glance = try Glance.decode(Data(contentsOf: URL(fileURLWithPath: fixture)))
     let presenter = Presenter(glance: glance, loadedAt: now, now: now)
     let scale: CGFloat = 2
+    var prefs = BarPrefs()
+    if let v = argument("--show") { prefs.show = v }
+    if let v = argument("--window") { prefs.window = v }
+    if let v = argument("--count").flatMap(BarPrefs.Count.init) { prefs.count = v }
+    if let v = argument("--icon").flatMap(BarPrefs.Icon.init) { prefs.icon = v }
+    if let v = argument("--text").flatMap(BarPrefs.Text.init) { prefs.text = v }
+    let settings = CommandLine.arguments.contains("--settings")
+    if let stripsOut = argument("--strips-out") {
+        // One row per look: the bar item alone, on a light and a dark bar.
+        var looks: [(title: String, summary: BarSummary)] = []
+        for (title, change) in [
+            ("Before: just the percent", { (p: inout BarPrefs) in p.text = .number }),
+            ("Tanks + provider, window, percent", { (p: inout BarPrefs) in }),
+            ("Tanks + window, percent", { (p: inout BarPrefs) in p.text = .window }),
+            ("Logo + window, percent", { (p: inout BarPrefs) in p.icon = .logo; p.text = .window }),
+            ("Logo + provider, window, percent", { (p: inout BarPrefs) in p.icon = .logo }),
+            ("Logo + percent (compact)", { (p: inout BarPrefs) in p.icon = .logo; p.text = .number }),
+            ("Tanks only", { (p: inout BarPrefs) in p.text = .none }),
+            ("Text only, what is left", { (p: inout BarPrefs) in p.icon = .none; p.count = .left }),
+        ] as [(String, (inout BarPrefs) -> Void)] {
+            var p = prefs
+            change(&p)
+            looks.append((title, presenter.barSummary(p)))
+        }
+        let image = Compose.strips(looks, scale: 2)
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+        try png.write(to: URL(fileURLWithPath: stripsOut))
+        print(stripsOut)
+        exit(0)
+    }
     let tabs = (argument("--tabs") ?? argument("--tab") ?? "").split(separator: ",").map(String.init)
     var panels: [(title: String, image: NSImage)] = []
     for tab in tabs.isEmpty ? [presenter.defaultTab ?? ""] : tabs {
         let state = MenuState(presenter: presenter, selected: tab.isEmpty ? nil : tab)
+        state.prefs = prefs
+        state.showsSettings = settings
         let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale)
-        let screen = Compose.screen(menu: menu, summary: presenter.summary, appearance: appearance, scale: scale)
+        let screen = Compose.screen(menu: menu, summary: presenter.barSummary(prefs), appearance: appearance, scale: scale)
         let name = presenter.tabs.first { $0.id == state.selected }?.title ?? "menu"
         panels.append(("Crossfeed, \(name) tab, fixture glance JSON", screen))
     }

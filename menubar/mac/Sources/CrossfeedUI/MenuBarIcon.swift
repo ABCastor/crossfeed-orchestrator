@@ -8,7 +8,21 @@ import CrossfeedCore
 public enum MenuBarIcon {
     public static let size = NSSize(width: 20, height: 16)
 
-    public static func image(for summary: BarSummary) -> NSImage {
+    /// The icon the summary asks for: the two tanks, the focal provider's mark, or nothing.
+    public static func image(for summary: BarSummary) -> NSImage? {
+        switch summary.icon {
+        case .none: return nil
+        case .logo:
+            if let logo = summary.logo, let mark = ProviderAssets.menuBarImage(logo, height: 15) {
+                mark.accessibilityDescription = summary.tooltip
+                return mark
+            }
+            return tanks(for: summary)
+        case .tanks: return tanks(for: summary)
+        }
+    }
+
+    static func tanks(for summary: BarSummary) -> NSImage {
         let image = NSImage(size: size, flipped: false) { rect in
             let ink = NSColor.labelColor
             let tank = { (x: CGFloat) in NSRect(x: x, y: 1.5, width: 6.5, height: 13) }

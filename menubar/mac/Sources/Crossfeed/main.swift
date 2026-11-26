@@ -126,15 +126,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var timers: [Timer] = []
     static let tabKey = "crossfeed.tab"
     let tabOrder = TabOrder(defaults: .standard)
+    /// The menu bar choices. A self test writes to a throwaway domain, never to the operator's preferences.
+    let barStore: BarPrefsStore
     let console: ConsoleSession
 
     init(config: Config) {
         self.config = config
         self.console = ConsoleSession(config: config)
+        self.barStore = BarPrefsStore(defaults: config.selftest
+            ? (UserDefaults(suiteName: "org.crossfeed.selftest.bar." + UUID().uuidString) ?? .standard) : .standard)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
+        state.prefs = barStore.load()
+        state.onControl = { [weak self] control in self?.handle(control) }
         state.canEditPolicy = config.fixture.isEmpty || config.selftest
         state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
         state.onReorder = { [weak self] source, target in self?.reorder(source, onto: target) }
@@ -158,12 +164,61 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
         if config.selftest { selftest(); return }
         let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // A stable name lets macOS (and bar managers) remember where the operator put the item across restarts.
+        status.autosaveName = "org.crossfeed.tray"
         status.menu = menu
         item = status
         paintStatusItem()
         reload()
-        timers.append(Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.reload() })
+        scheduleReload()
         timers.append(Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.tick() })
+        // A display change, a new Space or waking from sleep can leave the item blank or off screen:
+        // put it back, then paint it again.
+        let center = NotificationCenter.default, workspace = NSWorkspace.shared.notificationCenter
+        center.addObserver(self, selector: #selector(restoreStatusItem), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        workspace.addObserver(self, selector: #selector(restoreStatusItem), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        workspace.addObserver(self, selector: #selector(restoreStatusItem), name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    var reloadTimer: Timer?
+
+    /// The reading interval is the operator's choice; the 20 s timer only moves countdowns.
+    func scheduleReload() {
+        reloadTimer?.invalidate()
+        reloadTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(state.prefs.refreshSeconds), repeats: true) { [weak self] _ in self?.reload() }
+    }
+
+    @objc func restoreStatusItem() {
+        guard let status = item else { return }
+        status.isVisible = true
+        status.length = NSStatusItem.variableLength
+        paintStatusItem()
+    }
+
+    // MARK: Controls
+
+    func handle(_ control: MenuControl) {
+        var prefs = state.prefs
+        switch control {
+        case .refresh: reload(); return
+        case .settings, .back:
+            state.showsSettings = control == .settings
+            if !config.selftest { rebuildMenu() }
+            return
+        case .reset: barStore.reset(); prefs = BarPrefs()
+        case .show(let id): prefs.show = id
+        case .window(let name): prefs.window = name
+        case .count(let count): prefs.count = count
+        case .icon(let icon): prefs.icon = icon
+        case .text(let text): prefs.text = text
+        case .refreshEvery(let seconds): prefs.refreshSeconds = seconds
+        }
+        guard prefs != state.prefs else { return }
+        state.prefs = prefs
+        barStore.save(prefs)
+        if prefs.refreshSeconds != reloadTimer.map({ Int($0.timeInterval) }) { scheduleReload() }
+        paintStatusItem()
+        if !config.selftest { rebuildMenu() }
     }
 
     // MARK: Data
@@ -171,12 +226,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func reload() {
         guard !loading, state.edits.pending == nil else { return }
         loading = true
+        if menuIsOpen { state.isReloading = true }
         let c = config, readingRevision = revision
         io.async { [weak self] in
             let result = Reader.load(c)
             RunLoop.main.perform(inModes: [.common, .eventTracking]) {
                 guard let self else { return }
                 self.loading = false
+                self.state.isReloading = false
                 if self.revision == readingRevision { self.acceptReading(result); self.tick() }
             }
         }
@@ -264,15 +321,20 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func paintStatusItem() {
         guard let button = item?.button else { return }
-        let summary = state.presenter?.summary
+        let summary = state.presenter?.barSummary(state.prefs)
             ?? BarSummary(text: "", left: nil, right: nil, deficit: false, tooltip: "Crossfeed · reading quotas")
-        button.image = MenuBarIcon.image(for: summary)
-        button.imagePosition = .imageLeft
+        let icon = MenuBarIcon.image(for: summary)
+        button.image = icon
+        button.imagePosition = icon == nil ? .noImage : .imageLeft
+        // A one-colour logo takes the terracotta of a deficit; the tanks and colour marks carry their own.
+        button.contentTintColor = icon?.isTemplate == true && summary.deficit ? CF.humanNS : nil
         var attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)]
         if summary.deficit { attrs[.foregroundColor] = CF.humanNS }
-        button.attributedTitle = NSAttributedString(string: summary.text.isEmpty ? "" : " " + summary.text, attributes: attrs)
+        let lead = icon == nil ? "" : " "
+        button.attributedTitle = NSAttributedString(string: summary.text.isEmpty ? "" : lead + summary.text, attributes: attrs)
         button.toolTip = summary.tooltip
-        button.setAccessibilityLabel(summary.tooltip)
+        button.setAccessibilityLabel(summary.tooltip.replacingOccurrences(of: "\n", with: ". "))
+        button.setAccessibilityRoleDescription("Crossfeed quota")
     }
 
     var menuIsOpen = false
@@ -285,6 +347,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
+        state.showsSettings = false
+        state.isReloading = false
         state.cancelPointer()
         rebuildMenu()
     }
@@ -299,7 +363,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(card)
         menu.addItem(.separator())
         menu.addItem(action("Open console", symbol: "arrow.up.right.square", #selector(openConsole)))
-        menu.addItem(action("Reload view", symbol: "arrow.clockwise", #selector(reloadView)))
         menu.addItem(.separator())
         menu.addItem(action("About Crossfeed", symbol: nil, #selector(about)))
         menu.addItem(action("Quit Crossfeed", symbol: nil, #selector(quit), key: "q"))
@@ -315,7 +378,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openConsole() { console.open(.providers) }
-    @objc func reloadView() { reload() }
     @objc func about() { console.open(.about) }
     @objc func quit() { NSApp.terminate(nil) }
 
@@ -360,11 +422,48 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return self.state.endPointer(at: CGPoint(x: link.frame.midX, y: link.frame.midY))
                         && statusClick == link.url
                 }
-            let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1)
-                && self.menu.items.count == 7 && routeOK && policyFrames.count == targets.count * SpendLevel.allCases.count
-                && providerAssetCount == ProviderLogo.allCases.count && dragOK && statusOK
-            print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), dial stops \(policyFrames.count), drag \(dragOK), status links \(statuses.count), card height \(Int(host.frame.height))")
-            exit(ok ? 0 : 1)
+            // Header buttons route by position, then the settings pane: every choice reaches the preferences and
+            // survives a fresh read of them.
+            var routed: MenuControl?
+            let realControl = self.state.onControl
+            self.state.onControl = { routed = $0 }
+            let headerFrames = self.state.controlFrames
+            let headerOK = [MenuControl.refresh, .settings].allSatisfy { control in
+                guard let rect = headerFrames[control] else { return false }
+                routed = nil
+                return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && routed == control
+            }
+            self.state.onControl = realControl
+            self.state.showsSettings = true
+            host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
+            host.layoutSubtreeIfNeeded()
+            DispatchQueue.main.async {
+                let frames = self.state.controlFrames
+                var wanted: [MenuControl] = [.back, .reset] + BarPrefs.windowChoices.map { .window($0) }
+                wanted += [.show(BarPrefs.pressed)] + (self.state.presenter?.tabs.map { .show($0.id) } ?? [])
+                wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
+                wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
+                var settingsOK = wanted.allSatisfy { frames[$0] != nil }
+                func click(_ control: MenuControl) {
+                    if let rect = frames[control] { _ = self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) } else { settingsOK = false }
+                }
+                click(.show("codex")); click(.window("Week")); click(.count(.left)); click(.icon(.logo))
+                click(.text(.window)); click(.refreshEvery(300))
+                var expected = BarPrefs()
+                expected.show = "codex"; expected.window = "Week"; expected.count = .left; expected.icon = .logo
+                expected.text = .window; expected.refreshSeconds = 300
+                let saved = self.barStore.load()
+                settingsOK = settingsOK && self.state.prefs == expected && saved == expected
+                click(.reset)
+                settingsOK = settingsOK && self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs()
+                click(.back)
+                settingsOK = settingsOK && !self.state.showsSettings
+                let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1)
+                    && self.menu.items.count == 6 && routeOK && policyFrames.count == targets.count * SpendLevel.allCases.count
+                    && providerAssetCount == ProviderLogo.allCases.count && dragOK && statusOK && headerOK && settingsOK
+                print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), dial stops \(policyFrames.count), drag \(dragOK), status links \(statuses.count), header buttons \(headerOK), settings controls \(wanted.count) \(settingsOK), card height \(Int(host.frame.height))")
+                exit(ok ? 0 : 1)
+            }
         }
     }
 
