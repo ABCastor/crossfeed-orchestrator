@@ -30,7 +30,7 @@ Explicit cancellation with SIGTERM, SIGINT or SIGHUP stops the local HTTP child 
 
 Install and pair [Crossfeed Chat](https://github.com/Anneo22/crossfeed-chat) and its Chrome extension before configuring this adapter. A Chat relay is optional for the core router.
 
-The lane template's roles cover text work: review, audit, second opinion, judgment, research and writing. For `writing`, pass `--mode read-only` so a healthy zero-price pool is eligible; the default write mode keeps the Antigravity Argon preference. `scripts/admit_chatgpt_roles.py OVERLAY --out NEW` prints the diff that brings an existing overlay up to this list and puts the `chatgpt` slot first for writing; it never writes the source.
+The lane template's roles cover text work: review, audit, second opinion, judgment, research and writing. For `writing`, pass `--mode read-only` so a healthy zero-price pool is eligible; the default write mode skips that zero-price pool and falls to Opus 5.5 (Argon left every chain on 26 November 2026). `scripts/admit_chatgpt_roles.py OVERLAY --out NEW` prints the diff that brings an existing overlay up to this list and puts the `chatgpt` slot first for writing; it never writes the source.
 
 Crossfeed Chat runs separately. This repository does not install its service or manage its browser connection.
 
