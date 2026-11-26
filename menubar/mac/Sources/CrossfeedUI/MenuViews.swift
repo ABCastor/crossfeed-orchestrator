@@ -8,6 +8,12 @@
 import CrossfeedCore
 import SwiftUI
 
+/// Every button the host routes by position, because a click inside an open NSMenu reaches the hosting view, not SwiftUI.
+public enum MenuControl: Hashable {
+    case refresh, settings, back, reset
+    case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset), refreshEvery(Int)
+}
+
 /// What the menu needs from its host. All state lives here so a snapshot and the live menu share it.
 public final class MenuState: ObservableObject {
     @Published public var presenter: Presenter?
@@ -15,6 +21,11 @@ public final class MenuState: ObservableObject {
     @Published public var failure: String?
     @Published public var actionFailure: String?
     @Published public var edits = PolicyEdits()
+    /// What the menu bar item shows, and whether the menu is on its settings pane.
+    @Published public var prefs = BarPrefs()
+    @Published public var showsSettings = false
+    @Published public var isReloading = false
+    public var onControl: (MenuControl) -> Void = { _ in }
     public var canEditPolicy = true
     public var onPolicyChange: (PolicyChange) -> Void = { _ in }
     public var onSelect: (String) -> Void = { _ in }
@@ -33,6 +44,7 @@ public final class MenuState: ObservableObject {
     public var tileFrames: [String: CGRect] = [:]
     public var policyFrames: [PolicyChange: CGRect] = [:]
     public var statusFrames: [String: StatusTarget] = [:]
+    public var controlFrames: [MenuControl: CGRect] = [:]
 
     var orderedTabs: [TabModel] {
         guard let tabs = presenter?.tabs else { return [] }
@@ -44,6 +56,7 @@ public final class MenuState: ObservableObject {
 
     public func ownsPointer(at point: CGPoint) -> Bool {
         tile(at: point) != nil || policyFrames.values.contains { $0.contains(point) }
+            || controlFrames.values.contains { $0.contains(point) }
             || statusFrames.values.contains { $0.frame.contains(point) }
     }
 
@@ -89,6 +102,10 @@ public final class MenuState: ObservableObject {
             if canEditPolicy, edits.pending == nil { onPolicyChange(hit.key) }
             return true
         }
+        if let hit = controlFrames.first(where: { $0.value.contains(point) }) {
+            onControl(hit.key)
+            return true
+        }
         if let hit = statusFrames.values.first(where: { $0.frame.contains(point) }) {
             onOpenStatus(hit.url)
             return true
@@ -127,7 +144,9 @@ public struct CrossfeedMenuView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let presenter = state.presenter {
+            if state.showsSettings {
+                SettingsPane(state: state)
+            } else if let presenter = state.presenter {
                 ProviderSwitcher(state: state)
                     .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 6)
                 MenuDivider()
@@ -152,7 +171,6 @@ public struct CrossfeedMenuView: View {
                 MenuDivider(inset: true)
                 VStack(alignment: .leading, spacing: 0) {
                     ActionRow(symbol: "arrow.up.right.square", title: "Open console", action: state.onOpenConsole)
-                    ActionRow(symbol: "arrow.clockwise", title: "Reload view", action: state.onReload)
                 }
                 MenuDivider(inset: true)
                 VStack(alignment: .leading, spacing: 0) {
@@ -167,6 +185,7 @@ public struct CrossfeedMenuView: View {
         .onPreferenceChange(TileFrames.self) { state.tileFrames = $0 }
         .onPreferenceChange(PolicyFrames.self) { state.policyFrames = $0 }
         .onPreferenceChange(StatusFrames.self) { state.statusFrames = $0 }
+        .onPreferenceChange(ControlFrames.self) { state.controlFrames = $0 }
         .background(CF.paper.opacity(0.9))
         .foregroundStyle(CF.ink)
     }
@@ -232,6 +251,22 @@ struct ProviderTile: View {
     }
 }
 
+struct ControlFrames: PreferenceKey {
+    static var defaultValue: [MenuControl: CGRect] = [:]
+    static func reduce(value: inout [MenuControl: CGRect], nextValue: () -> [MenuControl: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+extension View {
+    /// Registers this view's frame so the host can route a click on it (see MenuControl).
+    func routed(_ control: MenuControl) -> some View {
+        background(GeometryReader { geo in
+            Color.clear.preference(key: ControlFrames.self, value: [control: geo.frame(in: .named(MenuMetrics.space))])
+        })
+    }
+}
+
 struct TileFrames: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
@@ -273,11 +308,15 @@ struct UsageCard: View {
                     Spacer(minLength: 4)
                     if let badge = card.badge { StateBadge(text: badge) }
                 }
-                Text(card.isAntigravity ? "Antigravity · " + card.subtitle : card.subtitle)
-                    .font(CF.face(11)).foregroundStyle(CF.quiet).lineLimit(1)
+                HStack(spacing: 0) {
+                    Text(state.isReloading ? "Updating…" : (card.isAntigravity ? "Antigravity · " + card.subtitle : card.subtitle))
+                        .font(CF.face(11)).foregroundStyle(CF.quiet).lineLimit(1)
+                    Spacer(minLength: 4)
+                    HeaderButton(symbol: "arrow.clockwise", label: "Refresh now", control: .refresh, state: state)
+                    HeaderButton(symbol: "slider.horizontal.3", label: "Menu bar settings", control: .settings, state: state)
+                }
             }
-            .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 8)
-            MenuDivider(inset: true).padding(.bottom, 6)
+            .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 12)
             ForEach(Array(card.allowanceSections.enumerated()), id: \.element.id) { index, section in
                 if index > 0 { MenuDivider(inset: true).padding(.vertical, 5) }
                 SectionView(section: section, state: state, now: now, isAllowance: card.isAntigravity)
@@ -289,6 +328,27 @@ struct UsageCard: View {
             }
         }
         .padding(.bottom, 6)
+    }
+}
+
+/// A quiet icon in the card header. Routed by position like every other control in the open menu.
+struct HeaderButton: View {
+    let symbol: String
+    let label: String
+    let control: MenuControl
+    @ObservedObject var state: MenuState
+    @State private var hovering = false
+
+    var body: some View {
+        Button { state.onControl(control) } label: {
+            Image(systemName: symbol).font(.system(size: 12, weight: .regular))
+                .foregroundStyle(hovering ? CF.ink : CF.quiet)
+                .frame(width: 26, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? CF.ink.opacity(0.07) : Color.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).routed(control).onHover { hovering = $0 }
+        .help(label).accessibilityLabel(label)
     }
 }
 
@@ -318,6 +378,9 @@ struct SectionView: View {
     let now: Date
     let isAllowance: Bool
 
+    /// Every window unread: the reason joins the "Not read" line instead of standing under it.
+    private var mergesNote: Bool { !section.rows.isEmpty && section.rows.allSatisfy { $0.bar == nil } }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             if let title = section.title {
@@ -329,9 +392,16 @@ struct SectionView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 9) {
-                ForEach(section.rows) { row in MetricRow(row: row) }
+                ForEach(section.rows) { row in
+                    // A window with nothing to draw says "Not read" and why on one line, not two.
+                    var shown = row
+                    if row.bar == nil, let note = section.note, mergesNote {
+                        shown.usedText = row.usedText + " · " + note
+                    }
+                    return MetricRow(row: shown)
+                }
             }
-            if let note = section.note {
+            if let note = section.note, !mergesNote {
                 Text(isAllowance && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
                     .font(CF.face(11)).foregroundStyle(CF.quiet)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).help(note)
@@ -381,7 +451,7 @@ struct ProviderExtrasView: View {
                 }
                 if !extras.billing.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Subscription").font(CF.face(12, .semibold))
+                        Text("Subscription").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
                         ForEach(extras.billing, id: \.self) { line in
                             Measure(line, size: 11.5).foregroundStyle(CF.quiet)
                         }
@@ -390,7 +460,7 @@ struct ProviderExtrasView: View {
                 if !extras.modelQuota.isEmpty { extraRows("Per-model allowance", rows: extras.modelQuota, stacked: true) }
                 if !extras.credits.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(extras.creditTitle).font(CF.face(12, .semibold))
+                        Text(extras.creditTitle).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
                         ForEach(extras.credits, id: \.self) { line in
                             Measure(line, size: 11.5).foregroundStyle(CF.quiet)
                         }
@@ -422,7 +492,7 @@ struct ProviderExtrasView: View {
 
     private func extraRows(_ heading: String, rows: [ExtraRow], stacked: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(heading).font(CF.face(12, .semibold))
+            Text(heading).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
             ForEach(rows.indices, id: \.self) { index in
                 let row = rows[index]
                 if stacked {
@@ -447,34 +517,39 @@ struct ProviderExtrasView: View {
     }
 }
 
-/// CodexBar's MetricRow: medium title, 6 pt bar, "% used" left and reset countdown right, pace line below.
+/// One allowance window in three lines: its name and when it resets, the bar, then how much is used
+/// beside the pace. (CodexBar's MetricRow spends a fourth line on the pace.)
 struct MetricRow: View {
     let row: RowModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(row.title).font(CF.face(13, .medium)).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(row.title).font(CF.face(13, .medium)).lineLimit(1)
+                Spacer(minLength: 4)
+                if let reset = row.resetText {
+                    Measure(reset, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1).fixedSize()
+                }
+            }
             if let bar = row.bar {
                 UsageProgressBar(percent: bar.used, tint: bar.pace == .unknown && bar.hot ? CF.human : CF.machine,
                                  accessibilityLabel: row.title, pacePercent: bar.expected,
                                  paceOnTop: bar.pace != .deficit, paceColor: CF.paceColor(bar.pace))
             }
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if row.bar != nil {
-                    Measure(row.usedText, size: 11.5, weight: .medium)
+                    Measure(row.usedText, size: 11.5, weight: .medium).fixedSize()
                 } else {
                     Text(row.usedText).font(CF.face(11)).foregroundStyle(CF.quiet)
                 }
-                Spacer(minLength: 8)
-                if let reset = row.resetText {
-                    Measure(reset, size: 11.5).foregroundStyle(CF.quiet).lineLimit(1)
-                }
-            }
-            if let pace = row.paceText, let bar = row.bar {
-                HStack(spacing: 5) {
-                    Circle().fill(CF.dotColor(bar.pace)).frame(width: 6, height: 6)
-                    Text(pace).font(CF.face(11)).foregroundStyle(bar.pace == .deficit ? CF.humanText : CF.quiet)
-                        .lineLimit(1).minimumScaleFactor(0.85)
+                Spacer(minLength: 4)
+                if let pace = row.paceText, let bar = row.bar {
+                    HStack(spacing: 5) {
+                        Circle().fill(CF.dotColor(bar.pace)).frame(width: 6, height: 6)
+                        Text(pace).font(CF.face(11)).foregroundStyle(bar.pace == .deficit ? CF.humanText : CF.quiet)
+                            .lineLimit(1).fixedSize()
+                    }
+                    .accessibilityElement(children: .combine).accessibilityLabel("Pace: " + pace)
                 }
             }
         }
@@ -489,7 +564,7 @@ struct ShareCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(model.title).font(CF.face(13, .medium))
+            Text(model.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
             ShareBar(share: model.fraction, label: model.title)
             HStack(alignment: .firstTextBaseline) {
                 Measure(model.left, size: 11.5)
@@ -508,7 +583,7 @@ struct SpendCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(model.title).font(CF.face(13, .medium))
+            Text(model.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
             ForEach(model.lines, id: \.self) { line in
                 Measure(line, size: 11.5)
             }
