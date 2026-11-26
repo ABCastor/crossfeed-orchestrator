@@ -65,6 +65,13 @@ except ImportError:
     _go_spec.loader.exec_module(opencode_go_usage)
 
 try:
+    import secret_store
+except ImportError:
+    _secret_spec = importlib.util.spec_from_file_location("fleet_secret_store", Path(__file__).with_name("secret_store.py"))
+    secret_store = importlib.util.module_from_spec(_secret_spec)
+    _secret_spec.loader.exec_module(secret_store)
+
+try:
     import native_usage
 except ImportError:
     _native_spec = importlib.util.spec_from_file_location("fleet_native_usage", Path(__file__).with_name("native_usage.py"))
@@ -6246,6 +6253,11 @@ def build_parser() -> argparse.ArgumentParser:
     provider.add_argument("--models", default="", help="comma-separated IDs; omitted means all returned IDs")
     provider.add_argument("--accept-relay-risk", dest="acceptance", default="", help="your acceptance quote, dated when saved")
     provider.add_argument("--daily-cap", default="0", help="estimated API spend cap in USD; zero blocks calls")
+    secret = sub.add_parser("secret", help="store, check or remove a key Crossfeed reads itself; the value is never echoed")
+    secret.add_argument("action", choices=("set", "status", "delete"))
+    secret.add_argument("name", nargs="?", default="openrouter-management")
+    secret.add_argument("--ref", default="", help="register a 1Password op:// reference instead of storing a value")
+    secret.add_argument("--plaintext", action="store_true", help="allow a mode-600 file when no Keychain or Secret Service exists")
     chatgpt = sub.add_parser("chatgpt", help="refresh saved gateway lanes")
     chatgpt.add_argument("action", choices=["sync"])
     chatgpt.add_argument("label", nargs="?")
@@ -6627,6 +6639,8 @@ def main() -> int:
             return 0
         if args.command == "traces":
             return traces_command(args, state_dir)
+        if args.command == "secret":
+            return secret_store.run(args.action, args.name, ref=args.ref, plaintext=args.plaintext)
         if args.command == "serve-api":
             import lanes_api
             try:
