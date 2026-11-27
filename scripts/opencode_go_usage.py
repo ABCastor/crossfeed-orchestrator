@@ -20,6 +20,8 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import shutil
+import stat
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -132,6 +134,19 @@ def _opencode_auth_file() -> Path:
     return Path(base).expanduser() / "opencode" / "auth.json"
 
 
+def _local_key_file() -> str | None:
+    """`~/.config/pi-keys/opencode` (or $PI_KEYS_DIR/opencode): owner-only, one line. Never read otherwise."""
+    path = Path(os.environ.get("PI_KEYS_DIR") or "~/.config/pi-keys").expanduser() / "opencode"
+    try:
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 512:
+            return None
+        key = path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    return key if key and "\n" not in key and " " not in key else None
+
+
 def _providers_module():
     spec = importlib.util.spec_from_file_location("fleet_providers_keys", Path(__file__).with_name("providers.py"))
     module = importlib.util.module_from_spec(spec)
@@ -149,6 +164,11 @@ def resolve_key(config: dict[str, Any]) -> tuple[str | None, dict[str, Any] | No
     OpenCode itself keeps in its auth.json.
     """
     declared = config.get("key")
+    if declared and str(declared).startswith("op://") and not shutil.which("op"):
+        # A machine without 1Password (the Linux server) keeps the same key as a private one-line file.
+        key = _local_key_file()
+        if key:
+            return key, None
     if declared:
         try:
             key = _providers_module().resolve_key(str(declared))

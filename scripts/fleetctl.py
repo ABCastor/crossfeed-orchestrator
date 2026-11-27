@@ -86,6 +86,13 @@ except ImportError:
     _native_spec.loader.exec_module(native_usage)
 
 try:
+    import mac_readings
+except ImportError:
+    _readings_spec = importlib.util.spec_from_file_location("fleet_mac_readings", Path(__file__).with_name("mac_readings.py"))
+    mac_readings = importlib.util.module_from_spec(_readings_spec)
+    _readings_spec.loader.exec_module(mac_readings)
+
+try:
     from run_identity import canonical_model, evidence_index
 except ImportError:
     _identity_spec = importlib.util.spec_from_file_location("fleet_run_identity", Path(__file__).with_name("run_identity.py"))
@@ -1625,6 +1632,8 @@ def snapshot_needs_refresh(
     ttl = pool_refresh_ttl(pool, ttl_s, sources)
     snapshot = (runtime.get("quota_snapshots") or {}).get(pool)
     if snapshot:
+        if snapshot.get("origin") == "mac":
+            ttl = max(ttl, mac_readings.GRACE_S)  # the Mac refreshes on its own clock; ours covers only a longer silence
         try:
             if (now - parse_iso(snapshot["observed_at"])).total_seconds() <= ttl:
                 return False
@@ -1679,6 +1688,21 @@ def _filtered_observation(observed: dict[str, Any], config: dict[str, Any]) -> d
     return result
 
 
+def adopt_remote_readings(state_dir: Path, pools: set[str] | None = None) -> list[str]:
+    """When a readings source is configured, take its newer snapshots; our own readers cover what it lacks.
+
+    Never raises and never blocks past the fetch timeout: a sleeping source leaves the last copy in place.
+    """
+    try:
+        kept = mac_readings.pull(state_dir)
+        if not kept:
+            return []
+        with locked_runtime(state_dir) as locked:
+            return mac_readings.adopt(locked, kept, pools)
+    except Exception:  # noqa: BLE001 - freshness is best-effort, never fatal
+        return []
+
+
 def refresh_stale_pools(
     state_dir: Path,
     pools: Iterable[str],
@@ -1703,6 +1727,7 @@ def refresh_stale_pools(
     wanted = list(dict.fromkeys(pool for pool in pools if pool in sources))
     if not wanted:
         return {}
+    adopt_remote_readings(state_dir)
 
     def due(runtime, pool):
         return snapshot_needs_refresh(runtime, pool, ttl_s=ttl_s, cooldown_s=cooldown_s, sources=sources)
@@ -6648,13 +6673,16 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
     payload = menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
     payload["subscriptions"] = overview.get("subscriptions", [])
     pools = {pool["pool"]: pool for pool in overview["pools"]}
+    payload["reading_origin"] = ("mac" if any(pool.get("reading_origin") == "mac" for pool in pools.values())
+                                 else "local")
     by_model = {model["model"]: model for model in overview.get("models", [])}
     names = {key: (model.get("card") or {}).get("name") for key, model in by_model.items()}
     for row in payload["pools"]:
         pool = pools[row["pool"]]
         row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "per_model",
                                                "per_model_error", "account_usage", "reading_age_s", "reading_source",
-                                               "reading_observed_at", "reading_stale", "last_observed_windows",
+                                               "reading_observed_at", "reading_stale", "reading_origin", "reading_origin_fetched_at",
+                                               "last_observed_windows",
                                                "incident", "billing", "billing_error", "model_quota")
                     if key in pool})
         if pool.get("resets"):  # the reset rows beside the shipped reset clock, never over it
