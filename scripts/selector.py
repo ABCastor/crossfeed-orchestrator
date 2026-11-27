@@ -23,6 +23,7 @@ import uuid
 from typing import Any, Callable
 
 try:
+    import evidence as _evidence
     import funding
     import go_quota_tariffs
     import rating
@@ -32,7 +33,7 @@ try:
     from openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
 except ModuleNotFoundError:
-    from scripts import funding, go_quota_tariffs, rating, rating_explore
+    from scripts import evidence as _evidence, funding, go_quota_tariffs, rating, rating_explore
     from scripts.data_policy import paid_refusal
     from scripts.openrouter_budget import BudgetError, ceiling_usd, route_config, tariff_metadata
     from scripts.run_identity import FAMILY_BY_ROLE, canonical_model, evidence_index
@@ -554,7 +555,7 @@ def routing_price(item):
     if cash["funding"] not in {"included", "verified-free"}:
         return None
     cost, binding = item["cost"], item["pool_price"]
-    # BR-SELECT-010: native Chat has no incremental bill or sourced conversion
+    # BR-SELECT-011: native Chat has no incremental bill or sourced conversion
     # of its caps to dollars. The separately admitted Pi tool relay is still a fallback.
     if cash["funding"] == "included" and item["pool"] == "chatgpt-work" and item["harness"] == "chatgpt-chat":
         return 0.0
@@ -922,6 +923,51 @@ def efficient_efforts(scored):
     return {(item["pool"], item["model_key"]): best[group(item)][1] for item in scored if group(item) in best}
 
 
+# BR-SELECT-011
+def fit_efforts(scored, difficulty):
+    """Keep, per model, only the lowest effort that reaches the model's best success.
+
+    On easy and ordinary jobs a higher effort that gains less success than the
+    benchmark can resolve (one binomial standard error at the best rate) is
+    dropped, so the thinking level fits the job. Hard jobs keep every effort.
+    Each kept option records how close it is to the best at what share of cost.
+    """
+    scored = list(scored)
+    groups = {}
+    for item in scored:
+        groups.setdefault((item["pool"], item["model_key"], item["harness"]), []).append(item)
+    dropped = set()
+    for items in groups.values():
+        # Only benchmark-backed success separates efforts; a fallback rate is the same at every effort.
+        usable = [i for i in items if _number(i.get("p_success")) is not None and not i["q"]["unknown"]
+                  and i.get("prior_source") is not None and i["level"] in _evidence.EFFORT_OUTPUT]
+        if not usable:
+            continue
+        best = max(i["p_success"] for i in usable)
+        top = max(usable, key=lambda i: _evidence.EFFORT_OUTPUT[i["level"]])
+        tolerance = math.sqrt(best * (1 - best) / rating.BENCHMARK_TASKS)
+        reaching = [i for i in usable if i["p_success"] >= best - tolerance]
+        fit = min(reaching, key=lambda i: (_evidence.EFFORT_OUTPUT[i["level"]], i.get("expected_cost") or 0))
+        # The route's own price (quota and cash); a free route falls back to its API-equivalent token cost.
+        cost = lambda i: _number(i.get("estimated_price")) or _number((i.get("cost") or {}).get("estimated_usd"))
+        for item in usable:
+            share = (cost(item) / cost(top) * 100) if cost(item) is not None and cost(top) else None
+            reach = item["p_success"] / best * 100
+            text = f"{difficulty} job: {item['level']} reaches {reach:.0f}% of this model's best success"
+            text += (f" at {share:.0f}% of its top effort's cost" if share is not None else
+                     f" (cost share of {top['level']} unknown)")
+            item["effort_fit"] = {"difficulty": difficulty, "effort": item["level"], "top_effort": top["level"],
+                                  "reaches_best_pct": round(reach, 1),
+                                  "cost_vs_top_pct": None if share is None else round(share, 1), "line": text}
+        if difficulty == "hard":
+            continue
+        for item in usable:
+            if item is not fit and _evidence.EFFORT_OUTPUT[item["level"]] > _evidence.EFFORT_OUTPUT[fit["level"]] \
+                    and (_number(item.get("estimated_price")) or 0) >= (_number(fit.get("estimated_price")) or 0):
+                dropped.add(id(item))
+    return [item for item in scored if id(item) not in dropped]
+
+
 def compare_options(roster, runtime, state_dir, role, *, fleet=None, value_mode="best-value"):
     """Display-only inventory; absence of a rating, permitted role or free slot does not hide a model."""
     fleet = _fleet(fleet)
@@ -1145,7 +1191,9 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         raise fleet.FleetError(f"unknown stakes: {stakes}")
     role_family = policy.get("families_by_role", {}).get(role) or FAMILY_BY_ROLE.get(role, "coding-agent")
     family = family or role_family
-    difficulty = difficulty or ("hard" if role == "hard-reasoning" else "ordinary")
+    # BR-SELECT-011: the caller's label wins; otherwise the role names the job's difficulty.
+    by_role = {**rating.DIFFICULTY_BY_ROLE, **(policy.get("difficulty_by_role") or {})}
+    difficulty = difficulty or by_role.get(role) or "ordinary"
     if difficulty not in rating.DIFFICULTY:
         raise fleet.FleetError(f"unknown task difficulty: {difficulty}")
     if family not in FAMILIES:
@@ -1379,7 +1427,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     if exploration_cap is None or not 0 <= exploration_cap <= 1:
         raise fleet.FleetError("selector exploration_cap must be in [0, 1]")
     try:
-        counts = rating_explore.checked_counts(state_dir)
+        counts = rating_explore.checked_counts(state_dir, difficulty)
     except OSError:
         counts = {}
         no_explore = True
@@ -1395,8 +1443,10 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
         rate, basis, source = calibration.rate(*cell, family)
         if cell == bench_cell and source is not None:
             source = {**source, "benchmark_identity": cell[0], "benchmark_effort": cell[1]}
-        prior = rating.success_prior(rate, difficulty)
-        item.update(p_success_prior=prior, prior_basis=basis, prior_source=source)
+        lowest = calibration.lowest_rate(*cell, family)
+        prior = rating.effort_prior(rate, lowest, difficulty)
+        item.update(p_success_prior=prior, prior_basis=basis, prior_source=source,
+                    calibration_difficulty=difficulty)
         key = rating_explore.route_key(item)
         passed, failed = (counts.get((key, verdict), 0) for verdict in ("pass", "fail"))
         alpha, beta = rating_explore.posterior(prior, passed, failed)
@@ -1426,6 +1476,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
     efficient = efficient_efforts(scored)
     for item in scored:
         item["efficient_effort"] = efficient.get((item["pool"], item["model_key"]))
+    scored = fit_efforts(scored, difficulty)
     hard_reasoning_preference = None
     preferred = []
     if prefer_opus:
@@ -1485,7 +1536,8 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
               "value_mode": value_mode, "rating_stakes": rating_stakes, "rating_sampling": sampling,
               "typical_price": typical, "typical_price_basis": "competent_rerun_reference",
               "failure_price": failure_price,
-              "calibration_difficulty": difficulty, "cash_preference": cash_preference,
+              "calibration_difficulty": difficulty, "effort_fit": choice.get("effort_fit"),
+              "cash_preference": cash_preference,
               "quota_fallback": "measured-pi-coding-relay" if relay is not None else None,
               "hard_reasoning_preference": hard_reasoning_preference,
               "lambdas": {pool: value["lambda"] for pool, value in prices.items()},

@@ -61,6 +61,17 @@ class SelectorTests(unittest.TestCase):
         return selector.select_option(self.roster, runtime or {}, self.state,
                                       kwargs.pop("role", "review"), fleet=fleetctl, **kwargs)
 
+    def legacy_curve(self):
+        """Ordinary jobs on the benchmark curve with no effort fitting: this test is about expected cost."""
+        for target, key, value in ((selector.rating.JOB_OFFSET, "ordinary", 0.0),
+                                   (selector.rating.EFFORT_LIFT_SCALE, "ordinary", 1.0)):
+            patcher = mock.patch.dict(target, {key: value})
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(selector.rating, "BENCHMARK_TASKS", 10 ** 12)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def only(self, pools):
         self.roster["policy"]["selector"] = {"allowed_pools_by_role": {"default": pools}}
 
@@ -83,6 +94,7 @@ class SelectorTests(unittest.TestCase):
         model = "gpt-6.1-sol"
         self.only(["codex"])
         self.roster["effort"][model]["levels"]["codex"] = ["medium", "high", "max"]
+        self.legacy_curve()
         self.roster["quota_pools"]["codex"]["value_capacity"] = {
             "weekly_usd_equivalent": 46, "source": "synthetic equal-window debit"}
 

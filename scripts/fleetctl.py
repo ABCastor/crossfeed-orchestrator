@@ -3703,6 +3703,8 @@ def _dispatch_selection(selection: dict[str, Any], args: argparse.Namespace, sta
                   f"model_receipt={identity} diagnostics={attempt_dir / 'stderr.log'}")
         if index == 0 and selection.get("exploration") and option is selection["choice"]:
             notice += " exploring"
+        if (option.get("effort_fit") or {}).get("line"):
+            notice += " | " + option["effort_fit"]["line"]
         cash = option.get("cash") or funding.quote("unknown")
         print(f"{notice} | cash {funding.summary(cash)}", file=sys.stderr, flush=True)
         if args.dry_run:

@@ -42,8 +42,12 @@ def budget_allows(totals, cap):
     return (explored + 1) / (total + 1) <= cap
 
 
-def checked_counts(state_dir):
+def checked_counts(state_dir, difficulty=None):
     """Count the first verified verdict for each task and exact option.
+
+    With a difficulty, only dispatches made for that job difficulty count, so a
+    pass on an easy job never vouches for a hard one. History written before
+    the difficulty was recorded counts toward every difficulty, as it always did.
 
     Repeated acceptance and fallback attempts on the same task/route do not
     become extra observations. Only accept records can supply labels.
@@ -67,7 +71,8 @@ def checked_counts(state_dir):
                 verdict = accepted.get(row["run_id"])
                 live = row.get("live_pick")
                 if verdict and verdict[0] == row.get("task_id") and isinstance(live, dict):
-                    routes[row["run_id"]] = route_key(live)
+                    if difficulty is None or live.get("calibration_difficulty") in (None, difficulty):
+                        routes[row["run_id"]] = route_key(live)
             counts, seen = Counter(), set()
             for run, (task, verdict) in accepted.items():
                 key = routes.get(run)

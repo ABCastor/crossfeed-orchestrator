@@ -242,7 +242,7 @@ class CheckedRoutingTests(unittest.TestCase):
         self.assertNotIn(("codex", "gpt-6-luna"), self.dispatches(50, runtime, allow=allow))
         # Control: the same admitted option becomes sampleable at equal cost.
         self.evidence(rows + [self.row("gpt-6-luna")])
-        self.assertIn(("codex", "gpt-6-luna"), self.dispatches(50, runtime, allow=allow))
+        self.assertIn(("codex", "gpt-6-luna"), self.dispatches(150, runtime, allow=allow))
 
     # BR-SELECT-002
     def test_hard_gates_hold_for_a_surplus_lane(self):

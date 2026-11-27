@@ -29,7 +29,7 @@ Classify the material before `select` or `dispatch` (BR-DATA-001; the default is
 
 Admission stakes: `low` = cheap and reversible; `normal`; `high` = costly to redo; `irreversible` = cannot undo. Save through routing, never downgrading judgment; reduce parallelism before quality.
 
-Before viewing picks, label `--work-kind coding|review|research|writing` and `--difficulty easy|ordinary|hard`. Override routing failure stakes with `--rating-stakes routine|important|critical` (1×/5×/20× typical job price). Use `select --no-explore --json` to inspect the mean pick, and reuse an opaque `--task-id ID` across attempts of the same task.
+Before viewing picks, label `--work-kind coding|review|research|writing` and `--difficulty easy|ordinary|hard` (easy: the answer is found, copied or reformatted; ordinary: it takes normal work; hard: it needs real multi-step reasoning or debugging; an easier label picks a lower thinking effort, so never understate). Override routing failure stakes with `--rating-stakes routine|important|critical` (1×/5×/20× typical job price). Use `select --no-explore --json` to inspect the mean pick, and reuse an opaque `--task-id ID` across attempts of the same task.
 After checking a worker's result, record `fleetctl.py accept RUN_ID --verdict pass|fail --check "what was checked"` with the dispatch or linked worker run ID.
 An exit code alone does not count; record the verdict only after an independent test or review.
 

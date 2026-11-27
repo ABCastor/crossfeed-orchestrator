@@ -127,6 +127,26 @@ class SuccessEvidence:
             }
         return self.low_rate, ("observed_low_benchmark_estimate" if self.has_rates else "no_benchmark_estimate"), None
 
+    def lowest_rate(self, model, level, family):
+        """Benchmark rate of this model's lowest measured effort, same metric as `level`.
+
+        None when this effort has no exact benchmark cell, so the caller applies
+        no effort lift rather than guessing a baseline.
+        """
+        rate, basis, ref = self.rate(model, level, family)
+        exact = ("benchmark", "role_proxy_benchmark_estimate")
+        order = evidence.EFFORT_OUTPUT
+        if basis not in exact or level not in order:
+            return None
+        lowest = (order[level], rate)
+        for other in self.by_model.get(model, {}):
+            if other not in order or order[other] >= lowest[0]:
+                continue
+            other_rate, other_basis, other_ref = self.rate(model, other, family)
+            if other_basis in exact and other_ref.get("metric") == ref.get("metric"):
+                lowest = (order[other], other_rate)
+        return lowest[1]
+
     @staticmethod
     def _result(source, effort, basis):
         return _fraction(source), basis, {"effort": effort, **{

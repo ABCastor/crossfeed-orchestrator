@@ -100,6 +100,73 @@ def success_prior(pass_rate, difficulty="ordinary"):
     return rate * odds_multiplier / (1 - rate + rate * odds_multiplier)
 
 
+# BR-SELECT-011
+# The live selector reads a job's difficulty as an offset on the benchmark logit
+# and as a scale on how much of the benchmark's effort lift the job realises.
+# Hard jobs are the Terminal-Bench-class jobs the benchmark measures: offset
+# and scale are the long-standing values (scale 1). Ordinary and easy offsets
+# are labelled priors (real jobs sit easier than Terminal-Bench; no benchmark
+# in the cache labels that gap). The ordinary scale is derived: on the two
+# models the evidence holds per effort for both Terminal-Bench and the broader,
+# easier Intelligence Index, the index's logit gain over the lowest effort is
+# 0.66 of Terminal-Bench's (median of eight pairs; range 0.53 to 0.79). Easy
+# applies the same step once more, a labelled prior.
+JOB_OFFSET = {"easy": -1.4, "ordinary": -0.7, "hard": 0.7}
+EFFORT_LIFT_SCALE = {"easy": 0.66 ** 2, "ordinary": 0.66, "hard": 1.0}
+# A benchmark of about a hundred tasks cannot tell two pass rates apart when
+# they differ by less than one binomial standard error (labelled prior: n).
+BENCHMARK_TASKS = 89
+# Role to difficulty used when the caller names none (policy may override).
+DIFFICULTY_BY_ROLE = {
+    **dict.fromkeys(("lookup", "summarise", "summarize", "format", "extract", "triage", "translate"), "easy"),
+    **dict.fromkeys(("implementation", "review", "writing", "design", "explain"), "ordinary"),
+    **dict.fromkeys(("hard-reasoning", "debug"), "hard"),
+}
+
+
+def _logit(p):
+    return log(p / (1 - p))
+
+
+def effort_lift_ratio(easier, harder):
+    """Median ratio of logit gains over the lowest effort: easier / harder benchmark.
+
+    Each argument maps effort rank to a pass fraction in (0, 1) with the lowest
+    effort first; pairs with no gain on the harder benchmark are skipped.
+    """
+    ratios = sorted(
+        (_logit(e) - _logit(easier[0])) / (_logit(h) - _logit(harder[0]))
+        for e, h in list(zip(easier, harder))[1:] if _logit(h) > _logit(harder[0]))
+    if not ratios:
+        return None
+    mid = len(ratios) // 2
+    return ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+
+
+def effort_prior(pass_rate, lowest_rate, difficulty="ordinary"):
+    """Success for a job of this difficulty at an effort whose benchmark rate is pass_rate.
+
+    p = sigmoid(logit(lowest) + scale * (logit(rate) - logit(lowest)) - offset).
+    Hard jobs reduce to success_prior exactly. Without a measured lowest
+    effort the effort lift is zero and only the offset applies. An easier job
+    is never less likely to succeed than a harder one at the same effort.
+    """
+    rate, lowest = _probability(pass_rate), _probability(lowest_rate)
+    rate = .5 if rate is None else rate
+    hard = success_prior(rate, "hard")
+    if difficulty == "hard" or not 0 < rate < 1:
+        return hard if difficulty == "hard" else rate  # a certain pass or fail does not move
+    if lowest is None or not 0 < lowest < 1:
+        lowest = rate
+
+    def at(level):
+        gap = _logit(lowest) + EFFORT_LIFT_SCALE[level] * (_logit(rate) - _logit(lowest)) - JOB_OFFSET[level]
+        return 1 / (1 + exp(-gap))
+
+    ordinary = max(at("ordinary"), hard)
+    return ordinary if difficulty == "ordinary" else max(at("easy"), ordinary)
+
+
 # BR-SELECT-005
 def subscription_price(percent, weekly_capacity, pace, *, window_minutes, scarcity=0):
     """Price the debit at the plan's window value with the existing scarcity premium."""

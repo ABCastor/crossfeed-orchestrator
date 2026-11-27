@@ -132,6 +132,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/chatgpt_catalog.py:benchmark_cell` · `scripts/selector.py:option_evidence`, `routing_price` · `scripts/evidence.py:configured_benchmark_rows`.
 - tested-by: `tests/test_business_round6.py::test_chat_uses_exact_effort_benchmark_and_keeps_route_identity`.
 
+## BR-SELECT-011 — The thinking level fits the job's difficulty [OPERATOR-DIRECTED 2026-11-27]
+
+- RULE: A job's difficulty (`--difficulty`, else the role's default: lookup, summarise, format, extract, triage and translate easy; implementation, review, writing, design and explain ordinary; hard-reasoning and debug hard) sets how much of an effort's benchmark gain counts toward success. Hard jobs keep the benchmark curve unchanged. Easy and ordinary jobs realise a share of the gain (derived 0.66 for ordinary from cached Intelligence Index against Terminal-Bench; easy repeats the step) on a lower offset, and an effort that gains less than one benchmark standard error over a cheaper effort is dropped, so the pick is the lowest effort that reaches the model's best success for that job. An easier job is never less likely to succeed than a harder one. Learned acceptance is kept per difficulty, and the receipt states how close the chosen effort is to the model's best and at what share of its top effort's cost. The offsets and the easy step are priors, labelled as such.
+- Authority: Operator, 27 Nov: “think better about the thinking settings, as I feel like you normally use too high of a thinking setting ... the maximum efficiency depends a lot on how hard the job is, because you need to have an awareness of how likely it is that the model will complete the job at the best of its possibility with that thinking setting.”
+- implemented-by: `scripts/rating.py:effort_prior`, `JOB_OFFSET`, `EFFORT_LIFT_SCALE`, `DIFFICULTY_BY_ROLE` · `scripts/success_evidence.py:SuccessEvidence.lowest_rate` · `scripts/selector.py:fit_efforts`, `select_option` · `scripts/rating_explore.py:checked_counts` · `scripts/fleetctl.py:dispatch_selection` (notice line).
+- tested-by: `tests/test_business_effort_fit.py::EffortFit` (monotone pick across difficulty, hard unchanged, derived scale, role map and override, receipt line, per-difficulty acceptance, sampler inputs).
+- Review when: easier-benchmark per-effort rows appear in the evidence (re-derive the scale), enough per-difficulty acceptance accumulates to replace the offsets, or the operator finds picks too low.
+
 ## BR-SELECT-008 — ~~A separate Max setting prices pressure lightly~~ [RETIRED 2026-11-25]
 
 - Superseded by BR-SELECT-007 the same day, before release: operator, “max is the same as ignore limits. It should be just max/ignore limits. Ignore quota, whatever it is.” The separate quota-light level is not a shipping option.
