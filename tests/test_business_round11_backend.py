@@ -221,6 +221,8 @@ class UsdTotal(unittest.TestCase):
                                        "rates_as_of": "2026-11-27", "approximate": True})
         self.assertEqual([(row["currency"], row["monthly"]) for row in view["subscriptions"]],
                          [("GBP", "183.00"), ("USD", "200.00")])
+        # Each row carries its own USD figure, so the rows add up to the total.
+        self.assertEqual([row.get("operator_usd") for row in view["subscriptions"]], ["228.75", "100.00"])
         split = json.loads(json.dumps(self.ROSTER))
         split["quota_pools"]["claude"]["plan"].update({"operator_share_percent": 50, "other_payer": "Edo"})
         both = fleetctl.subscriptions.view(self.path, split, {}, state_dir=self.state, now=NOW,

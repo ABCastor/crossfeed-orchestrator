@@ -122,7 +122,7 @@ class TraySummaryPlansTest(unittest.TestCase):
         tray = subscriptions.tray_summary(ledger)
         self.assertEqual(tray["plans"], [{"id": "claude", "name": "Claude Max 20x", "amount": "183",
                                           "currency": "GBP", "period": "monthly", "source": "default",
-                                          "share": None, "operator_amount": None}])
+                                          "share": None, "operator_amount": None, "operator_usd": None}])
         self.assertEqual(tray["monthly"], ledger["monthly"])
         self.assertNotIn("usd", tray)   # no rate known: no block rather than a guessed one
 

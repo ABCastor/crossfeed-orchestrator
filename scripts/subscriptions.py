@@ -381,6 +381,10 @@ def _usd_total(entries: list[dict], rates: dict[str, float], as_of: str | None) 
             own += Decimal(entry["operator_monthly"]) / rate
     if not seen:
         return None
+    # Each row's own USD figure, so the rows visibly add up to the total.
+    for entry in entries:
+        if entry.get("operator_monthly") is not None:
+            entry["operator_usd"] = _money(Decimal(entry["operator_monthly"]) / _rate(rates, entry.get("currency")))
     return {"total": _money(total), "operator": None if unknown_own else _money(own),
             "rates_as_of": as_of, "approximate": True}
 
@@ -470,7 +474,8 @@ def tray_summary(ledger: dict) -> dict:
     """Totals plus one line per plan, so the menu can say "Claude Max 20x · £183/mo"."""
     plans = [{"id": e["id"], "name": e.get("name") or e["id"], "amount": e.get("amount"),
               "currency": e.get("currency"), "period": e.get("period"), "source": e.get("source"),
-              "share": share_fraction(e.get("operator_share_percent")), "operator_amount": e.get("operator_monthly")}
+              "share": share_fraction(e.get("operator_share_percent")), "operator_amount": e.get("operator_monthly"),
+              "operator_usd": e.get("operator_usd")}
              for e in ledger.get("subscriptions", [])]
     out = {**{key: ledger[key] for key in ("monthly", "unpriced", "unsplit", "unavailable")}, "plans": plans}
     if ledger.get("usd"):

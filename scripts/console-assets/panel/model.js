@@ -258,7 +258,8 @@ window.buildModel = function (glance, preferences) {
     id: p.id, name: p.name || p.id, note: null,
     shareText: p.share === "1/2" ? "½" : (p.share && p.share !== "1/1" ? p.share : null),
     full: money(p.amount, p.currency),
-    yoursText: p.operator_amount != null ? money(p.operator_amount, p.currency) : "—",
+    yoursText: p.operator_usd != null ? "$" + Math.round(Number(p.operator_usd))
+      : (p.operator_amount != null ? money(p.operator_amount, p.currency) : "—"),
   }));
   const usd = spend.usd || null;
   const total = usd ? "≈ $" + Math.round(Number(usd.operator != null ? usd.operator : usd.total) || 0) : "";

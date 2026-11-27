@@ -118,7 +118,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertTrue(plans)
         for plan in plans:
             self.assertEqual(set(plan), {'id', 'name', 'amount', 'currency', 'period', 'source', 'share',
-                                         'operator_amount'})
+                                         'operator_amount', 'operator_usd'})
 
     def test_console_write_requires_session_origin_and_form_token(self):
         app = console.Console(self.overlay, self.root, 0)

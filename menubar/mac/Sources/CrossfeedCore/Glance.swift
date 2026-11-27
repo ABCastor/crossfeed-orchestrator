@@ -215,8 +215,10 @@ public struct PlanPrice: Decodable, Equatable {
     public var share: String?
     /// What the operator pays a month, in the plan's own currency.
     public var operatorAmount: String?
+    /// The same in USD at the glance's reference rates, so rows add up to the USD total.
+    public var operatorUSD: String?
 
-    enum CodingKeys: String, CodingKey { case id, name, amount, currency, period, source, share, operatorAmount = "operator_amount" }
+    enum CodingKeys: String, CodingKey { case id, name, amount, currency, period, source, share, operatorAmount = "operator_amount", operatorUSD = "operator_usd" }
 
     public init(id: String, name: String = "", amount: String? = nil, currency: String? = nil, period: String? = nil, source: String? = nil,
                 share: String? = nil, operatorAmount: String? = nil) {
@@ -237,6 +239,8 @@ public struct PlanPrice: Decodable, Equatable {
         share = try? c.decodeIfPresent(String.self, forKey: .share)
         operatorAmount = (try? c.decodeIfPresent(String.self, forKey: .operatorAmount))
             ?? (try? c.decodeIfPresent(Double.self, forKey: .operatorAmount)).map { String($0) }
+        operatorUSD = (try? c.decodeIfPresent(String.self, forKey: .operatorUSD))
+            ?? (try? c.decodeIfPresent(Double.self, forKey: .operatorUSD)).map { String($0) }
     }
 }
 

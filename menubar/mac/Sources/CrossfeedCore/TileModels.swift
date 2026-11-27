@@ -498,7 +498,8 @@ extension Presenter {
         guard let spend = glance.spend, !spend.unavailable, !spend.plans.isEmpty else { return nil }
         let rows = spend.plans.map { plan -> SubscriptionRow in
             let full = Self.money(plan.amount, plan.currency)
-            let yours = Self.money(plan.operatorAmount ?? plan.amount, plan.currency)
+            let usd = plan.operatorUSD.flatMap(Double.init).map { "$\(Int($0.rounded()))" }
+            let yours = usd ?? Self.money(plan.operatorAmount ?? plan.amount, plan.currency)
             return SubscriptionRow(id: plan.id, name: plan.name, share: plan.share.map(Self.shareMark),
                                    full: plan.share != nil ? full : nil, yours: yours ?? "No price", priced: yours != nil)
         }
