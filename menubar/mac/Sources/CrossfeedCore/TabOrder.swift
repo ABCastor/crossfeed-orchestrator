@@ -9,13 +9,16 @@ public struct TabOrder {
 
     public func ordered(_ available: [String]) -> [String] {
         let availableIDs = Set(available)
-        return Self.merged(saved, available).filter { availableIDs.contains($0) }
+        return Self.otherLast(Self.merged(saved, available).filter { availableIDs.contains($0) })
     }
+
+    /// "Other" (pools with no percent window) is the catch-all and stays at the end, wherever it was dragged.
+    public static func otherLast(_ ids: [String]) -> [String] { ids.filter { $0 != "other" } + ids.filter { $0 == "other" } }
 
     @discardableResult
     public func move(_ source: String, onto target: String, among available: [String]) -> Bool {
         var visible = ordered(available)
-        guard source != target, let from = visible.firstIndex(of: source),
+        guard source != target, source != "other", target != "other", let from = visible.firstIndex(of: source),
               let to = visible.firstIndex(of: target) else { return false }
         visible.remove(at: from)
         visible.insert(source, at: to)

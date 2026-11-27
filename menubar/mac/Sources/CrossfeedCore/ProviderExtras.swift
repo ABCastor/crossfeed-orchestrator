@@ -199,10 +199,7 @@ public struct ProviderExtras: Equatable {
                 let expires = grant.expiresAt.flatMap(Presenter.controlDate).map { ", expire \($0.formatted(date))" } ?? ""
                 lines.append("Funded credits \(left.formatted(.number.precision(.fractionLength(0))))\(of) left\(expires)")
             }
-            if let today = billing.creditsToday, let week = billing.credits7d, let month = billing.credits30d {
-                let n = { (v: Double) in v.formatted(.number.precision(.fractionLength(0))) }
-                lines.append("Credits used \(n(today)) today · \(n(week)) in 7 days · \(n(month)) in 30 days")
-            }
+            // Credits used by day, week and month are a usage report; the console has it.
         }
         billing = lines
         modelQuota = pool.modelQuota.compactMap { quota in
@@ -217,7 +214,8 @@ public struct ProviderExtras: Equatable {
             let lhs = $0.usd30Days ?? -.infinity, rhs = $1.usd30Days ?? -.infinity
             return lhs != rhs ? lhs > rhs : $0.model < $1.model
         }.compactMap { Self.row($0.model, $0.usd30Days, $0.requests, $0.requests == 1 ? "request" : "requests") }
-        if let raw = pool.statusURL, let parts = URLComponents(string: raw), parts.scheme == "https",
+        // Antigravity's allowances share one status feed: its link is said once, with its incident.
+        if showIncident, let raw = pool.statusURL, let parts = URLComponents(string: raw), parts.scheme == "https",
            let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil {
             status = parts.url
         } else {

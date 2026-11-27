@@ -1,0 +1,2605 @@
+{
+ "pools": [
+  {
+   "archived": [
+    {
+     "archived": true,
+     "family": "claude-fable",
+     "model": "claude-fable-5-1",
+     "name": "Claude Fable 5.1",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.115
+    },
+    {
+     "archived": true,
+     "family": "claude-fable",
+     "model": "claude-fable-5",
+     "name": "Claude Fable 5",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.115
+    },
+    {
+     "archived": true,
+     "family": "claude-haiku",
+     "model": "claude-haiku",
+     "name": "Claude Haiku",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    }
+   ],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [
+     "claude.ai"
+    ],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "statuspage",
+    "level": "minor",
+    "since": "2026-11-24T00:10:40Z",
+    "stale": false,
+    "text": "Claude for Microsoft 365 add-in missing for some users"
+   },
+   "label": "Claude",
+   "level": "normal",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-25T17:21:48.917313Z"
+   },
+   "limits": [
+    {
+     "active": false,
+     "kind": "window",
+     "minutes": 300,
+     "name": "session",
+     "note": "Starts with your next message",
+     "pace": null,
+     "reset_at": null,
+     "resets": null,
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 0
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": {
+      "delta_percent": -10.3,
+      "early": false,
+      "elapsed_percent": 39.7,
+      "points": 10,
+      "run_out_basis": "average_burn",
+      "runs_out_in_s": 240235,
+      "status": "deficit",
+      "used_percent": 50.0,
+      "words": "10% in deficit, runs out in 2d 18h"
+     },
+     "reset_at": "2026-12-01T12:59:59Z",
+     "resets": "Tue 1 Dec 14:00",
+     "resets_in_s": 364565,
+     "scope": null,
+     "spend_down": false,
+     "state": "healthy",
+     "title": "Weekly",
+     "used_percent": 50
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "claude-weekly-scoped-fable",
+     "pace": {
+      "delta_percent": 23.7,
+      "early": false,
+      "elapsed_percent": 39.7,
+      "points": 24,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 16.0,
+      "words": "24% surplus"
+     },
+     "reset_at": "2026-12-01T12:59:59Z",
+     "resets": "Tue 1 Dec 14:00",
+     "resets_in_s": 364565,
+     "scope": "Fable only",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 16
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "claude-fable",
+     "name": "Fable 5.2",
+     "retired_on": null,
+     "typical_cost_usd": 0.092
+    },
+    {
+     "archived": false,
+     "family": "claude-opus",
+     "name": "Opus 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.046847298060628886
+    },
+    {
+     "archived": false,
+     "family": "claude-sonnet",
+     "name": "Sonnet 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.023
+    },
+    {
+     "archived": false,
+     "family": "claude-haiku",
+     "name": "Haiku 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.00115
+    }
+   ],
+   "name": "Claude",
+   "pace": {
+    "delta_percent": -10.3,
+    "early": false,
+    "elapsed_percent": 39.7,
+    "points": 10,
+    "run_out_basis": "average_burn",
+    "runs_out_in_s": 240235,
+    "status": "deficit",
+    "used_percent": 50.0,
+    "words": "10% in deficit, runs out in 2d 18h"
+   },
+   "pool": "claude",
+   "reading_age_s": 109,
+   "reading_observed_at": "2026-11-27T07:42:04Z",
+   "reading_source": "claude-oauth-usage",
+   "reading_stale": false,
+   "reset_at": "2026-12-01T12:59:59Z",
+   "resets": "Tue 1 Dec 14:00",
+   "set_at": "2026-11-25T17:21:48.917313Z",
+   "set_by": "operator",
+   "stale_age_s": null,
+   "state": "HEALTHY",
+   "status_url": "https://status.claude.com/",
+   "subscription": "claude",
+   "usage_cost": {
+    "age_s": 350,
+    "by_model": [
+     {
+      "model": "claude-opus-5-5",
+      "requests": 81882,
+      "tokens": 15128675333,
+      "usd": 6180.6686534,
+      "usd_7d": 1388.9966584,
+      "usd_today": 187.8095114
+     },
+     {
+      "model": "claude-sonnet-5-5",
+      "requests": 9003,
+      "tokens": 1011989352,
+      "usd": 278.3944798,
+      "usd_7d": 139.7869394,
+      "usd_today": 3.3193466
+     },
+     {
+      "model": "claude-fable-5-2",
+      "requests": 5460,
+      "tokens": 696200662,
+      "usd": 722.5719642,
+      "usd_7d": 92.1375692,
+      "usd_today": 0.0
+     },
+     {
+      "model": "claude-haiku-5-5",
+      "requests": 163,
+      "tokens": 9295634,
+      "usd": 0.60335477,
+      "usd_7d": 0.0,
+      "usd_today": 0.0
+     },
+     {
+      "model": "claude-opus-5",
+      "requests": 3,
+      "tokens": 284960,
+      "usd": 1.5989975,
+      "usd_7d": 0.0,
+      "usd_today": 0.0
+     }
+    ],
+    "daily": [
+     {
+      "day": "2026-10-29",
+      "tokens": 758518312,
+      "usd": 338.20947353
+     },
+     {
+      "day": "2026-10-30",
+      "tokens": 1399110628,
+      "usd": 513.04922976
+     },
+     {
+      "day": "2026-10-31",
+      "tokens": 392171517,
+      "usd": 164.83461814
+     },
+     {
+      "day": "2026-11-01",
+      "tokens": 109450594,
+      "usd": 49.03626087
+     },
+     {
+      "day": "2026-11-02",
+      "tokens": 126056183,
+      "usd": 58.6527277
+     },
+     {
+      "day": "2026-11-03",
+      "tokens": 608227436,
+      "usd": 274.1034531
+     },
+     {
+      "day": "2026-11-04",
+      "tokens": 749064093,
+      "usd": 328.30612407
+     },
+     {
+      "day": "2026-11-05",
+      "tokens": 1045921058,
+      "usd": 426.4349388
+     },
+     {
+      "day": "2026-11-06",
+      "tokens": 741028834,
+      "usd": 291.3733122
+     },
+     {
+      "day": "2026-11-07",
+      "tokens": 67687817,
+      "usd": 25.1061776
+     },
+     {
+      "day": "2026-11-08",
+      "tokens": 9932135,
+      "usd": 5.6005951
+     },
+     {
+      "day": "2026-11-09",
+      "tokens": 237984506,
+      "usd": 97.4422825
+     },
+     {
+      "day": "2026-11-10",
+      "tokens": 1842718841,
+      "usd": 790.7944954
+     },
+     {
+      "day": "2026-11-11",
+      "tokens": 1019007952,
+      "usd": 390.3018847
+     },
+     {
+      "day": "2026-11-12",
+      "tokens": 475423528,
+      "usd": 183.3375101
+     },
+     {
+      "day": "2026-11-13",
+      "tokens": 116132610,
+      "usd": 49.4719315
+     },
+     {
+      "day": "2026-11-14",
+      "tokens": 604272573,
+      "usd": 278.6620892
+     },
+     {
+      "day": "2026-11-15",
+      "tokens": 550288315,
+      "usd": 238.5118035
+     },
+     {
+      "day": "2026-11-16",
+      "tokens": 564808884,
+      "usd": 266.2002653
+     },
+     {
+      "day": "2026-11-17",
+      "tokens": 444720851,
+      "usd": 251.7362466
+     },
+     {
+      "day": "2026-11-18",
+      "tokens": 378273111,
+      "usd": 280.3826322
+     },
+     {
+      "day": "2026-11-19",
+      "tokens": 420267040,
+      "usd": 235.4900324
+     },
+     {
+      "day": "2026-11-20",
+      "tokens": 37639449,
+      "usd": 25.8781984
+     },
+     {
+      "day": "2026-11-21",
+      "tokens": 88197605,
+      "usd": 39.2374728
+     },
+     {
+      "day": "2026-11-22",
+      "tokens": 10423658,
+      "usd": 8.9848398
+     },
+     {
+      "day": "2026-11-23",
+      "tokens": 1003307241,
+      "usd": 427.5124105
+     },
+     {
+      "day": "2026-11-24",
+      "tokens": 905005736,
+      "usd": 377.0658312
+     },
+     {
+      "day": "2026-11-25",
+      "tokens": 414089197,
+      "usd": 164.7994635
+     },
+     {
+      "day": "2026-11-26",
+      "tokens": 1186859695,
+      "usd": 412.1922912
+     },
+     {
+      "day": "2026-11-27",
+      "tokens": 539856542,
+      "usd": 191.128858
+     }
+    ],
+    "estimate": "API list price",
+    "last_30d_tokens": 16846445941,
+    "last_30d_usd": 7183.83744967,
+    "last_7d_tokens": 4147739674,
+    "last_7d_usd": 1620.921167,
+    "observed_at": "2026-11-27T07:38:03Z",
+    "source": "claude-cli-local-logs",
+    "stale": false,
+    "today_tokens": 539856542,
+    "today_usd": 191.128858
+   },
+   "used_percent": 50
+  },
+  {
+   "archived": [],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "google",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Antigravity \u00b7 Argon",
+   "level": "normal",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-26T22:30:14.435258Z"
+   },
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-gemini-5h",
+     "pace": {
+      "delta_percent": 5.4,
+      "early": true,
+      "elapsed_percent": 6.4,
+      "points": 5,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 1.0,
+      "words": "5% surplus"
+     },
+     "reset_at": "2026-11-27T12:24:38Z",
+     "resets": "today 13:24",
+     "resets_in_s": 16844,
+     "scope": "Gemini",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 1
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "gemini-argon",
+     "name": "Gemini 4 Argon",
+     "retired_on": null,
+     "typical_cost_usd": 0.04188526271224268
+    }
+   ],
+   "name": "Argon",
+   "pace": {
+    "delta_percent": 5.4,
+    "early": true,
+    "elapsed_percent": 6.4,
+    "points": 5,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 1.0,
+    "words": "5% surplus"
+   },
+   "pool": "antigravity-argon",
+   "reading_age_s": 112,
+   "reading_observed_at": "2026-11-27T07:42:01Z",
+   "reading_source": "antigravity-oauth-usage",
+   "reading_stale": false,
+   "reset_at": "2026-11-27T12:24:38Z",
+   "resets": "today 13:24",
+   "set_at": "2026-11-26T22:30:14.435258Z",
+   "set_by": "operator",
+   "stale_age_s": 112,
+   "state": "UNKNOWN",
+   "status_url": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+   "subscription": "antigravity",
+   "used_percent": 1
+  },
+  {
+   "archived": [
+    {
+     "archived": true,
+     "family": "claude-sonnet",
+     "model": "claude-sonnet-4-6",
+     "name": "Claude Sonnet 4.6",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0345
+    },
+    {
+     "archived": true,
+     "family": "claude-opus-thinking",
+     "model": "claude-opus-4-6-thinking",
+     "name": "Claude Opus 4.6 Thinking",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    }
+   ],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "google",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Antigravity \u00b7 Claude and GPT",
+   "level": "normal",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-26T22:30:14.435246Z"
+   },
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-3p-5h",
+     "pace": null,
+     "reset_at": null,
+     "reset_unknown": true,
+     "resets": "",
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 0
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "antigravity-quota-summary-3p-weekly",
+     "pace": null,
+     "reset_at": null,
+     "reset_unknown": true,
+     "resets": "",
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 0
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "claude-opus",
+     "name": "Opus 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.046847298060628886
+    },
+    {
+     "archived": false,
+     "family": "claude-sonnet",
+     "name": "Sonnet 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.023
+    }
+   ],
+   "name": "AGY Claude/GPT",
+   "pace": null,
+   "pool": "antigravity-3p",
+   "reading_age_s": 112,
+   "reading_observed_at": "2026-11-27T07:42:01Z",
+   "reading_source": "antigravity-oauth-usage",
+   "reading_stale": false,
+   "reset_at": null,
+   "resets": "",
+   "set_at": "2026-11-26T22:30:14.435246Z",
+   "set_by": "operator",
+   "stale_age_s": 112,
+   "state": "UNKNOWN",
+   "status_url": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+   "subscription": "antigravity",
+   "used_percent": 0
+  },
+  {
+   "archived": [
+    {
+     "archived": true,
+     "family": "gemini-flash",
+     "model": "gemini-3.5-flash",
+     "name": "Gemini 3.5 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0168
+    },
+    {
+     "archived": true,
+     "family": "gemini-flash",
+     "model": "gemini-3.8-flash",
+     "name": "Gemini 3.8 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.007665806078738121
+    },
+    {
+     "archived": true,
+     "family": "gemini-flash",
+     "model": "gemini-3.6-flash",
+     "name": "Gemini 3.6 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0075
+    },
+    {
+     "archived": true,
+     "family": "gemini-flash",
+     "model": "gemini-3.7-flash",
+     "name": "Gemini 3.7 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "gemini-pro",
+     "model": "gemini-3.1-pro",
+     "name": "Gemini 3.1 Pro",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    }
+   ],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "google",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Antigravity \u00b7 Gemini",
+   "level": "normal",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-26T22:30:14.435263Z"
+   },
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-gemini-5h",
+     "pace": {
+      "delta_percent": 5.4,
+      "early": true,
+      "elapsed_percent": 6.4,
+      "points": 5,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 1.0,
+      "words": "5% surplus"
+     },
+     "reset_at": "2026-11-27T12:24:38Z",
+     "resets": "today 13:24",
+     "resets_in_s": 16844,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 1
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "antigravity-quota-summary-gemini-weekly",
+     "pace": {
+      "delta_percent": -80.6,
+      "early": false,
+      "elapsed_percent": 13.4,
+      "points": 81,
+      "run_out_basis": "average_burn",
+      "runs_out_in_s": 5170,
+      "status": "deficit",
+      "used_percent": 94.0,
+      "words": "81% in deficit, runs out in 1h 26m"
+     },
+     "reset_at": "2026-12-03T09:13:49Z",
+     "resets": "Thu 3 Dec 10:13",
+     "resets_in_s": 523795,
+     "scope": null,
+     "spend_down": false,
+     "state": "critical",
+     "title": "Weekly",
+     "used_percent": 94
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "gemini-neon",
+     "name": "Gemini 4 Neon",
+     "retired_on": null,
+     "typical_cost_usd": 0.029487031990985235
+    },
+    {
+     "archived": false,
+     "family": "gemini-hydrogen",
+     "name": "Gemini 4 Hydrogen",
+     "retired_on": null,
+     "typical_cost_usd": 0.014229889662746666
+    }
+   ],
+   "name": "Gemini",
+   "pace": {
+    "delta_percent": -80.6,
+    "early": false,
+    "elapsed_percent": 13.4,
+    "points": 81,
+    "run_out_basis": "average_burn",
+    "runs_out_in_s": 5170,
+    "status": "deficit",
+    "used_percent": 94.0,
+    "words": "81% in deficit, runs out in 1h 26m"
+   },
+   "pool": "antigravity-gemini",
+   "reading_age_s": 112,
+   "reading_observed_at": "2026-11-27T07:42:01Z",
+   "reading_source": "antigravity-oauth-usage",
+   "reading_stale": false,
+   "reset_at": "2026-12-03T09:13:49Z",
+   "resets": "Thu 3 Dec 10:13",
+   "set_at": "2026-11-26T22:30:14.435263Z",
+   "set_by": "operator",
+   "stale_age_s": null,
+   "state": "CRITICAL",
+   "status_url": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+   "subscription": "antigravity",
+   "usage_cost": {
+    "age_s": 350,
+    "by_model": [
+     {
+      "model": "gemini-4-neon",
+      "requests": 29,
+      "tokens": 3621165,
+      "usd": 2.61509955,
+      "usd_7d": 2.54457255,
+      "usd_today": 0.0
+     },
+     {
+      "model": "gemini-4-hydrogen",
+      "requests": 4,
+      "tokens": 92087,
+      "usd": 0.06083895,
+      "usd_7d": 0.06083895,
+      "usd_today": 0.0
+     }
+    ],
+    "daily": [
+     {
+      "day": "2026-10-29",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-10-30",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-10-31",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-01",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-02",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-03",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-04",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-05",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-06",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-07",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-08",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-09",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-10",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-11",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-12",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-13",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-14",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-15",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-16",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-17",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-18",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-19",
+      "tokens": 20845,
+      "usd": 0.070527
+     },
+     {
+      "day": "2026-11-20",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-21",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-22",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-23",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-24",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-25",
+      "tokens": 178797,
+      "usd": 0.17688585
+     },
+     {
+      "day": "2026-11-26",
+      "tokens": 3513610,
+      "usd": 2.42852565
+     },
+     {
+      "day": "2026-11-27",
+      "tokens": 0,
+      "usd": 0.0
+     }
+    ],
+    "estimate": "API list price",
+    "last_30d_requests": 33,
+    "last_30d_tokens": 3713252,
+    "last_30d_unpriced_requests": 0,
+    "last_30d_usd": 2.6759385,
+    "last_7d_tokens": 3692407,
+    "last_7d_usd": 2.6054115,
+    "observed_at": "2026-11-27T07:38:03Z",
+    "partial": false,
+    "source": "antigravity-desktop-history",
+    "stale": false,
+    "today_requests": 0,
+    "today_tokens": 0,
+    "today_unpriced_requests": 0,
+    "today_usd": 0.0
+   },
+   "used_percent": 94
+  },
+  {
+   "archived": [
+    {
+     "archived": true,
+     "family": "chatgpt:sol56-high",
+     "model": "chatgpt:sol56-high",
+     "name": "chatgpt:sol56 High",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "chatgpt:sol56-instant",
+     "model": "chatgpt:sol56-instant",
+     "name": "chatgpt:sol56 Instant",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "chatgpt:sol56-medium",
+     "model": "chatgpt:sol56-medium",
+     "name": "chatgpt:sol56 Medium",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "chatgpt:sol56-pro",
+     "model": "chatgpt:sol56-pro",
+     "name": "chatgpt:sol56 Pro",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "chatgpt:sol56-xhigh",
+     "model": "chatgpt:sol56-xhigh",
+     "name": "chatgpt:sol56 Xhigh",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    }
+   ],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "statuspage",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "ChatGPT chats via Crossfeed Chat",
+   "last_observed_windows": {
+    "codex-base-model-inference": {
+     "label": "gpt-reserve",
+     "reset_at": "2026-10-10T16:16:57Z",
+     "used_percent": 0,
+     "window_minutes": 10080
+    },
+    "secondary": {
+     "eta_seconds": 256349,
+     "label": "Weekly",
+     "reset_at": "2026-10-09T21:21:15Z",
+     "used_percent": 21,
+     "will_last_to_reset": false,
+     "window_minutes": 10080
+    }
+   },
+   "level": "high",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-19T16:28:46.481892Z"
+   },
+   "limits": [],
+   "measured": false,
+   "models": [
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 High",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Instant",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Medium",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Extra High",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Pro",
+     "retired_on": null,
+     "typical_cost_usd": null
+    },
+    {
+     "archived": false,
+     "family": "chatgpt:media-unattended",
+     "name": "ChatGPT media",
+     "retired_on": null,
+     "typical_cost_usd": null
+    }
+   ],
+   "name": "ChatGPT chats via Crossfeed Chat",
+   "pace": null,
+   "pool": "chatgpt-work",
+   "reading_age_s": 4721215,
+   "reading_observed_at": "2026-10-03T16:16:58Z",
+   "reading_source": "codexbar",
+   "reading_stale": true,
+   "reset_at": null,
+   "resets": "",
+   "set_at": "2026-11-19T16:28:46.481892Z",
+   "set_by": "operator",
+   "stale_age_s": null,
+   "state": "UNKNOWN",
+   "status_url": "https://status.openai.com/",
+   "subscription": null,
+   "used_percent": null
+  },
+  {
+   "account_usage": {
+    "credits_balance": 11872.2539635
+   },
+   "archived": [
+    {
+     "archived": true,
+     "family": "gpt-astra",
+     "model": "gpt-6-astra",
+     "name": "GPT-6 Astra",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.13375
+    },
+    {
+     "archived": true,
+     "family": "gpt-sol",
+     "model": "gpt-6-sol",
+     "name": "GPT-6 Sol",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": true,
+     "family": "gpt-sol",
+     "model": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.02675
+    },
+    {
+     "archived": true,
+     "family": "gpt-sol",
+     "model": "gpt-5.6-sol",
+     "name": "GPT-5.6 Sol",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "gpt-luna",
+     "model": "gpt-5.6-luna",
+     "name": "GPT-5.6 Luna",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.00242
+    },
+    {
+     "archived": true,
+     "family": "gpt-terra",
+     "model": "gpt-5.6-terra",
+     "name": "GPT-5.6 Terra",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "gpt-codex-spark",
+     "model": "gpt-5.3-codex-spark",
+     "name": "GPT-5.3 Codex Spark",
+     "retired_on": "2026-09-14",
+     "typical_cost_usd": null
+    }
+   ],
+   "billing": {
+    "active_until": "2026-12-04T10:58:38Z",
+    "credit_history": [
+     {
+      "credits": 1327.929757,
+      "date": "2026-10-29"
+     },
+     {
+      "credits": 4310.037322,
+      "date": "2026-10-30"
+     },
+     {
+      "credits": 809.504034,
+      "date": "2026-10-31"
+     },
+     {
+      "credits": 549.169641,
+      "date": "2026-11-01"
+     },
+     {
+      "credits": 97.45447,
+      "date": "2026-11-02"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-03"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-04"
+     },
+     {
+      "credits": 8633.527752,
+      "date": "2026-11-05"
+     },
+     {
+      "credits": 3813.734029,
+      "date": "2026-11-06"
+     },
+     {
+      "credits": 5798.577452,
+      "date": "2026-11-07"
+     },
+     {
+      "credits": 141.957115,
+      "date": "2026-11-08"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-09"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-10"
+     },
+     {
+      "credits": 2460.697832,
+      "date": "2026-11-11"
+     },
+     {
+      "credits": 2902.67272,
+      "date": "2026-11-12"
+     },
+     {
+      "credits": 1145.837069,
+      "date": "2026-11-13"
+     },
+     {
+      "credits": 5992.961591,
+      "date": "2026-11-14"
+     },
+     {
+      "credits": 1097.344905,
+      "date": "2026-11-15"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-16"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-17"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-18"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-19"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-20"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-21"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-22"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-23"
+     },
+     {
+      "credits": 0.0,
+      "date": "2026-11-24"
+     },
+     {
+      "credits": 1718.16233,
+      "date": "2026-11-25"
+     },
+     {
+      "credits": 1484.922206,
+      "date": "2026-11-26"
+     },
+     {
+      "credits": 0.329018,
+      "date": "2026-11-27"
+     }
+    ],
+    "credits_30d": 42284.819244,
+    "credits_7d": 3203.413554,
+    "credits_today": 0.329018,
+    "currency": "EUR",
+    "grants": [
+     {
+      "credits": 11872.2539635,
+      "expires_at": "2027-01-01T00:00:00Z",
+      "granted": 62500.0,
+      "kind": "promotional_credit"
+     }
+    ],
+    "limit_use_by_model_30d": [
+     {
+      "model": "gpt-6-astra",
+      "percent": 593.205803
+     },
+     {
+      "model": "gpt-6.1-sol",
+      "percent": 333.042577
+     },
+     {
+      "model": "gpt-6.2-sol",
+      "percent": 93.23396
+     },
+     {
+      "model": "gpt-6.1-terra",
+      "percent": 34.286759
+     },
+     {
+      "model": "gpt-6-luna",
+      "percent": 2.961017
+     },
+     {
+      "model": "gpt-6-sol",
+      "percent": 0.240885
+     }
+    ],
+    "limit_use_history": [
+     {
+      "date": "2026-10-29",
+      "percent": 47.880364
+     },
+     {
+      "date": "2026-10-30",
+      "percent": 35.441057
+     },
+     {
+      "date": "2026-10-31",
+      "percent": 8.780166
+     },
+     {
+      "date": "2026-11-01",
+      "percent": 5.455866
+     },
+     {
+      "date": "2026-11-02",
+      "percent": 25.896216
+     },
+     {
+      "date": "2026-11-03",
+      "percent": 100.0
+     },
+     {
+      "date": "2026-11-04",
+      "percent": 71.481737
+     },
+     {
+      "date": "2026-11-05",
+      "percent": 86.909443
+     },
+     {
+      "date": "2026-11-06",
+      "percent": 29.120827
+     },
+     {
+      "date": "2026-11-07",
+      "percent": 50.269327
+     },
+     {
+      "date": "2026-11-08",
+      "percent": 57.097878
+     },
+     {
+      "date": "2026-11-09",
+      "percent": 88.684024
+     },
+     {
+      "date": "2026-11-10",
+      "percent": 78.024386
+     },
+     {
+      "date": "2026-11-11",
+      "percent": 30.184794
+     },
+     {
+      "date": "2026-11-12",
+      "percent": 18.979748
+     },
+     {
+      "date": "2026-11-13",
+      "percent": 9.580099
+     },
+     {
+      "date": "2026-11-14",
+      "percent": 54.725332
+     },
+     {
+      "date": "2026-11-15",
+      "percent": 14.053307
+     },
+     {
+      "date": "2026-11-16",
+      "percent": 3.399126
+     },
+     {
+      "date": "2026-11-17",
+      "percent": 6.355995
+     },
+     {
+      "date": "2026-11-18",
+      "percent": 12.922934
+     },
+     {
+      "date": "2026-11-19",
+      "percent": 5.564483
+     },
+     {
+      "date": "2026-11-20",
+      "percent": 6.777699
+     },
+     {
+      "date": "2026-11-21",
+      "percent": 13.821912
+     },
+     {
+      "date": "2026-11-22",
+      "percent": 1.777053
+     },
+     {
+      "date": "2026-11-23",
+      "percent": 49.982881
+     },
+     {
+      "date": "2026-11-24",
+      "percent": 80.364558
+     },
+     {
+      "date": "2026-11-25",
+      "percent": 49.606625
+     },
+     {
+      "date": "2026-11-26",
+      "percent": 13.976493
+     },
+     {
+      "date": "2026-11-27",
+      "percent": 0
+     }
+    ],
+    "observed_at": "2026-11-27T07:42:05Z",
+    "period": "monthly",
+    "plan": "pro",
+    "renews_at": "2026-12-04T10:58:38Z",
+    "source": "codex-oauth-billing",
+    "will_renew": true
+   },
+   "credits": {
+    "balance": 2,
+    "expirations": [
+     "2026-12-12T22:44:04Z",
+     "2026-12-26T06:16:39Z"
+    ],
+    "expires_at": "2026-12-12T22:44:04Z",
+    "renews_at": null,
+    "source": "codex-oauth-rate-limit-reset-credits",
+    "unit": "limit resets"
+   },
+   "full": true,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "statuspage",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Codex (ChatGPT)",
+   "level": "forced",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-23T13:50:24.139962Z"
+   },
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": null,
+     "reset_at": "2026-11-29T11:04:15Z",
+     "resets": "Sun 29 Nov 12:04",
+     "resets_in_s": 184821,
+     "scope": null,
+     "spend_down": false,
+     "state": "full",
+     "title": "Weekly",
+     "used_percent": 100
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "gpt-astra",
+     "name": "GPT-6.2 Astra",
+     "retired_on": null,
+     "typical_cost_usd": 0.09942045268648994
+    },
+    {
+     "archived": false,
+     "family": "gpt-sol",
+     "name": "GPT-6.2 Sol",
+     "retired_on": null,
+     "typical_cost_usd": 0.024548353857513812
+    },
+    {
+     "archived": false,
+     "family": "gpt-luna",
+     "name": "GPT-6 Luna",
+     "retired_on": null,
+     "typical_cost_usd": 0.0010013675004661988
+    }
+   ],
+   "name": "Codex",
+   "pace": null,
+   "pool": "codex",
+   "reading_age_s": 110,
+   "reading_observed_at": "2026-11-27T07:42:03Z",
+   "reading_source": "codex-oauth-usage",
+   "reading_stale": false,
+   "reset_at": "2026-11-29T11:04:15Z",
+   "resets": "Sun 29 Nov 12:04",
+   "set_at": "2026-11-23T13:50:24.139962Z",
+   "set_by": "operator",
+   "spend_credits": {
+    "balance": 11872.2539635,
+    "expires_at": null,
+    "renews_at": null,
+    "source": "codex-oauth-usage",
+    "unit": "credits"
+   },
+   "stale_age_s": null,
+   "state": "EXHAUSTED",
+   "status_url": "https://status.openai.com/",
+   "subscription": "codex",
+   "usage_cost": {
+    "age_s": 350,
+    "by_model": [
+     {
+      "model": "gpt-6.1-sol",
+      "requests": 14,
+      "tokens": 1037190,
+      "usd": 0.327332,
+      "usd_7d": 0.0,
+      "usd_today": 0.0
+     },
+     {
+      "model": "gpt-6.1-terra",
+      "requests": 2,
+      "tokens": 307367,
+      "usd": 0.1724942,
+      "usd_7d": 0.0,
+      "usd_today": 0.0
+     },
+     {
+      "model": "gpt-6-luna",
+      "requests": 7,
+      "tokens": 300552,
+      "usd": 0.010474,
+      "usd_7d": 0.010474,
+      "usd_today": 0.010474
+     },
+     {
+      "model": "gpt-6.2-sol",
+      "requests": 5,
+      "tokens": 222059,
+      "usd": 0.1212988,
+      "usd_7d": 0.1212988,
+      "usd_today": 0.0
+     }
+    ],
+    "daily": [
+     {
+      "day": "2026-10-29",
+      "tokens": 307367,
+      "usd": 0.1724942
+     },
+     {
+      "day": "2026-10-30",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-10-31",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-01",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-02",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-03",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-04",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-05",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-06",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-07",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-08",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-09",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-10",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-11",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-12",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-13",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-14",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-15",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-16",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-17",
+      "tokens": 1037190,
+      "usd": 0.327332
+     },
+     {
+      "day": "2026-11-18",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-19",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-20",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-21",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-22",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-23",
+      "tokens": 222059,
+      "usd": 0.1212988
+     },
+     {
+      "day": "2026-11-24",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-25",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-26",
+      "tokens": 0,
+      "usd": 0.0
+     },
+     {
+      "day": "2026-11-27",
+      "tokens": 300552,
+      "usd": 0.010474
+     }
+    ],
+    "estimate": "API list price",
+    "last_30d_tokens": 1867168,
+    "last_30d_usd": 0.631599,
+    "last_7d_tokens": 522611,
+    "last_7d_usd": 0.1317728,
+    "observed_at": "2026-11-27T07:38:03Z",
+    "source": "codex-cli-local-logs",
+    "stale": false,
+    "today_tokens": 300552,
+    "today_usd": 0.010474
+   },
+   "used_percent": 100
+  },
+  {
+   "archived": [
+    {
+     "archived": true,
+     "family": "gemini-flash",
+     "model": "gemini-3.6-flash",
+     "name": "Gemini 3.6 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0075
+    },
+    {
+     "archived": true,
+     "family": "gemini-flash",
+     "model": "gemini-3.7-flash",
+     "name": "Gemini 3.7 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0075
+    }
+   ],
+   "full": false,
+   "gauge_error": null,
+   "label": "Gemini API",
+   "level": "normal",
+   "level_control": null,
+   "limits": [],
+   "measured": false,
+   "models": [
+    {
+     "archived": false,
+     "family": "gemini-pro-preview",
+     "name": "Gemini 3.1 Pro Preview",
+     "retired_on": null,
+     "typical_cost_usd": 0.0242
+    },
+    {
+     "archived": false,
+     "family": "gemini-flash-latest",
+     "name": "Gemini Flash Latest",
+     "retired_on": null,
+     "typical_cost_usd": 0.0075
+    },
+    {
+     "archived": false,
+     "family": "gemini-flash-lite-latest",
+     "name": "Gemini Flash Lite Latest",
+     "retired_on": null,
+     "typical_cost_usd": 0.003825
+    }
+   ],
+   "name": "Gemini API",
+   "pace": null,
+   "pool": "gemini-metered",
+   "reset_at": "2026-11-27T23:00:00Z",
+   "resets": "midnight",
+   "set_at": null,
+   "set_by": null,
+   "stale_age_s": null,
+   "state": "UNKNOWN",
+   "subscription": null,
+   "used_percent": 0
+  },
+  {
+   "archived": [],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "statuspage",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "GitHub Copilot",
+   "level": "normal",
+   "level_control": null,
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 43200,
+     "name": "premium_monthly",
+     "pace": {
+      "delta_percent": 87.7,
+      "early": false,
+      "elapsed_percent": 87.7,
+      "points": 88,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 0.0,
+      "words": "88% surplus"
+     },
+     "reset_at": "2026-12-01T00:00:00Z",
+     "resets": "Tue 1 Dec 01:00",
+     "resets_in_s": 317766,
+     "scope": "Premium",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Monthly",
+     "used_percent": 0
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "github-copilot-auto",
+     "name": "GitHub Copilot Auto",
+     "retired_on": null,
+     "typical_cost_usd": null
+    }
+   ],
+   "name": "GitHub Copilot",
+   "pace": {
+    "delta_percent": 87.7,
+    "early": false,
+    "elapsed_percent": 87.7,
+    "points": 88,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 0.0,
+    "words": "88% surplus"
+   },
+   "pool": "github-copilot-student",
+   "reading_age_s": 110,
+   "reading_observed_at": "2026-11-27T07:42:03Z",
+   "reading_source": "copilot-api",
+   "reading_stale": false,
+   "reset_at": "2026-12-01T00:00:00Z",
+   "resets": "Tue 1 Dec 01:00",
+   "set_at": null,
+   "set_by": null,
+   "stale_age_s": null,
+   "state": "ABUNDANT",
+   "status_url": "https://www.githubstatus.com/",
+   "subscription": null,
+   "used_percent": 0
+  },
+  {
+   "archived": [
+    {
+     "archived": true,
+     "family": "grok",
+     "model": "grok-4.5",
+     "name": "Grok 4.5",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.017
+    },
+    {
+     "archived": true,
+     "family": "kimi-k",
+     "model": "kimi-k3",
+     "name": "Kimi K3",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.01659114130434783
+    },
+    {
+     "archived": true,
+     "family": "kimi-k",
+     "model": "kimi-k2.6",
+     "name": "Kimi K2.6",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "kimi-k-code",
+     "model": "kimi-k2.7-code",
+     "name": "Kimi K2.7 Code",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0098
+    },
+    {
+     "archived": true,
+     "family": "mimo-v-pro",
+     "model": "mimo-v2.5-pro",
+     "name": "MiMo V2.5 Pro",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.003045
+    },
+    {
+     "archived": true,
+     "family": "longcat",
+     "model": "longcat-2.0",
+     "name": "Longcat 2.0",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.00282
+    },
+    {
+     "archived": true,
+     "family": "gpt-luna",
+     "model": "gpt-5.6-luna",
+     "name": "GPT-5.6 Luna",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.00242
+    },
+    {
+     "archived": true,
+     "family": "muse-spark-contributor",
+     "model": "muse-spark-1.2-contributor",
+     "name": "Muse Spark 1.2 Contributor",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.0012
+    },
+    {
+     "archived": true,
+     "family": "deepseek-v-flash",
+     "model": "deepseek-v4-flash",
+     "name": "DeepSeek V4 Flash",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": 0.00098
+    },
+    {
+     "archived": true,
+     "family": "glm",
+     "model": "glm-5.1",
+     "name": "GLM 5.1",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "minimax-m",
+     "model": "minimax-m2.7",
+     "name": "MiniMax M2.7",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "qwen-max",
+     "model": "qwen3.7-max",
+     "name": "Qwen 3.7 Max",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    },
+    {
+     "archived": true,
+     "family": "qwen-plus",
+     "model": "qwen3.6-plus",
+     "name": "Qwen 3.6 Plus",
+     "set_at": "2026-11-25T15:02:10.173704Z",
+     "set_by": "operator",
+     "typical_cost_usd": null
+    }
+   ],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [
+     "console",
+     "payg"
+    ],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "opencode",
+    "level": "minor",
+    "since": "2026-11-27T06:30:32Z",
+    "stale": false,
+    "text": "Errors, latency"
+   },
+   "label": "OpenCode Go",
+   "level": "normal",
+   "level_control": {
+    "actor": "owner",
+    "when": "2026-11-09T19:23:58.577517Z"
+   },
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "rolling_5h",
+     "pace": {
+      "delta_percent": 8.2,
+      "early": true,
+      "elapsed_percent": 8.2,
+      "points": 8,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 0.0,
+      "words": "8% surplus"
+     },
+     "reset_at": "2026-11-27T12:19:11Z",
+     "resets": "today 13:19",
+     "resets_in_s": 16517,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 0
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": {
+      "delta_percent": 28.7,
+      "early": false,
+      "elapsed_percent": 61.7,
+      "points": 29,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 33.0,
+      "words": "29% surplus"
+     },
+     "reset_at": "2026-11-30T00:00:00Z",
+     "resets": "Mon 30 Nov 01:00",
+     "resets_in_s": 231366,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 33
+    },
+    {
+     "kind": "window",
+     "minutes": 43200,
+     "name": "monthly",
+     "pace": {
+      "delta_percent": 16.1,
+      "early": false,
+      "elapsed_percent": 33.1,
+      "points": 16,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 17.0,
+      "words": "16% surplus"
+     },
+     "reset_at": "2026-12-17T09:35:45Z",
+     "resets": "Thu 17 Dec",
+     "resets_in_s": 1734711,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Monthly",
+     "used_percent": 17
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "kimi-k-pro",
+     "name": "Kimi K3.1 Pro",
+     "retired_on": null,
+     "typical_cost_usd": 0.023
+    },
+    {
+     "archived": false,
+     "family": "qwen-max",
+     "name": "Qwen 3.8 Max",
+     "retired_on": null,
+     "typical_cost_usd": 0.010562
+    },
+    {
+     "archived": false,
+     "family": "glm",
+     "name": "GLM 5.3",
+     "retired_on": null,
+     "typical_cost_usd": 0.01442682608847093
+    },
+    {
+     "archived": false,
+     "family": "hy",
+     "name": "Hy3",
+     "retired_on": null,
+     "typical_cost_usd": 0.0012560000000000002
+    },
+    {
+     "archived": false,
+     "family": "grok",
+     "name": "Grok 4.7",
+     "retired_on": null,
+     "typical_cost_usd": 0.0115964
+    },
+    {
+     "archived": false,
+     "family": "deepseek-v-pro",
+     "name": "DeepSeek V4 Pro",
+     "retired_on": null,
+     "typical_cost_usd": 0.005814989370444007
+    },
+    {
+     "archived": false,
+     "family": "qwen-plus",
+     "name": "Qwen 3.7 Plus",
+     "retired_on": null,
+     "typical_cost_usd": 0.0052
+    },
+    {
+     "archived": false,
+     "family": "mimo-v-pro",
+     "name": "MiMo V2.6 Pro",
+     "retired_on": null,
+     "typical_cost_usd": 0.0041325
+    },
+    {
+     "archived": false,
+     "family": "minimax-m",
+     "name": "MiniMax M3",
+     "retired_on": null,
+     "typical_cost_usd": 0.003
+    },
+    {
+     "archived": false,
+     "family": "glm-flash",
+     "name": "GLM 5.3 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.00135
+    },
+    {
+     "archived": false,
+     "family": "mimo-v-flash",
+     "name": "MiMo V2.6 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.00133
+    },
+    {
+     "archived": false,
+     "family": "deepseek-v-flash",
+     "name": "DeepSeek V4.1 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.00132
+    },
+    {
+     "archived": false,
+     "family": "qwen-flash",
+     "name": "Qwen 3.8 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.001164
+    },
+    {
+     "archived": false,
+     "family": "gpt-luna",
+     "name": "GPT-6 Luna",
+     "retired_on": null,
+     "typical_cost_usd": 0.0010013675004661988
+    },
+    {
+     "archived": false,
+     "family": "beam-free",
+     "name": "Beam Free",
+     "retired_on": null,
+     "typical_cost_usd": 0.0
+    },
+    {
+     "archived": false,
+     "family": "hy-flash-free",
+     "name": "Hy4 Flash Free",
+     "retired_on": null,
+     "typical_cost_usd": 0.0
+    },
+    {
+     "archived": false,
+     "family": "iceman-contributor-free",
+     "name": "Iceman Contributor Free",
+     "retired_on": null,
+     "typical_cost_usd": 0.0
+    }
+   ],
+   "name": "Go",
+   "pace": {
+    "delta_percent": 28.7,
+    "early": false,
+    "elapsed_percent": 61.7,
+    "points": 29,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 33.0,
+    "words": "29% surplus"
+   },
+   "pool": "opencode-go",
+   "reading_age_s": 107,
+   "reading_observed_at": "2026-11-27T07:42:06Z",
+   "reading_source": "opencode-go-api",
+   "reading_stale": false,
+   "reset_at": "2026-11-30T00:00:00Z",
+   "resets": "Mon 30 Nov 01:00",
+   "set_at": "2026-11-09T19:23:58.577517Z",
+   "set_by": "operator",
+   "stale_age_s": null,
+   "state": "ABUNDANT",
+   "status_url": "https://status.opencode.ai/",
+   "subscription": "opencode-go",
+   "used_percent": 33
+  },
+  {
+   "account_usage": {
+    "account_balance_usd": 1.7899512309999999,
+    "account_credits_usd": 26.0,
+    "account_usage_usd": 24.210048769,
+    "key_limit_remaining_usd": 3.3937034610000003,
+    "key_limit_usd": 10.0,
+    "key_usage_daily_usd": 0.0,
+    "key_usage_monthly_usd": 6.606296539,
+    "key_usage_usd": 12.772545528,
+    "key_usage_weekly_usd": 0.092237832
+   },
+   "archived": [],
+   "full": false,
+   "gauge_error": null,
+   "incident": {
+    "affected": [],
+    "age_s": 350,
+    "checked_at": "2026-11-27T07:38:03Z",
+    "feed": "datadog",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "OpenRouter",
+   "level": "normal",
+   "level_control": null,
+   "limits": [],
+   "measured": false,
+   "models": [
+    {
+     "archived": false,
+     "family": "openrouter-free-router",
+     "name": "OpenRouter Free Router",
+     "retired_on": null,
+     "typical_cost_usd": null
+    }
+   ],
+   "name": "OpenRouter",
+   "pace": null,
+   "per_model": [
+    {
+     "model": "anthropic/claude-sonnet-5.5",
+     "requests": 221,
+     "usd_30d": 2.167687
+    },
+    {
+     "model": "google/gemini-4-hydrogen",
+     "requests": 156,
+     "usd_30d": 1.613257
+    },
+    {
+     "model": "mistralai/mistral-large-4-0",
+     "requests": 54,
+     "usd_30d": 0.596947
+    },
+    {
+     "model": "mistralai/mistral-medium-3-5",
+     "requests": 119,
+     "usd_30d": 0.371144
+    },
+    {
+     "model": "meta-llama/llama-4-scout",
+     "requests": 2462,
+     "usd_30d": 0.255395
+    },
+    {
+     "model": "moonshotai/kimi-k2.6",
+     "requests": 170,
+     "usd_30d": 0.212553
+    },
+    {
+     "model": "z-ai/glm-5.3",
+     "requests": 141,
+     "usd_30d": 0.17230600000000001
+    },
+    {
+     "model": "anthropic/claude-haiku-5.5",
+     "requests": 444,
+     "usd_30d": 0.167112
+    },
+    {
+     "model": "z-ai/glm-5.3-flash",
+     "requests": 613,
+     "usd_30d": 0.118909
+    },
+    {
+     "model": "google/gemini-3.1-flash-lite",
+     "requests": 176,
+     "usd_30d": 0.114585
+    },
+    {
+     "model": "google/gemini-3.5-flash-lite",
+     "requests": 143,
+     "usd_30d": 0.107898
+    },
+    {
+     "model": "google/gemini-3.8-flash",
+     "requests": 28,
+     "usd_30d": 0.10652899999999998
+    },
+    {
+     "model": "minimax/minimax-m3.1-flash",
+     "requests": 160,
+     "usd_30d": 0.0748
+    },
+    {
+     "model": "deepseek/deepseek-v4-pro-0813",
+     "requests": 77,
+     "usd_30d": 0.070806
+    },
+    {
+     "model": "openai/gpt-5.6-luna",
+     "requests": 212,
+     "usd_30d": 0.068371
+    },
+    {
+     "model": "qwen/qwen3.8-27b",
+     "requests": 122,
+     "usd_30d": 0.06356
+    },
+    {
+     "model": "moonshotai/kimi-k3",
+     "requests": 25,
+     "usd_30d": 0.058213
+    },
+    {
+     "model": "deepseek/deepseek-v4-flash-0731",
+     "requests": 136,
+     "usd_30d": 0.044193
+    },
+    {
+     "model": "openai/gpt-5-mini",
+     "requests": 51,
+     "usd_30d": 0.033616
+    },
+    {
+     "model": "qwen/qwen3-vl-30b-a3b-instruct",
+     "requests": 96,
+     "usd_30d": 0.033069
+    },
+    {
+     "model": "mistralai/mistral-small-2603",
+     "requests": 174,
+     "usd_30d": 0.027441
+    },
+    {
+     "model": "deepseek/deepseek-v4.1-flash-1017",
+     "requests": 177,
+     "usd_30d": 0.024829000000000004
+    },
+    {
+     "model": "minimax/minimax-m3",
+     "requests": 77,
+     "usd_30d": 0.020977
+    },
+    {
+     "model": "meta-llama/llama-4-maverick",
+     "requests": 27,
+     "usd_30d": 0.019961
+    },
+    {
+     "model": "qwen/qwen3.6-35b-a3b",
+     "requests": 27,
+     "usd_30d": 0.014753
+    },
+    {
+     "model": "qwen/qwen3-vl-235b-a22b-instruct",
+     "requests": 27,
+     "usd_30d": 0.013927
+    },
+    {
+     "model": "mistralai/voxtral-small-24b-2507",
+     "requests": 24,
+     "usd_30d": 0.013496
+    },
+    {
+     "model": "z-ai/glm-4.6v",
+     "requests": 27,
+     "usd_30d": 0.013085
+    },
+    {
+     "model": "deepseek/deepseek-v4.1-flash",
+     "requests": 74,
+     "usd_30d": 0.010361
+    },
+    {
+     "model": "openai/gpt-5-nano",
+     "requests": 66,
+     "usd_30d": 0.009086
+    },
+    {
+     "model": "deepseek/deepseek-v3.2",
+     "requests": 39,
+     "usd_30d": 0.008745
+    },
+    {
+     "model": "xiaomi/mimo-v2.6-pro",
+     "requests": 2,
+     "usd_30d": 0.007946
+    },
+    {
+     "model": "qwen/qwen3-235b-a22b-2507",
+     "requests": 39,
+     "usd_30d": 0.006759
+    },
+    {
+     "model": "deepseek/deepseek-v4-flash-vision-exp",
+     "requests": 27,
+     "usd_30d": 0.006752
+    },
+    {
+     "model": "qwen/qwen3-30b-a3b-instruct-2507",
+     "requests": 39,
+     "usd_30d": 0.005839
+    },
+    {
+     "model": "qwen/qwen3.5-9b",
+     "requests": 39,
+     "usd_30d": 0.005245
+    },
+    {
+     "model": "openai/gpt-transcribe",
+     "requests": 6,
+     "usd_30d": 0.004725
+    },
+    {
+     "model": "mistralai/mistral-small-3.2-24b-instruct",
+     "requests": 27,
+     "usd_30d": 0.00457
+    },
+    {
+     "model": "deepgram/nova-3",
+     "requests": 6,
+     "usd_30d": 0.004389
+    },
+    {
+     "model": "mistralai/voxtral-small-transcribe-3-0",
+     "requests": 6,
+     "usd_30d": 0.004176
+    },
+    {
+     "model": "elevenlabs/scribe-v2",
+     "requests": 6,
+     "usd_30d": 0.003741
+    },
+    {
+     "model": "mistralai/voxtral-mini-transcribe-3-0",
+     "requests": 6,
+     "usd_30d": 0.003655
+    },
+    {
+     "model": "qwen/qwen3.8-flash",
+     "requests": 12,
+     "usd_30d": 0.000416
+    },
+    {
+     "model": "openai/whisper-large-v3-turbo",
+     "requests": 6,
+     "usd_30d": 0.000204
+    }
+   ],
+   "pool": "openrouter-free",
+   "reading_age_s": 3,
+   "reading_observed_at": "2026-11-27T07:43:50Z",
+   "reading_source": "openrouter-account",
+   "reading_stale": false,
+   "reset_at": null,
+   "resets": "",
+   "set_at": null,
+   "set_by": null,
+   "stale_age_s": null,
+   "state": "UNKNOWN",
+   "status_url": "https://status.openrouter.ai/",
+   "subscription": null,
+   "used_percent": null
+  }
+ ],
+ "readings": {
+  "measured_pools": 5,
+  "newest_age_s": 107,
+  "sources": [
+   "antigravity-oauth-usage",
+   "claude-oauth-usage",
+   "codex-oauth-usage",
+   "copilot-api",
+   "opencode-go-api"
+  ]
+ },
+ "schema": 1,
+ "subscription_spend": {
+  "plans": [
+   {
+    "id": "claude",
+    "name": "Claude Max 20x",
+    "amount": "183.00",
+    "currency": "GBP",
+    "period": "month",
+    "source": "default"
+   },
+   {
+    "id": "codex",
+    "name": "ChatGPT Pro",
+    "amount": "200.00",
+    "currency": "USD",
+    "period": "month",
+    "source": "default"
+   },
+   {
+    "id": "antigravity",
+    "name": "Google AI Pro",
+    "amount": "18.99",
+    "currency": "GBP",
+    "period": "month",
+    "source": "operator"
+   },
+   {
+    "id": "opencode-go",
+    "name": "OpenCode Go",
+    "amount": null,
+    "currency": null,
+    "period": null
+   }
+  ],
+  "monthly": [
+   {
+    "currency": "GBP",
+    "total": "201.99",
+    "operator": "100.00"
+   },
+   {
+    "currency": "USD",
+    "total": "200.00",
+    "operator": null
+   }
+  ],
+  "unpriced": 1,
+  "unsplit": 1,
+  "unavailable": false
+ },
+ "subscriptions": [
+  {
+   "id": "antigravity",
+   "level": "normal",
+   "pools": [
+    "antigravity-3p",
+    "antigravity-argon",
+    "antigravity-gemini"
+   ],
+   "set_at": "2026-11-26T22:30:14.435263Z",
+   "set_by": "operator"
+  },
+  {
+   "id": "claude",
+   "level": "normal",
+   "pools": [
+    "claude"
+   ],
+   "set_at": "2026-11-25T17:21:48.917313Z",
+   "set_by": "operator"
+  },
+  {
+   "id": "codex",
+   "level": "forced",
+   "pools": [
+    "codex"
+   ],
+   "set_at": "2026-11-23T13:50:24.139962Z",
+   "set_by": "operator"
+  },
+  {
+   "id": "opencode-go",
+   "level": "normal",
+   "pools": [
+    "opencode-go"
+   ],
+   "set_at": "2026-11-09T19:23:58.577517Z",
+   "set_by": "operator"
+  }
+ ],
+ "title": "Claude 50% \u00b7 Gemini 94% \u00b7 Codex used up"
+}

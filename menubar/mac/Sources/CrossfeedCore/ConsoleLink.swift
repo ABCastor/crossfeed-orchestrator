@@ -1,8 +1,10 @@
 import Foundation
 
-public enum ConsolePage: String {
+public enum ConsolePage: Equatable {
     case providers
     case about
+    /// The cost and usage page, at one provider's section when a pool id is given (CONTRACT: /usage#<pool>).
+    case usage(pool: String?)
 
     /// Accept only the startup link from fleetctl's localhost console. Never log the line or URL.
     public static func signedURL(from line: String) -> URL? {
@@ -20,7 +22,23 @@ public enum ConsolePage: String {
     public func url(from signedURL: URL) -> URL? {
         var parts = URLComponents(url: signedURL, resolvingAgainstBaseURL: false)
         // The sign-in's 303 Location has no fragment, so the browser carries this one to the page.
-        parts?.fragment = self == .about ? "about" : nil
+        switch self {
+        case .providers: parts?.fragment = nil
+        case .about: parts?.fragment = "about"
+        case .usage(let pool):
+            // `next` names the page the console lands on after sign-in; it is a fixed path, never taken from a reading.
+            let items = (parts?.queryItems ?? []) + [URLQueryItem(name: "next", value: "/usage")]
+            let fragment = pool.flatMap(Self.safeFragment)
+            parts?.queryItems = items
+            parts?.fragment = fragment
+        }
         return parts?.url
+    }
+
+    /// A pool id is lowercase letters, digits and hyphens; anything else is dropped rather than put in a link.
+    static func safeFragment(_ id: String) -> String? {
+        guard !id.isEmpty, id.count <= 64,
+              id.allSatisfy({ $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-") }) else { return nil }
+        return id
     }
 }

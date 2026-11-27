@@ -15,17 +15,22 @@ public struct PanelHeights: Equatable {
 
 public enum PanelSizing {
     @MainActor
-    public static func measure(presenter: Presenter, prefs: BarPrefs, failure: String? = nil, cap: CGFloat) -> PanelHeights {
-        func height(tab: String?, settings: Bool) -> CGFloat {
+    public static func measure(presenter: Presenter, prefs: BarPrefs, layout: TabLayout = TabLayout(), order: [String] = [],
+                               failure: String? = nil, cap: CGFloat) -> PanelHeights {
+        func height(tab: String?, settings: Bool, page: Int = 0) -> CGFloat {
             let state = MenuState(presenter: presenter, selected: tab)
             state.prefs = prefs
+            state.layout = layout
+            state.providerOrder = order
             state.showsSettings = settings
+            state.settingsPage = page
             state.actionFailure = failure
             let host = NSHostingView(rootView: CrossfeedMenuView(state: state, showsActions: false))
             return ceil(host.fittingSize.height)
         }
-        var perTab: [String: CGFloat] = [:]
-        for tab in presenter.tabs { perTab[tab.id] = height(tab: tab.id, settings: false) }
-        return PanelHeights(perTab: perTab, settings: height(tab: nil, settings: true), cap: cap)
+        var perTab: [String: CGFloat] = [Presenter.overviewID: height(tab: Presenter.overviewID, settings: false)]
+        // A hidden provider is not in the strip, so it does not set the panel height.
+        for tab in presenter.tabs where layout.isVisible(tab.id) { perTab[tab.id] = height(tab: tab.id, settings: false) }
+        return PanelHeights(perTab: perTab, settings: max(height(tab: nil, settings: true, page: 0), height(tab: nil, settings: true, page: 1)), cap: cap)
     }
 }

@@ -196,7 +196,37 @@ public struct Money: Decodable, Equatable {
     enum CodingKeys: String, CodingKey { case currency, total, operator_ = "operator" }
 }
 
+/// One subscription's price, when the glance lists plans: "Claude Max 20x", 183, GBP, month. Every field but the
+/// name may be missing; `source` is "default" (from the plan) or "operator" (typed in the console).
+public struct PlanPrice: Decodable, Equatable {
+    public var id: String
+    public var name: String
+    public var amount: String?
+    public var currency: String?
+    public var period: String?
+    public var source: String?
+
+    enum CodingKeys: String, CodingKey { case id, name, amount, currency, period, source }
+
+    public init(id: String, name: String = "", amount: String? = nil, currency: String? = nil, period: String? = nil, source: String? = nil) {
+        self.id = id; self.name = name; self.amount = amount; self.currency = currency; self.period = period; self.source = source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(String.self, forKey: .id)) ?? ""
+        name = (try? c.decode(String.self, forKey: .name)) ?? id
+        // The amount arrives as a string ("183.00") or a number; either reads the same.
+        amount = (try? c.decodeIfPresent(String.self, forKey: .amount))
+            ?? (try? c.decodeIfPresent(Double.self, forKey: .amount)).map { String($0) }
+        currency = try? c.decodeIfPresent(String.self, forKey: .currency)
+        period = try? c.decodeIfPresent(String.self, forKey: .period)
+        source = try? c.decodeIfPresent(String.self, forKey: .source)
+    }
+}
+
 public struct Spend: Decodable, Equatable {
+    public var plans: [PlanPrice]
     public var monthly: [Money]
     public var unpriced: Int
     public var unsplit: Int
@@ -204,12 +234,13 @@ public struct Spend: Decodable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        plans = (try? c.decode([PlanPrice].self, forKey: .plans)) ?? (try? c.decode([PlanPrice].self, forKey: .subscriptions)) ?? []
         monthly = (try? c.decode([Money].self, forKey: .monthly)) ?? []
         unpriced = (try? c.decode(Int.self, forKey: .unpriced)) ?? 0
         unsplit = (try? c.decode(Int.self, forKey: .unsplit)) ?? 0
         unavailable = (try? c.decode(Bool.self, forKey: .unavailable)) ?? false
     }
-    enum CodingKeys: String, CodingKey { case monthly, unpriced, unsplit, unavailable }
+    enum CodingKeys: String, CodingKey { case plans, subscriptions, monthly, unpriced, unsplit, unavailable }
 }
 
 public struct Readings: Decodable, Equatable {

@@ -125,8 +125,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     var revision = 0
     let io = DispatchQueue(label: "crossfeed.fleetctl", qos: .utility)
     var timers: [Timer] = []
-    static let tabKey = "crossfeed.tab"
     let tabOrder = TabOrder(defaults: .standard)
+    let layoutStore = TabLayoutStore(defaults: .standard)
     /// The menu bar choices. A self test writes to a throwaway domain, never to the operator's preferences.
     let barStore: BarPrefsStore
     let console: ConsoleSession
@@ -149,6 +149,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
         state.prefs = barStore.load()
+        if !config.selftest && config.fixture.isEmpty { state.layout = layoutStore.load() }
         state.onControl = { [weak self] control in self?.handle(control) }
         state.canEditPolicy = config.fixture.isEmpty || config.selftest
         state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
@@ -168,7 +169,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             self.syncMenu()
         }
         state.failure = "Reading quotas…"
-        if config.selftest { state.selected = config.selftestTab }
+        if config.selftest, let tab = config.selftestTab { state.selected = tab }
         menu.delegate = self
         menu.autoenablesItems = false
         if !config.selftest && Bundle.main.bundleIdentifier != nil {
@@ -215,9 +216,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         var prefs = state.prefs
         switch control {
         case .refresh: reload(); return
+        case .openTab(let id): select(id); return
+        case .usage(let pool): menu.cancelTracking(); console.open(.usage(pool: pool)); return
+        case .settingsPage(let page): withAnimation(MenuState.animation) { state.settingsPage = page }; return
+        case .toggleTab(let id): toggleTab(id); return
+        case .overviewHidden:
+            state.layout.hiddenInOverview.toggle()
+            saveLayout(); return
+        case .moveTab(let id, let step): moveTab(id, by: step); return
         case .settings, .back:
             // Same panel height on both panes, so the menu does not move.
-            withAnimation(MenuState.animation) { state.showsSettings = control == .settings }
+            withAnimation(MenuState.animation) { state.showsSettings = control == .settings; state.settingsPage = 0 }
             return
         case .reset: barStore.reset(); prefs = BarPrefs()
         case .show(let id): prefs.show = id
@@ -342,14 +351,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         if let glance {
             let presenter = Presenter(glance: glance, loadedAt: loadedAt, now: Date(), resetClock: state.prefs.reset == .clock)
             state.presenter = presenter
-            let saved = UserDefaults.standard.string(forKey: Self.tabKey)
             let ids = presenter.tabs.map(\.id)
             let order = config.fixture.isEmpty && !config.selftest ? tabOrder.ordered(ids) : ids
             if order != state.providerOrder { state.providerOrder = order }
-            if let current = state.selected, ids.contains(current) {
-            } else {
-                state.selected = saved.flatMap { ids.contains($0) ? $0 : nil } ?? presenter.defaultTab
-            }
         } else {
             state.presenter = nil
         }
@@ -365,7 +369,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         let screen = item?.button?.window?.screen ?? NSScreen.main
         // Room for the menu bar, the three native rows under the card and a margin.
         let cap = max(360, (screen?.visibleFrame.height ?? 800) - 150)
-        let measured = MainActor.assumeIsolated { PanelSizing.measure(presenter: presenter, prefs: state.prefs, failure: nil, cap: cap) }
+        let measured = MainActor.assumeIsolated {
+            PanelSizing.measure(presenter: presenter, prefs: state.prefs, layout: state.layout, order: state.providerOrder, failure: nil, cap: cap)
+        }
         if menuIsOpen, panelHeight != nil { return }
         panelHeight = measured.panel
     }
@@ -377,9 +383,28 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     }
 
     func select(_ id: String) {
-        guard id != state.selected else { return }
+        guard id != state.current else { return }
         state.choose(id)
-        UserDefaults.standard.set(id, forKey: Self.tabKey)
+    }
+
+    /// Show or hide a provider tab. Overview is not a provider and cannot be hidden.
+    func toggleTab(_ id: String) {
+        guard id != Presenter.overviewID else { return }
+        state.layout.toggle(id)
+        saveLayout()
+    }
+
+    func moveTab(_ id: String, by step: Int) {
+        guard !id.isEmpty, step != 0, config.fixture.isEmpty, !config.selftest, let ids = state.presenter?.tabs.map(\.id) else { return }
+        let order = tabOrder.ordered(ids).filter { $0 != "other" }
+        guard let from = order.firstIndex(of: id), order.indices.contains(from + step) else { return }
+        reorder(id, onto: order[from + step])
+    }
+
+    func saveLayout() {
+        if config.fixture.isEmpty && !config.selftest { layoutStore.save(state.layout) }
+        remeasureHeights()
+        syncMenu()
     }
 
     func reorder(_ source: String, onto target: String) {
@@ -435,6 +460,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
         state.showsSettings = false
+        state.settingsPage = 0
+        // The menu opens on Overview every time.
+        state.selected = Presenter.overviewID
         state.isReloading = false
         state.cancelPointer()
         paintStatusItem()
@@ -486,7 +514,36 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         window.contentView = host
         host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
         host.layoutSubtreeIfNeeded()
-        DispatchQueue.main.async {
+        // Overview first: every row routes to its provider's tab, and the usage link is there. Then a provider card.
+        let overviewIDs = self.state.presenter.map { $0.overviewRows(order: self.state.layout.overviewIDs(self.state.orderedTabs.map(\.id))).map(\.id) } ?? []
+        state.selected = Presenter.overviewID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            host.invalidateIntrinsicContentSize(); host.needsLayout = true
+            host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                let frames = self.state.controlFrames
+                var routed: MenuControl?
+                let realControl = self.state.onControl
+                self.state.onControl = { routed = $0 }
+                let wanted: [MenuControl] = overviewIDs.map { MenuControl.openTab($0) } + [MenuControl.usage(nil)]
+                let overviewOK = !overviewIDs.isEmpty && wanted.allSatisfy { control in
+                    guard let rect = frames[control] else { return false }
+                    routed = nil
+                    return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && routed == control
+                }
+                self.state.onControl = realControl
+                if !overviewOK { print("selftest: overview rows \(overviewIDs) frames \(frames.count)") }
+                self.state.selected = self.config.selftestTab ?? self.state.presenter?.defaultTab
+                host.invalidateIntrinsicContentSize(); host.needsLayout = true
+                host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
+                host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
+                DispatchQueue.main.async { self.selftestCards(host: host, window: window, overviewOK: overviewOK) }
+            }
+        }
+    }
+
+    func selftestCards(host: MenuHostingView, window: NSWindow, overviewOK: Bool) {
+        do {
             let tiles = self.state.tileFrames.count
             let fonts = NSFont(name: "Commissioner-Medium", size: 13) != nil && NSFont(name: "MartianMono-Regular", size: 13) != nil
             let policyFrames = self.state.policyFrames
@@ -530,7 +587,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let frames = self.state.controlFrames
-                var wanted: [MenuControl] = [.back, .reset] + BarPrefs.windowChoices.map { .window($0) }
+                var wanted: [MenuControl] = [.back, .reset, .settingsPage(0), .settingsPage(1)] + BarPrefs.windowChoices.map { .window($0) }
                 wanted += [.notifyLow, .notifyReset, .show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
                 wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
                 wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) } + BarPrefs.Reset.allCases.map { .resets($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
@@ -549,13 +606,33 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
                 if !settingsOK { print("selftest: prefs \(self.state.prefs) saved \(saved)") }
                 click(.reset)
                 settingsOK = settingsOK && self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs()
-                click(.back)
-                settingsOK = settingsOK && !self.state.showsSettings
-                let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1)
-                    && self.menu.items.count == 6 && routeOK && policyFrames.count == targets.count * SpendLevel.allCases.count
-                    && providerAssetCount == ProviderLogo.allCases.count && dragOK && statusOK && headerOK && settingsOK
-                print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), dial stops \(policyFrames.count), drag \(dragOK), status links \(statuses.count), header buttons \(headerOK), settings controls \(wanted.count) \(settingsOK), card height \(Int(host.frame.height))")
-                exit(ok ? 0 : 1)
+                // The tabs editor: a switch hides a provider and the Overview choice flips, both routed by position.
+                click(.settingsPage(1))
+                host.invalidateIntrinsicContentSize(); host.needsLayout = true
+                host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    let tabFrames = self.state.controlFrames
+                    let ids = self.state.orderedTabs.map(\.id)
+                    var tabsOK = self.state.settingsPage == 1 && !ids.isEmpty && ids.allSatisfy { tabFrames[.toggleTab($0)] != nil }
+                        && tabFrames[.overviewHidden] != nil
+                    func tap(_ control: MenuControl) {
+                        if let rect = tabFrames[control] { _ = self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) } else { tabsOK = false }
+                    }
+                    if let first = ids.first {
+                        tap(.toggleTab(first)); tap(.overviewHidden)
+                        tabsOK = tabsOK && !self.state.layout.isVisible(first) && self.state.layout.hiddenInOverview
+                            && self.state.shownTabs.count == ids.count
+                    }
+                    settingsOK = settingsOK && tabsOK
+                    if !tabsOK { print("selftest: tabs editor \(tabFrames.count) frames, layout \(self.state.layout)") }
+                    click(.back)
+                    settingsOK = settingsOK && !self.state.showsSettings
+                    let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1) + 1
+                        && self.menu.items.count == 6 && routeOK && policyFrames.count == targets.count * SpendLevel.allCases.count
+                        && providerAssetCount == ProviderLogo.allCases.count && dragOK && statusOK && headerOK && settingsOK && overviewOK
+                    print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), overview rows \(overviewOK), dial stops \(policyFrames.count), drag \(dragOK), status links \(statuses.count), header buttons \(headerOK), settings controls \(wanted.count) \(settingsOK), card height \(Int(host.frame.height))")
+                    exit(ok ? 0 : 1)
+                }
             }
         }
     }

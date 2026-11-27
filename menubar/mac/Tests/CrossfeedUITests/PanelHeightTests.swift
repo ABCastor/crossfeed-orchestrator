@@ -30,6 +30,24 @@ final class PanelHeightTests: XCTestCase {
         XCTAssertEqual(Set(seen.values), [heights.panel], "\(seen)")
     }
 
+    func testOverviewIsFirstAndSharesThePanelHeightAndAHiddenTabDoesNotSetIt() throws {
+        let presenter = try fixture()
+        let all = PanelSizing.measure(presenter: presenter, prefs: BarPrefs(), cap: 4000)
+        XCTAssertNotNil(all.perTab[Presenter.overviewID])
+        let tallest = all.perTab.filter { $0.key != "other" && $0.key != Presenter.overviewID }.max { $0.value < $1.value }!.key
+        let hidden = PanelSizing.measure(presenter: presenter, prefs: BarPrefs(), layout: TabLayout(hidden: [tallest]), cap: 4000)
+        XCTAssertNil(hidden.perTab[tallest])
+        XCTAssertLessThanOrEqual(hidden.panel, all.panel)
+        let state = MenuState(presenter: presenter)
+        XCTAssertEqual(state.current, Presenter.overviewID)
+        state.providerOrder = presenter.tabs.map(\.id)
+        XCTAssertEqual(state.shownTabs.first?.id, Presenter.overviewID)
+        state.layout.toggle(tallest)
+        XCTAssertFalse(state.shownTabs.contains { $0.id == tallest })
+        state.selected = tallest
+        XCTAssertEqual(state.current, Presenter.overviewID, "a hidden tab falls back to Overview")
+    }
+
     func testAShortScreenCapsThePanelAndTheContentScrolls() throws {
         let presenter = try fixture()
         let heights = PanelSizing.measure(presenter: presenter, prefs: BarPrefs(), cap: 500)
