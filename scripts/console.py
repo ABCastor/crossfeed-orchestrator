@@ -20,6 +20,7 @@ Standard library only. The page renders from `fleetctl.fleet_overview`, the same
 from __future__ import annotations
 
 import datetime as dt
+import contextlib
 import fcntl
 import hashlib
 import hmac
@@ -27,6 +28,7 @@ import html
 from decimal import Decimal
 import http.server
 import importlib.util
+import io
 import json
 import math
 import os
@@ -44,7 +46,7 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 ASSETS = HERE / "console-assets"
-LOGIN_NEXT = {"/", "/usage", "/share", "/settings", "/benchmarks"}
+LOGIN_NEXT = {"/", "/usage", "/share", "/settings", "/benchmarks", "/panel"}
 COOKIE = "console_session"
 
 _spec = importlib.util.spec_from_file_location("fleetctl", HERE / "fleetctl.py")
@@ -69,11 +71,14 @@ keep_html = console_keep.keep_html
 
 try:
     import phone_view
+    import panel_prefs
     import providers
+    import plugins as plugin_tiles
     import sharing
     import usage_page
 except ImportError:
-    from scripts import phone_view, providers, sharing, usage_page
+    from scripts import phone_view, panel_prefs, providers, sharing, usage_page
+    from scripts import plugins as plugin_tiles
 
 PRODUCT_NAME = fleetctl.PRODUCT_NAME
 LEVEL_WORDS = {"off": "Off", "low": "Low", "normal": "Normal", "high": "High", "forced": "Max"}
@@ -87,6 +92,11 @@ STATIC_CACHE = {".css": "private, max-age=31536000, immutable", ".js": "private,
 CSP = (
     "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; "
     "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+)
+# The panel draws every bar and sparkline with an inline width, so it needs inline styles and nothing else widened.
+PANEL_CSP = (
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; "
+    "img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
 )
 
 
@@ -313,6 +323,39 @@ class Console:
             fleetctl.set_model_preference(runtime, model, preference)
             fleetctl.record_control(runtime, f"preference:{model}", before, preference, "owner", reason)
         fleetctl.pins_after_switch(roster, self.state_dir, actor="owner", reason=reason)
+
+    # ---- the panel ------------------------------------------------------------------------
+    def panel_payload(self) -> dict[str, Any]:
+        """The glance document the panel draws, plus the preferences both platforms read."""
+        overview = self.overview()
+        roster = overview['_brief_context']['roster']
+        lead = fleetctl.resolve_lead_pool(roster, None)
+        payload = fleetctl.glance_payload(self.overlay_path, roster, overview, lead, self.state_dir)
+        payload["panel"] = panel_prefs.load()
+        return payload
+
+    def save_panel_prefs(self, document: Any) -> dict[str, Any]:
+        """The same validate-and-write `fleetctl panel set` performs, so the two cannot disagree."""
+        return panel_prefs.save(document)
+
+    def use_claude_reset(self, key: str) -> tuple[bool, str]:
+        """One attempt, through the same function `fleetctl use-reset claude --key K --yes` calls."""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}", key or ""):
+            return False, "That is not a reset key the glance shows."
+        argv = types.SimpleNamespace(command="use-reset", pool="claude", key=key, yes=True, json=True)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            try:
+                fleetctl.use_reset_command(argv, self.state_dir)
+            except Exception as exc:  # a failed claim is an outcome to read, never a page error
+                return False, f"The reset was not used: {exc}"
+        try:
+            outcome = json.loads(buffer.getvalue().strip() or "{}")
+        except json.JSONDecodeError:
+            return False, "The reset was not used: the outcome could not be read"
+        if outcome.get("ok"):
+            return True, f"Used: {outcome.get('label')}. Left: {outcome.get('left')}"
+        return False, str(outcome.get("error") or "The reset was not used.")
 
 
 # ---- rendering ------------------------------------------------------------------------------
@@ -2733,6 +2776,17 @@ def message_page(title: str, text: str) -> str:
     return shell(title, f"<h1>{html.escape(title)}</h1><p class=\"lede\">{html.escape(text)}</p>")
 
 
+def render_panel_page(token: str) -> str:
+    """The panel page: one loopback page the Linux tray opens, signed in like any other.
+
+    The form token and the asset version go into attributes, never an inline script: the panel's own
+    script is a static file, so the page keeps a strict content policy.
+    """
+    template = (ASSETS / "panel" / "panel.html").read_text(encoding="utf-8")
+    version = _asset_version("panel/panel.css")
+    return (template.replace("{{TOKEN}}", html.escape(token, quote=True)).replace("{{VERSION}}", version))
+
+
 # ---- the server -----------------------------------------------------------------------------
 def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -2801,12 +2855,26 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                 self._static(url.path[len("/static/"):])
                 return
             if url.path not in {"/", "/snapshot", "/settings", "/benchmarks", "/model-cards.json", "/phone",
-                                "/usage", "/share", "/share/print"}:
+                                "/usage", "/share", "/share/print", "/panel", "/panel.json"}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             if not console.signed_in(self.headers):
                 self._refuse(401, "Signed out",
                              "Open the sign-in link printed by this installation's running console.")
+                return
+            if url.path == "/panel":
+                # The Linux tray's "Open panel": the same signed-in page, drawn from the glance document.
+                self._send(200, render_panel_page(console.form_token).encode("utf-8"),
+                           "text/html; charset=utf-8", csp=PANEL_CSP)
+                return
+            if url.path == "/panel.json":
+                try:
+                    payload = console.panel_payload()
+                except (fleetctl.FleetError, OSError, ValueError) as exc:
+                    self._send(503, json.dumps({"error": str(exc)}).encode(), "application/json; charset=utf-8")
+                    return
+                self._send(200, json.dumps(payload, allow_nan=False).encode(), "application/json; charset=utf-8",
+                           csp=PANEL_CSP)
                 return
             if url.path == '/phone':
                 try:
@@ -2886,19 +2954,42 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             path = urllib.parse.urlsplit(self.path).path
             if path not in {'/settings/pro', '/settings/subscriptions', '/level', '/preference', '/refresh',
                             '/model', '/model-archive', '/benchmark-link', '/order', '/provider/probe', '/provider/add', '/provider/remove',
-                            '/secret'}:
+                            '/secret', '/panel/prefs', '/use-reset'}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if length < 0 or length > (65536 if path == '/order' or path.startswith('/provider/') else 4096):
+            if length < 0 or length > (65536 if path in {'/order', '/panel/prefs'} or path.startswith('/provider/') else 4096):
                 self._refuse(413, "Refused", "That request is too large to be a setting.")
+                return
+            if path == '/panel/prefs':
+                # The panel posts the whole document as JSON; the token rides in it, everything else is checked as usual.
+                try:
+                    data = json.loads(self.rfile.read(length).decode('utf-8'))
+                    if not isinstance(data, dict) or not console.form_ok(str(data.get('t') or '')):
+                        raise ValueError('Refused')
+                    written = console.save_panel_prefs(data.get('prefs'))
+                except (ValueError, OSError, UnicodeDecodeError, panel_prefs.PrefsError):
+                    self._send(400, json.dumps({'error': 'That is not a panel document'}).encode(),
+                               'application/json; charset=utf-8')
+                    return
+                self._send(200, json.dumps({'prefs': written}, sort_keys=True).encode(),
+                           'application/json; charset=utf-8')
                 return
             fields = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
             if not console.form_ok(fields.get("t", [""])[0]):
                 self._refuse(403, "Refused", "That form came from an older console. Reload the page and try again.")
+                return
+            if path == '/use-reset':
+                # Claude only, one attempt, and the plain outcome back: the panel shows it, then reads again.
+                pool = fields.get('pool', [''])[0]
+                if pool != 'claude':
+                    self._send(400, b"Only Claude has limit resets.", "text/plain; charset=utf-8")
+                    return
+                ok, outcome = console.use_claude_reset(fields.get('key', [''])[0])
+                self._send(200 if ok else 409, outcome.encode("utf-8"), "text/plain; charset=utf-8")
                 return
             pool = fields.get("pool", [""])[0]
             level = fields.get('level', [''])[0]

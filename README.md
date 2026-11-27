@@ -40,6 +40,8 @@ A *lane* is a model on a tool, funded by a quota pool. Crossfeed selects a lane 
 - [Usage guide](docs/USAGE.md): routing, wrappers, parallel jobs, spend levels, model switches, providers and quota sources.
 - [Selector](docs/SELECTOR.md), [thinking levels](docs/EFFORT.md) and [adapter contracts](docs/ADAPTERS.md).
 - [ChatGPT relay setup and limits](docs/CHATGPT.md) and [API client setup](docs/LANES-API.md).
+- [Plugins](docs/PLUGINS.md): add a tile of your own, in five minutes, and what a plugin can and cannot see.
+- [Linux](docs/LINUX.md): the tray and the panel on a Linux desktop.
 - [Agent operating manual](skill/SKILL.md): briefs, isolation, supervision and verification.
 
 Adapters are provided for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google), [OpenCode](https://opencode.ai), [Copilot CLI](https://github.com/github/copilot-cli) and [OpenRouter](https://openrouter.ai). [Pi](https://github.com/earendil-works/pi) supports admitted API and partner-plan routes.
