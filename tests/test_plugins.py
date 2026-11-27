@@ -145,7 +145,8 @@ print(json.dumps({"rows": [{"kind": "text", "text": " ".join(sorted(os.environ))
         self.addCleanup(lambda: [os.environ.pop(key, None) for key in ("ANTHROPIC_API_KEY", "FLEET_SECRET_TOKEN", "SOME_KEY")])
         result = plugins.run_tile("demo", folder, plugins.read_manifest(folder)["tiles"][0], self.state, use_cache=False)
         visible = result["doc"]["rows"][0]["text"].split()
-        self.assertEqual(sorted(visible), ["CROSSFEED_PLUGIN_STATE", "HOME", "LANG", "PATH"])
+        # macOS adds its own text-encoding hint to every process it starts; it is not ours and holds nothing.
+        self.assertEqual(sorted(set(visible) - {"__CF_USER_TEXT_ENCODING"}), ["CROSSFEED_PLUGIN_STATE", "HOME", "LANG", "PATH"])
         self.assertEqual(result["doc"]["rows"][0]["text"].find("TOKEN"), -1)
 
     def test_a_plugin_that_hangs_is_killed_at_its_timeout(self):

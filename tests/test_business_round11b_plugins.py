@@ -60,7 +60,8 @@ print(json.dumps({"rows": [{"kind": "text", "text": ",".join(sorted(os.environ))
         self.addCleanup(lambda: [os.environ.pop(key, None) for key in secrets])
         tile = plugins.read_manifest(folder)["tiles"][0]
         result = plugins.run_tile("demo", folder, tile, self.state, use_cache=False)
-        seen = set(result["doc"]["rows"][0]["text"].split(","))
+        # macOS adds its own text-encoding hint to every process it starts; it is not ours and holds nothing.
+        seen = set(result["doc"]["rows"][0]["text"].split(",")) - {"__CF_USER_TEXT_ENCODING"}
         # Control: the child really does get an environment, so an empty set cannot pass this test.
         self.assertEqual(seen, {"CROSSFEED_PLUGIN_STATE", "HOME", "LANG", "PATH"})
         for name in list(secrets) + ["FLEET_PLUGINS_DIR", "FLEET_PLUGINS_FILE"]:
