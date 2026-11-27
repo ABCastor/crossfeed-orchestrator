@@ -6657,6 +6657,8 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
                                                "reading_observed_at", "reading_stale", "last_observed_windows",
                                                "incident", "billing", "billing_error", "model_quota")
                     if key in pool})
+        if pool.get("resets"):  # the reset rows beside the shipped reset clock, never over it
+            row["limit_resets"] = pool["resets"]
         if pool.get("usage_cost"):  # hourly buckets feed the sharing card only; the glance stays small
             row["usage_cost"] = {key: value for key, value in pool["usage_cost"].items() if key != "hourly"}
         record = pool.get("control") or {}

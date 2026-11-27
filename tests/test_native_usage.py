@@ -115,6 +115,29 @@ for line in sys.stdin:
             self.assertEqual(missing["kind"], "no-tool")
 
 
+CEDAR_GRANTS = {
+    "cedar_ember": {
+        "eligible": True, "ineligible_reason": None, "at_limit": False, "exhausted": [],
+        "grants": [
+            {"id": "private-grant-id", "label": "One full limit reset (November 2026)",
+             "resets_total": 1, "resets_left": 1, "starts_at": "2026-11-10T21:30:00+00:00",
+             "ends_at": "2026-12-10T22:00:00+00:00", "clears": ["seven_day", "seven_day_overage_included"],
+             "paused": False, "usable_now": True, "use_requires_limit": False,
+             "percent_used": {"seven_day": 51, "seven_day_overage_included": 16},
+             "blocking": [], "arm": None, "type": "weekly", "unavailable_reason": None},
+            {"id": "private-launch-id", "label": "New model launch: one Fable reset",
+             "resets_total": 1, "resets_left": 1, "starts_at": "2026-11-09T18:00:00+00:00",
+             "ends_at": "2027-03-09T07:59:00+00:00", "clears": ["seven_day_overage_included"],
+             "paused": False, "usable_now": True, "use_requires_limit": False,
+             "percent_used": {"seven_day_overage_included": 16, "seven_day": 51},
+             "blocking": [], "arm": None, "type": "full", "unavailable_reason": None},
+        ],
+        "next_grant_id": "private-next-grant", "weekly_resets_at": "2026-12-01T13:00:00+00:00",
+        "cooldown_until": None, "paused_held": False,
+    },
+}
+
+
 class ClaudeTests(unittest.TestCase):
     def test_limits_become_session_weekly_and_scoped_weekly(self):
         snap = native.parse_claude(fixture("claude-usage.json"), "Claude Max 20x", NOW)
@@ -167,6 +190,56 @@ class ClaudeTests(unittest.TestCase):
         self.assertFalse(fleetctl.quota_window_applies({}, "claude", "claude-weekly-scoped-sonnet",
                                                       snap["windows"]["claude-weekly-scoped-sonnet"], "claude-opus-5-5"))
 
+    def test_limit_reset_grants_become_rows_in_this_reader_s_window_names(self):
+        body = {**json.loads(fixture("claude-usage.json")), **json.loads(json.dumps(CEDAR_GRANTS))}
+        snap = native.parse_claude(json.dumps(body), "Claude Max 20x", NOW)
+        self.assertEqual(snap["resets"], [
+            {"label": "One full limit reset (November 2026)", "left": 1, "total": 1,
+             "clears": ["weekly", "claude-weekly-scoped-fable"], "expires_at": "2026-12-10T22:00:00Z",
+             "usable_now": True, "kind": "claude_grant"},
+            {"label": "New model launch: one Fable reset", "left": 1, "total": 1,
+             "clears": ["claude-weekly-scoped-fable"], "expires_at": "2027-03-09T07:59:00Z",
+             "usable_now": True, "kind": "claude_grant"}])
+        # The windows the grants ride on are unchanged, and no grant or next-grant id is kept.
+        self.assertEqual(snap["windows"]["weekly"]["used_percent"], 26)
+        self.assertNotIn("private", json.dumps(snap))
+
+    def test_expired_spent_and_unreadable_grants_are_dropped(self):
+        grants = json.loads(json.dumps(CEDAR_GRANTS))["cedar_ember"]["grants"]
+        grants[0]["ends_at"] = "2026-10-01T00:00:00+00:00"          # expired before this reading
+        grants[1]["resets_left"] = 0                                 # already spent
+        body = {"seven_day": {"utilization": 9, "resets_at": "2026-11-03T13:00:00Z"},
+                "cedar_ember": {"grants": grants + [{"label": "Unreadable end", "resets_left": 1,
+                                                      "ends_at": "not a date"}],
+                                "next_grant_id": "private-next-grant"}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertNotIn("resets", snap)
+        self.assertNotIn("private", json.dumps(snap))
+        kept = json.loads(json.dumps(CEDAR_GRANTS))
+        kept["cedar_ember"]["grants"] = kept["cedar_ember"]["grants"][:1] + [
+            {"label": "Spent grant", "resets_left": 0, "ends_at": "2027-03-09T07:59:00+00:00"}]
+        snap = native.parse_claude(json.dumps({**body, **kept}), observed_at=NOW)
+        self.assertEqual([row["label"] for row in snap["resets"]], ["One full limit reset (November 2026)"])
+
+    def test_a_long_vendor_grant_label_survives_but_an_address_never_does(self):
+        grant = json.loads(json.dumps(CEDAR_GRANTS))["cedar_ember"]["grants"][1]
+        long_label = "New model launch: one Fable reset for Max, Team Premium and Enterprise Premium"
+        body = {"seven_day": {"utilization": 9, "resets_at": "2026-11-03T13:00:00Z"},
+                "limits": [{"kind": "weekly_all", "percent": 9, "resets_at": "2026-11-03T13:00:00Z"}],
+                "cedar_ember": {"grants": [{**grant, "label": long_label},
+                                           {**grant, "label": "reset for someone@example.com"}]}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual([row["label"] for row in snap["resets"]], [long_label, "Limit reset"])
+        self.assertNotIn("someone@example.com", json.dumps(snap))
+
+    def test_a_scoped_grant_keeps_its_raw_key_when_no_scoped_window_is_named(self):
+        grant = json.loads(json.dumps(CEDAR_GRANTS))["cedar_ember"]["grants"][1]
+        body = {"seven_day": {"utilization": 9, "resets_at": "2026-11-03T13:00:00Z"},
+                "limits": [{"kind": "weekly_all", "percent": 9, "resets_at": "2026-11-03T13:00:00Z"}],
+                "cedar_ember": {"grants": [grant]}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual(snap["resets"][0]["clears"], ["seven_day_overage_included"])
+
     def test_reader_ignores_bridge_token_config_and_non_subscription_records(self):
         api_login = claude_record()
         api_login["claudeAiOauth"].update(subscriptionType="console", accessToken="not-a-subscription")
@@ -207,11 +280,24 @@ class ClaudeTests(unittest.TestCase):
                                     records=[claude_record(-60), claude_record(3600)])
         self.assertTrue(got["available"])
         request, timeout = seen[0]
-        self.assertEqual(request.full_url, native.CLAUDE_USAGE_URL)
+        self.assertEqual(request.full_url, native.CLAUDE_USAGE_URL + "?cedar_ember=1")
         self.assertEqual(request.get_header("Authorization"), f"Bearer {TOKEN}")
         self.assertEqual(request.get_header("Anthropic-beta"), "oauth-2025-04-20")
+        self.assertRegex(request.get_header("User-agent"), r"^claude-cli/\d+(?:\.\d+)+ \(external, cli\)$")
         self.assertGreaterEqual(timeout, 10)
         self.assertNotIn(TOKEN, json.dumps(got))
+
+    def test_user_agent_names_the_newest_installed_claude_code(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+            for name in ("2.1.9", "2.1.332", "2.0.99", "latest", "2.1.332.bak"):
+                (Path(folder) / name).mkdir()
+            self.assertEqual(native.claude_cli_version(Path(folder)), "2.1.332")
+            self.assertEqual(native.claude_user_agent(Path(folder)), "claude-cli/2.1.332 (external, cli)")
+            (Path(folder) / "2.1.400").mkdir()
+            self.assertEqual(native.claude_cli_version(Path(folder)), "2.1.400")
+        self.assertEqual(native.claude_cli_version(Path("/tmp/absent-claude-versions")), "2.1.332")
+        self.assertEqual(native.claude_user_agent(Path("/tmp/absent-claude-versions")),
+                         "claude-cli/2.1.332 (external, cli)")
 
     def test_expired_or_missing_sign_in_is_reported_never_renewed(self):
         def opener(*a, **kw):

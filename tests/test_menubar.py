@@ -105,6 +105,21 @@ class GlanceTests(unittest.TestCase):
         self.assertEqual(claude["used_percent"], 26)
         self.assertIn("--5-hour · Starts with your next message", menubar.swiftbar(overview, "claude"))
 
+    def test_glance_carries_each_pool_s_limit_resets(self):
+        state = runtime()
+        rows = [{"label": "One full limit reset (November 2026)", "left": 1, "total": 1, "clears": ["weekly"],
+                 "expires_at": "2026-12-10T22:00:00Z", "usable_now": True, "kind": "claude_grant"}]
+        state["quota_snapshots"]["claude"]["resets"] = rows
+        with patch.object(fleetctl, "utc_now", return_value=NOW):
+            overview = fleetctl.fleet_overview(self.roster, state, Path(self.tmp.name), NOW)
+        glance = fleetctl.glance_payload(Path(self.tmp.name) / "o.json", self.roster, overview, "claude")
+        claude = next(p for p in glance["pools"] if p["pool"] == "claude")
+        self.assertEqual(claude["limit_resets"], rows)
+        # The shipped reset clock the menu reads stays a string, untouched by the new rows.
+        self.assertIsInstance(claude["resets"], str)
+        codex = next(p for p in glance["pools"] if p["pool"] == "codex")
+        self.assertNotIn("limit_resets", codex)   # a pool whose answer carried no grant says nothing
+
     def test_title_without_lead_or_pressure(self):
         quiet = {"pools": [p for p in self.overview["pools"] if p["pool"] == "antigravity-gemini"]}
         self.assertEqual(menubar.title(quiet, None), "Limits OK")
