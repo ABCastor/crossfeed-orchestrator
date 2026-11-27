@@ -96,16 +96,15 @@ same file the Mac app reads. `fleetctl.py panel get` prints that file with defau
 
 Tiles can come from plugins: see [PLUGINS.md](PLUGINS.md).
 
-## What was run on Linux
+## Linux coverage
 
-On a headless Linux server (Debian 12, Python 3.12, Node 24, no desktop session) this round ran
-`python3 -m unittest` over the panel, plugin, console-panel and business suites, and
-`node --test tests/panel.test.cjs`; the panel's Overview, Claude, reset confirm, Settings and a
-mid-drag were rendered with headless Chromium at 310 px in light and dark from a real
-`/panel.json`, and compared side by side with the design's `Bplus-*` panels. The tray was **not**
-built or started there: no Go toolchain and no D-Bus session. Its Go code and tests are in
-`menubar/` and have not been compiled on this machine; `menubar/build.sh` and `go test ./...`
-are the first things to run on a Linux desktop.
+On a headless Debian 12 server (Python 3.12, Node 24, Go 1.23, no desktop session):
+
+- The panel, plugin, console-panel and business suites pass under `python3 -m unittest`, and `node --test tests/panel.test.cjs` passes.
+- Headless Chromium renders `/panel` (Overview, Claude, reset confirm, Settings, a drag in progress) at 310 px in light and dark from a real `/panel.json`.
+- The tray passes `go vet ./...` and `go test ./...`, builds with `menubar/build.sh`, and runs; with no StatusNotifierWatcher on the session bus it logs `failed to register` and keeps running.
+
+Not covered without a desktop: the tray icon in a real panel (GNOME with the AppIndicator extension, KDE, XFCE) and the `--app=` window it opens.
 
 ## The daily market refresh
 
