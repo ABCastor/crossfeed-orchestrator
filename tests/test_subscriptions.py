@@ -93,7 +93,7 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(json.loads(raw), json.loads(subprocess.check_output([*cmd, '--format', 'json'])))
         self.assertNotIn('fixture-person', raw)
         body = json.loads(raw)
-        self.assertEqual(set(body), {'schema', 'title', 'pools', 'readings', 'subscription_spend', 'subscriptions'})
+        self.assertEqual(set(body), {'schema', 'title', 'pools', 'readings', 'reading_origin', 'subscription_spend', 'subscriptions'})
         self.assertNotIn('fixture-person', json.dumps(body['subscriptions']))
         self.assertEqual(body['schema'], 1)
         self.assertIn('openrouter-free', {p['pool'] for p in body['pools']})
