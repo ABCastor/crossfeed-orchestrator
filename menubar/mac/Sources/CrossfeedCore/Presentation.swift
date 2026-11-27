@@ -433,7 +433,7 @@ public struct Presenter {
         return f
     }()
 
-    static func controlDate(_ value: String) -> Date? {
+    public static func controlDate(_ value: String) -> Date? {
         iso.date(from: value) ?? isoFractional.date(from: value)
     }
 

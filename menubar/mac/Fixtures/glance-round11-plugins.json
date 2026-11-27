@@ -1,0 +1,1193 @@
+{
+ "plugins": [
+  {
+   "doc": {
+    "rows": [
+     {
+      "kind": "bar",
+      "label": "Minutes",
+      "pace": 41,
+      "resets_at": "2026-12-01T00:00:00Z",
+      "used": 58,
+      "window": "Monthly"
+     },
+     {
+      "kind": "value",
+      "label": "Failed today",
+      "tone": "warn",
+      "value": "3"
+     },
+     {
+      "kind": "sparkline",
+      "label": "Runs",
+      "today": "8",
+      "values": [
+       3,
+       5,
+       2,
+       8
+      ]
+     },
+     {
+      "kind": "text",
+      "text": "main is green"
+     },
+     {
+      "kind": "link",
+      "label": "Open",
+      "url": "https://github.com/example/example/actions"
+     }
+    ],
+    "status": "ok",
+    "title": "CI runs"
+   },
+   "error": null,
+   "observed_at": "2026-11-27T09:58:00Z",
+   "plugin": "gh-actions",
+   "tab": "overview",
+   "tile": "runs"
+  }
+ ],
+ "pools": [
+  {
+   "full": false,
+   "incident": {
+    "affected": [
+     "claude.ai"
+    ],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "statuspage",
+    "level": "minor",
+    "since": "2026-11-24T00:10:40Z",
+    "stale": false,
+    "text": "Claude for Microsoft 365 add-in missing for some users"
+   },
+   "label": "Claude",
+   "level": "normal",
+   "level_control": {
+    "actor": "operator",
+    "when": "2026-11-25T17:21:48Z"
+   },
+   "limit_resets": [
+    {
+     "clears": [
+      "weekly",
+      "claude-weekly-scoped-fable"
+     ],
+     "expires_at": "2026-12-10T22:00:00Z",
+     "key": "weekly",
+     "kind": "claude_grant",
+     "label": "One full limit reset (November 2026)",
+     "left": 1,
+     "next": true,
+     "total": 1,
+     "usable_now": true
+    },
+    {
+     "clears": [
+      "claude-weekly-scoped-fable"
+     ],
+     "expires_at": "2027-03-09T07:59:00Z",
+     "key": "claude-weekly-scoped-fable",
+     "kind": "claude_grant",
+     "label": "New model launch: one Fable reset for Max, Team Premium and Enterprise Premium",
+     "left": 1,
+     "next": false,
+     "total": 1,
+     "usable_now": true
+    }
+   ],
+   "limits": [
+    {
+     "active": false,
+     "kind": "window",
+     "minutes": 300,
+     "name": "session",
+     "note": "Starts with your next message",
+     "pace": null,
+     "reset_at": null,
+     "resets": null,
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 0
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": {
+      "delta_percent": -16.9,
+      "early": false,
+      "elapsed_percent": 41.1,
+      "points": 17,
+      "run_out_basis": "average_burn",
+      "runs_out_in_s": 179978,
+      "status": "deficit",
+      "used_percent": 58.0,
+      "words": "17% in deficit, runs out in 2d 1h"
+     },
+     "reset_at": "2026-12-01T13:00:00Z",
+     "resets": "Tue 1 Dec 14:00",
+     "resets_in_s": 356258,
+     "scope": null,
+     "spend_down": false,
+     "state": "healthy",
+     "title": "Weekly",
+     "used_percent": 58
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "claude-weekly-scoped-fable",
+     "pace": {
+      "delta_percent": 25.1,
+      "early": false,
+      "elapsed_percent": 41.1,
+      "points": 25,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 16.0,
+      "words": "25% surplus"
+     },
+     "reset_at": "2026-12-01T13:00:00Z",
+     "resets": "Tue 1 Dec 14:00",
+     "resets_in_s": 356258,
+     "scope": "Fable only",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 16
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "claude-fable",
+     "name": "Fable 5.2",
+     "retired_on": null,
+     "typical_cost_usd": 0.092
+    },
+    {
+     "archived": false,
+     "family": "claude-opus",
+     "name": "Opus 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.046847298060628886
+    },
+    {
+     "archived": false,
+     "family": "claude-sonnet",
+     "name": "Sonnet 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.023
+    },
+    {
+     "archived": false,
+     "family": "claude-haiku",
+     "name": "Haiku 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.00115
+    }
+   ],
+   "name": "Claude",
+   "pace": {
+    "delta_percent": -16.9,
+    "early": false,
+    "elapsed_percent": 41.1,
+    "points": 17,
+    "run_out_basis": "average_burn",
+    "runs_out_in_s": 179978,
+    "status": "deficit",
+    "used_percent": 58.0,
+    "words": "17% in deficit, runs out in 2d 1h"
+   },
+   "pool": "claude",
+   "reading_observed_at": "2026-11-27T09:58:15Z",
+   "state": "HEALTHY",
+   "status_url": "https://status.claude.com/",
+   "subscription": "claude",
+   "tokens": {
+    "days": [
+     604272573,
+     550288315,
+     564808884,
+     444720851,
+     378273111,
+     420267040,
+     37639449,
+     88197605,
+     10423658,
+     1003307241,
+     905005736,
+     414089197,
+     1186859695,
+     958000542
+    ],
+    "today": 958000542
+   },
+   "used_percent": 58
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "google",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Antigravity \u00b7 Argon",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-gemini-5h",
+     "pace": {
+      "delta_percent": 50.6,
+      "early": false,
+      "elapsed_percent": 52.6,
+      "points": 51,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 2.0,
+      "words": "51% surplus"
+     },
+     "reset_at": "2026-11-27T12:24:38Z",
+     "resets": "today 13:24",
+     "resets_in_s": 8536,
+     "scope": "Gemini",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 2
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "gemini-argon",
+     "name": "Gemini 4 Argon",
+     "retired_on": null,
+     "typical_cost_usd": 0.04188526271224268
+    }
+   ],
+   "name": "Argon",
+   "pace": {
+    "delta_percent": 50.6,
+    "early": false,
+    "elapsed_percent": 52.6,
+    "points": 51,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 2.0,
+    "words": "51% surplus"
+   },
+   "pool": "antigravity-argon",
+   "reading_observed_at": "2026-11-27T09:58:13Z",
+   "state": "UNKNOWN",
+   "status_url": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+   "subscription": "antigravity",
+   "used_percent": 2
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "google",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Antigravity \u00b7 Claude and GPT",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-3p-5h",
+     "pace": null,
+     "reset_at": null,
+     "reset_unknown": true,
+     "resets": "",
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 0
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "antigravity-quota-summary-3p-weekly",
+     "pace": null,
+     "reset_at": null,
+     "reset_unknown": true,
+     "resets": "",
+     "resets_in_s": null,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 0
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "claude-opus",
+     "name": "Opus 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.046847298060628886
+    },
+    {
+     "archived": false,
+     "family": "claude-sonnet",
+     "name": "Sonnet 5.5",
+     "retired_on": null,
+     "typical_cost_usd": 0.023
+    }
+   ],
+   "name": "AGY Claude/GPT",
+   "pace": null,
+   "pool": "antigravity-3p",
+   "reading_observed_at": "2026-11-27T09:58:13Z",
+   "state": "UNKNOWN",
+   "status_url": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+   "subscription": "antigravity",
+   "used_percent": 0
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "google",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Antigravity \u00b7 Gemini",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "antigravity-quota-summary-gemini-5h",
+     "pace": {
+      "delta_percent": 50.6,
+      "early": false,
+      "elapsed_percent": 52.6,
+      "points": 51,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 2.0,
+      "words": "51% surplus"
+     },
+     "reset_at": "2026-11-27T12:24:38Z",
+     "resets": "today 13:24",
+     "resets_in_s": 8536,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 2
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "antigravity-quota-summary-gemini-weekly",
+     "pace": {
+      "delta_percent": -78.2,
+      "early": false,
+      "elapsed_percent": 14.8,
+      "points": 78,
+      "run_out_basis": "average_burn",
+      "runs_out_in_s": 6722,
+      "status": "deficit",
+      "used_percent": 93.0,
+      "words": "78% in deficit, runs out in 1h 52m"
+     },
+     "reset_at": "2026-12-03T09:13:49Z",
+     "resets": "Thu 3 Dec 10:13",
+     "resets_in_s": 515487,
+     "scope": null,
+     "spend_down": false,
+     "state": "critical",
+     "title": "Weekly",
+     "used_percent": 93
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "gemini-neon",
+     "name": "Gemini 4 Neon",
+     "retired_on": null,
+     "typical_cost_usd": 0.029487031990985235
+    },
+    {
+     "archived": false,
+     "family": "gemini-hydrogen",
+     "name": "Gemini 4 Hydrogen",
+     "retired_on": null,
+     "typical_cost_usd": 0.014229889662746666
+    }
+   ],
+   "name": "Gemini",
+   "pace": {
+    "delta_percent": -78.2,
+    "early": false,
+    "elapsed_percent": 14.8,
+    "points": 78,
+    "run_out_basis": "average_burn",
+    "runs_out_in_s": 6722,
+    "status": "deficit",
+    "used_percent": 93.0,
+    "words": "78% in deficit, runs out in 1h 52m"
+   },
+   "pool": "antigravity-gemini",
+   "reading_observed_at": "2026-11-27T09:58:13Z",
+   "state": "CRITICAL",
+   "status_url": "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history",
+   "subscription": "antigravity",
+   "tokens": {
+    "days": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     20845,
+     0,
+     0,
+     0,
+     0,
+     0,
+     178797,
+     0,
+     0
+    ],
+    "today": 0
+   },
+   "used_percent": 93
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "statuspage",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "ChatGPT chats via Crossfeed Chat",
+   "level": "high",
+   "limits": [],
+   "measured": false,
+   "models": [
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 High",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Instant",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Medium",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Extra High",
+     "retired_on": null,
+     "typical_cost_usd": 0.036
+    },
+    {
+     "archived": false,
+     "family": "gpt-chat",
+     "name": "GPT-6 \u00b7 Pro",
+     "retired_on": null,
+     "typical_cost_usd": null
+    },
+    {
+     "archived": false,
+     "family": "chatgpt:media-unattended",
+     "name": "ChatGPT media",
+     "retired_on": null,
+     "typical_cost_usd": null
+    }
+   ],
+   "name": "ChatGPT chats via Crossfeed Chat",
+   "pace": null,
+   "pool": "chatgpt-work",
+   "reading_observed_at": "2026-10-03T16:16:58Z",
+   "state": "UNKNOWN",
+   "status_url": "https://status.openai.com/",
+   "subscription": null,
+   "used_percent": null
+  },
+  {
+   "billing": {
+    "grants": [
+     {
+      "credits": 11872.2539635,
+      "expires_at": "2027-01-01T00:00:00Z",
+      "granted": 62500.0,
+      "kind": "promotional_credit"
+     }
+    ],
+    "plan": "pro",
+    "renews_at": "2026-12-04T10:58:38Z"
+   },
+   "credits": {
+    "balance": 2,
+    "expirations": [
+     "2026-12-12T22:44:04Z",
+     "2026-12-26T06:16:39Z"
+    ],
+    "expires_at": "2026-12-12T22:44:04Z",
+    "renews_at": null,
+    "source": "codex-oauth-rate-limit-reset-credits",
+    "unit": "limit resets"
+   },
+   "full": true,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "statuspage",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "Codex (ChatGPT)",
+   "level": "forced",
+   "level_control": {
+    "actor": "operator",
+    "when": "2026-11-25T17:21:48Z"
+   },
+   "limit_resets": [
+    {
+     "clears": [],
+     "expires_at": "2026-12-12T22:44:04Z",
+     "kind": "codex_reset_credit",
+     "label": "Limit reset",
+     "left": 1,
+     "total": 1,
+     "usable_now": true
+    },
+    {
+     "clears": [],
+     "expires_at": "2026-12-26T06:16:39Z",
+     "kind": "codex_reset_credit",
+     "label": "Limit reset",
+     "left": 1,
+     "total": 1,
+     "usable_now": true
+    }
+   ],
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": null,
+     "reset_at": "2026-11-29T11:04:15Z",
+     "resets": "Sun 29 Nov 12:04",
+     "resets_in_s": 176513,
+     "scope": null,
+     "spend_down": false,
+     "state": "full",
+     "title": "Weekly",
+     "used_percent": 100
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "gpt-astra",
+     "name": "GPT-6.2 Astra",
+     "retired_on": null,
+     "typical_cost_usd": 0.09942045268648994
+    },
+    {
+     "archived": false,
+     "family": "gpt-sol",
+     "name": "GPT-6.2 Sol",
+     "retired_on": null,
+     "typical_cost_usd": 0.024548353857513812
+    },
+    {
+     "archived": false,
+     "family": "gpt-luna",
+     "name": "GPT-6 Luna",
+     "retired_on": null,
+     "typical_cost_usd": 0.0010013675004661988
+    }
+   ],
+   "name": "Codex",
+   "pace": null,
+   "pool": "codex",
+   "reading_observed_at": "2026-11-27T09:58:16Z",
+   "spend_credits": {
+    "balance": 11872.2539635,
+    "expires_at": null,
+    "renews_at": null,
+    "source": "codex-oauth-usage",
+    "unit": "credits"
+   },
+   "state": "EXHAUSTED",
+   "status_url": "https://status.openai.com/",
+   "subscription": "codex",
+   "tokens": {
+    "days": [
+     0,
+     0,
+     0,
+     1037190,
+     0,
+     0,
+     0,
+     0,
+     0,
+     222059,
+     0,
+     0,
+     0,
+     0
+    ],
+    "today": 0
+   },
+   "used_percent": 100
+  },
+  {
+   "full": false,
+   "label": "Gemini API",
+   "level": "normal",
+   "limits": [],
+   "measured": false,
+   "models": [
+    {
+     "archived": false,
+     "family": "gemini-pro-preview",
+     "name": "Gemini 3.1 Pro Preview",
+     "retired_on": null,
+     "typical_cost_usd": 0.0242
+    },
+    {
+     "archived": false,
+     "family": "gemini-flash-latest",
+     "name": "Gemini Flash Latest",
+     "retired_on": null,
+     "typical_cost_usd": 0.0075
+    },
+    {
+     "archived": false,
+     "family": "gemini-flash-lite-latest",
+     "name": "Gemini Flash Lite Latest",
+     "retired_on": null,
+     "typical_cost_usd": 0.003825
+    }
+   ],
+   "name": "Gemini API",
+   "pace": null,
+   "pool": "gemini-metered",
+   "state": "UNKNOWN",
+   "subscription": null,
+   "used_percent": 0
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "statuspage",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "GitHub Copilot",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 43200,
+     "name": "premium_monthly",
+     "pace": {
+      "delta_percent": 88.1,
+      "early": false,
+      "elapsed_percent": 88.1,
+      "points": 88,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 0.0,
+      "words": "88% surplus"
+     },
+     "reset_at": "2026-12-01T00:00:00Z",
+     "resets": "Tue 1 Dec 01:00",
+     "resets_in_s": 309458,
+     "scope": "Premium",
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Monthly",
+     "used_percent": 0
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "github-copilot-auto",
+     "name": "GitHub Copilot Auto",
+     "retired_on": null,
+     "typical_cost_usd": null
+    }
+   ],
+   "name": "GitHub Copilot",
+   "pace": {
+    "delta_percent": 88.1,
+    "early": false,
+    "elapsed_percent": 88.1,
+    "points": 88,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 0.0,
+    "words": "88% surplus"
+   },
+   "pool": "github-copilot-student",
+   "reading_observed_at": "2026-11-27T09:58:19Z",
+   "state": "ABUNDANT",
+   "status_url": "https://www.githubstatus.com/",
+   "subscription": null,
+   "used_percent": 0
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [
+     "console",
+     "payg"
+    ],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "opencode",
+    "level": "minor",
+    "since": "2026-11-27T09:50:32Z",
+    "stale": false,
+    "text": "Errors, latency"
+   },
+   "label": "OpenCode Go",
+   "level": "normal",
+   "limits": [
+    {
+     "kind": "window",
+     "minutes": 300,
+     "name": "rolling_5h",
+     "pace": {
+      "delta_percent": 15.4,
+      "early": false,
+      "elapsed_percent": 54.4,
+      "points": 15,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 39.0,
+      "words": "15% surplus"
+     },
+     "reset_at": "2026-11-27T12:19:11Z",
+     "resets": "today 13:19",
+     "resets_in_s": 8209,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "5-hour",
+     "used_percent": 39
+    },
+    {
+     "kind": "window",
+     "minutes": 10080,
+     "name": "weekly",
+     "pace": {
+      "delta_percent": 15.1,
+      "early": false,
+      "elapsed_percent": 63.1,
+      "points": 15,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 48.0,
+      "words": "15% surplus"
+     },
+     "reset_at": "2026-11-30T00:00:00Z",
+     "resets": "Mon 30 Nov 01:00",
+     "resets_in_s": 223058,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Weekly",
+     "used_percent": 48
+    },
+    {
+     "kind": "window",
+     "minutes": 43200,
+     "name": "monthly",
+     "pace": {
+      "delta_percent": 8.4,
+      "early": false,
+      "elapsed_percent": 33.4,
+      "points": 8,
+      "run_out_basis": null,
+      "runs_out_in_s": null,
+      "status": "surplus",
+      "used_percent": 25.0,
+      "words": "8% surplus"
+     },
+     "reset_at": "2026-12-17T09:35:45Z",
+     "resets": "Thu 17 Dec",
+     "resets_in_s": 1726403,
+     "scope": null,
+     "spend_down": false,
+     "state": "abundant",
+     "title": "Monthly",
+     "used_percent": 25
+    }
+   ],
+   "measured": true,
+   "models": [
+    {
+     "archived": false,
+     "family": "kimi-k-pro",
+     "name": "Kimi K3.1 Pro",
+     "retired_on": null,
+     "typical_cost_usd": 0.023
+    },
+    {
+     "archived": false,
+     "family": "qwen-max",
+     "name": "Qwen 3.8 Max",
+     "retired_on": null,
+     "typical_cost_usd": 0.010562
+    },
+    {
+     "archived": false,
+     "family": "glm",
+     "name": "GLM 5.3",
+     "retired_on": null,
+     "typical_cost_usd": 0.01442682608847093
+    },
+    {
+     "archived": false,
+     "family": "hy",
+     "name": "Hy3",
+     "retired_on": null,
+     "typical_cost_usd": 0.0012560000000000002
+    },
+    {
+     "archived": false,
+     "family": "grok",
+     "name": "Grok 4.7",
+     "retired_on": null,
+     "typical_cost_usd": 0.0115964
+    },
+    {
+     "archived": false,
+     "family": "deepseek-v-pro",
+     "name": "DeepSeek V4 Pro",
+     "retired_on": null,
+     "typical_cost_usd": 0.005814989370444007
+    },
+    {
+     "archived": false,
+     "family": "qwen-plus",
+     "name": "Qwen 3.7 Plus",
+     "retired_on": null,
+     "typical_cost_usd": 0.0052
+    },
+    {
+     "archived": false,
+     "family": "mimo-v-pro",
+     "name": "MiMo V2.6 Pro",
+     "retired_on": null,
+     "typical_cost_usd": 0.0041325
+    },
+    {
+     "archived": false,
+     "family": "minimax-m",
+     "name": "MiniMax M3",
+     "retired_on": null,
+     "typical_cost_usd": 0.003
+    },
+    {
+     "archived": false,
+     "family": "glm-flash",
+     "name": "GLM 5.3 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.00135
+    },
+    {
+     "archived": false,
+     "family": "mimo-v-flash",
+     "name": "MiMo V2.6 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.00133
+    },
+    {
+     "archived": false,
+     "family": "deepseek-v-flash",
+     "name": "DeepSeek V4.1 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.00132
+    },
+    {
+     "archived": false,
+     "family": "qwen-flash",
+     "name": "Qwen 3.8 Flash",
+     "retired_on": null,
+     "typical_cost_usd": 0.001164
+    },
+    {
+     "archived": false,
+     "family": "gpt-luna",
+     "name": "GPT-6 Luna",
+     "retired_on": null,
+     "typical_cost_usd": 0.0010013675004661988
+    },
+    {
+     "archived": false,
+     "family": "beam-free",
+     "name": "Beam Free",
+     "retired_on": null,
+     "typical_cost_usd": 0.0
+    },
+    {
+     "archived": false,
+     "family": "hy-flash-free",
+     "name": "Hy4 Flash Free",
+     "retired_on": null,
+     "typical_cost_usd": 0.0
+    },
+    {
+     "archived": false,
+     "family": "iceman-contributor-free",
+     "name": "Iceman Contributor Free",
+     "retired_on": null,
+     "typical_cost_usd": 0.0
+    }
+   ],
+   "name": "Go",
+   "pace": {
+    "delta_percent": 15.1,
+    "early": false,
+    "elapsed_percent": 63.1,
+    "points": 15,
+    "run_out_basis": null,
+    "runs_out_in_s": null,
+    "status": "surplus",
+    "used_percent": 48.0,
+    "words": "15% surplus"
+   },
+   "pool": "opencode-go",
+   "reading_observed_at": "2026-11-27T09:58:20Z",
+   "state": "ABUNDANT",
+   "status_url": "https://status.opencode.ai/",
+   "subscription": "opencode-go",
+   "used_percent": 48
+  },
+  {
+   "full": false,
+   "incident": {
+    "affected": [],
+    "age_s": 232,
+    "checked_at": "2026-11-27T09:58:29Z",
+    "feed": "datadog",
+    "level": "none",
+    "since": null,
+    "stale": false,
+    "text": null
+   },
+   "label": "OpenRouter",
+   "level": "normal",
+   "limits": [],
+   "measured": false,
+   "models": [
+    {
+     "archived": false,
+     "family": "openrouter-free-router",
+     "name": "OpenRouter Free Router",
+     "retired_on": null,
+     "typical_cost_usd": null
+    }
+   ],
+   "name": "OpenRouter",
+   "pace": null,
+   "pool": "openrouter-free",
+   "reading_observed_at": "2026-11-27T09:45:40Z",
+   "state": "UNKNOWN",
+   "status_url": "https://status.openrouter.ai/",
+   "subscription": null,
+   "used_percent": null
+  }
+ ],
+ "readings": {
+  "measured_pools": 5,
+  "newest_age_s": 240,
+  "sources": [
+   "claude-oauth-usage",
+   "codex-oauth-usage"
+  ]
+ },
+ "schema": 1,
+ "subscription_spend": {
+  "monthly": [
+   {
+    "currency": "EUR",
+    "operator": null,
+    "total": "5.50"
+   },
+   {
+    "currency": "GBP",
+    "operator": null,
+    "total": "183.00"
+   },
+   {
+    "currency": "USD",
+    "operator": null,
+    "total": "210.00"
+   }
+  ],
+  "plans": [
+   {
+    "amount": "183",
+    "currency": "GBP",
+    "id": "claude",
+    "name": "Claude Max 20x",
+    "operator_amount": "183.00",
+    "period": "monthly",
+    "share": null,
+    "source": "default"
+   },
+   {
+    "amount": "200",
+    "currency": "USD",
+    "id": "codex",
+    "name": "ChatGPT Pro",
+    "operator_amount": "100.00",
+    "period": "monthly",
+    "share": "1/2",
+    "source": "default"
+   },
+   {
+    "amount": "10",
+    "currency": "USD",
+    "id": "opencode-go",
+    "name": "OpenCode Go",
+    "operator_amount": "10.00",
+    "period": "monthly",
+    "share": null,
+    "source": "default"
+   },
+   {
+    "amount": "5.50",
+    "currency": "EUR",
+    "id": "antigravity",
+    "name": "Google AI Pro",
+    "operator_amount": "5.50",
+    "period": "monthly",
+    "share": null,
+    "source": "default"
+   }
+  ],
+  "unavailable": false,
+  "unpriced": 0,
+  "unsplit": 3,
+  "usd": {
+   "approximate": true,
+   "operator": "348.35",
+   "rates_as_of": "2026-11-27",
+   "total": "448.35"
+  }
+ },
+ "subscriptions": [
+  {
+   "id": "antigravity",
+   "level": "normal",
+   "pools": [
+    "antigravity-3p",
+    "antigravity-argon",
+    "antigravity-gemini"
+   ],
+   "set_at": "2026-11-26T22:30:14.435263Z",
+   "set_by": "operator"
+  },
+  {
+   "id": "claude",
+   "level": "normal",
+   "pools": [
+    "claude"
+   ],
+   "set_at": "2026-11-25T17:21:48.917313Z",
+   "set_by": "operator"
+  },
+  {
+   "id": "codex",
+   "level": "forced",
+   "pools": [
+    "codex"
+   ],
+   "set_at": "2026-11-23T13:50:24.139962Z",
+   "set_by": "operator"
+  },
+  {
+   "id": "opencode-go",
+   "level": "normal",
+   "pools": [
+    "opencode-go"
+   ],
+   "set_at": "2026-11-09T19:23:58.577517Z",
+   "set_by": "operator"
+  }
+ ],
+ "title": "Claude 58% \u00b7 Gemini 93% \u00b7 Codex used up"
+}

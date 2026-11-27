@@ -15,13 +15,12 @@ public struct PanelHeights: Equatable {
 
 public enum PanelSizing {
     @MainActor
-    public static func measure(presenter: Presenter, prefs: BarPrefs, layout: TabLayout = TabLayout(), order: [String] = [],
+    public static func measure(presenter: Presenter, prefs: BarPrefs, panel: PanelPrefs = PanelPrefs(),
                                failure: String? = nil, cap: CGFloat) -> PanelHeights {
         func height(tab: String?, settings: Bool, page: Int = 0) -> CGFloat {
             let state = MenuState(presenter: presenter, selected: tab)
             state.prefs = prefs
-            state.layout = layout
-            state.providerOrder = order
+            state.panel = panel
             state.showsSettings = settings
             state.settingsPage = page
             state.actionFailure = failure
@@ -30,7 +29,7 @@ public enum PanelSizing {
         }
         var perTab: [String: CGFloat] = [Presenter.overviewID: height(tab: Presenter.overviewID, settings: false)]
         // A hidden provider is not in the strip, so it does not set the panel height.
-        for tab in presenter.tabs where layout.isVisible(tab.id) { perTab[tab.id] = height(tab: tab.id, settings: false) }
-        return PanelHeights(perTab: perTab, settings: max(height(tab: nil, settings: true, page: 0), height(tab: nil, settings: true, page: 1)), cap: cap)
+        for tab in presenter.tabs where panel.isTabVisible(tab.id) { perTab[tab.id] = height(tab: tab.id, settings: false) }
+        return PanelHeights(perTab: perTab, settings: max(height(tab: nil, settings: true, page: 0), height(tab: nil, settings: true, page: 1), height(tab: nil, settings: true, page: 2)), cap: cap)
     }
 }

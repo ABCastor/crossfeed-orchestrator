@@ -1,4 +1,4 @@
-// -selftest -dragframes DIR: a real drag of the Claude card's blocks, entirely offscreen. NSEvents (mouse down,
+// -selftest -dragframes DIR: a real drag of the Claude tab's tiles, entirely offscreen. NSEvents (mouse down,
 // dragged, up, Escape) are built against the borderless selftest window and delivered to the same
 // MenuHostingView methods an open NSMenu calls; frames of the host view are saved as PNGs. No pointer is used.
 import AppKit
@@ -13,10 +13,6 @@ extension App {
         var log: [String] = []
         var failed = false
         func check(_ name: String, _ ok: Bool) { log.append("\(ok ? "ok  " : "FAIL") \(name)"); if !ok { failed = true } }
-        let suite = "org.crossfeed.selftest.blocks." + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite)!
-        let store = SectionOrderStore(defaults: defaults)
-        state.onReorderBlocks = { tab, order in store.save(tab, order: order) }
         state.onBlockDragActive = { [weak self] active in self?.listenForEscape(active) }
         var eventNumber = 0
         func event(_ type: NSEvent.EventType, y: CGFloat, x: CGFloat = 60) -> NSEvent {
@@ -36,18 +32,18 @@ extension App {
             try? rep.representation(using: .png, properties: [:])?.write(to: file)
         }
         func ids() -> [String] {
-            state.blockFrames.sorted { $0.value.rect.minY < $1.value.rect.minY }.map(\.key)
+            state.blockFrames.sorted { ($0.value.rect.minY.rounded(), $0.value.rect.minX) < ($1.value.rect.minY.rounded(), $1.value.rect.minX) }.map(\.key)
         }
         func rect(_ id: String) -> CGRect { state.blockFrames[id]?.rect ?? .zero }
 
         let start = ids()
         log.append("blocks top to bottom: \(start)")
         guard start.count >= 3 else { print("dragframes: need 3+ blocks on this tab, found \(start)"); exit(1) }
-        // Grab the first block that has a body (not the empty 5-hour line): the second.
-        let grabbed = start[1], over = start[2]
+        // Grab the Resets tile and carry it down past the Tokens and Spend policy pair.
+        let grabbed = start.contains("resets") ? "resets" : start[1], over = start[start.count - 1]
         let gRect = rect(grabbed), oRect = rect(over)
         let pressY = gRect.minY + 8, x: CGFloat = gRect.minX + 40
-        let travel = oRect.maxY - gRect.minY + BlockMotion.gap   // down past the next block's far edge
+        let travel = oRect.minY - gRect.minY   // down to where the last tile stands
         var steps: [() -> Void] = []
         func later(_ block: @escaping () -> Void) { steps.append(block) }
 
@@ -65,7 +61,7 @@ extension App {
         later { host.mouseDragged(with: event(.leftMouseDragged, y: pressY + travel * 0.75, x: x)) }
         later { snap("dragging-neighbour-slid-up") }
         later {
-            // Release past the midpoint: nearest legal order is one slot down.
+            // Release well past the pair: the nearest legal order is further down.
             host.mouseUp(with: event(.leftMouseUp, y: pressY + travel * 0.75, x: x))
             check("released: no longer held", !self.state.isCarryingBlock)
         }
@@ -75,10 +71,9 @@ extension App {
         later {
             snap("settled")
             let now = ids()
-            check("order after release: \(grabbed) moved one slot down", now.firstIndex(of: grabbed) == 2 && now.firstIndex(of: over) == 1)
-            let saved = SectionOrderStore(defaults: defaults).saved("claude")
-            check("saved to sectionOrder.claude: \(saved)", saved.firstIndex(of: grabbed) == 2)
-            check("order key name", SectionOrderStore.key("claude") == "sectionOrder.claude")
+            check("order after release: \(grabbed) moved down \(now)", (now.firstIndex(of: grabbed) ?? 0) > (start.firstIndex(of: grabbed) ?? 0))
+            let saved = self.panelStore.load().tiles["claude"] ?? []
+            check("saved to panel.json tiles.claude: \(saved)", saved.firstIndex(of: grabbed) == now.firstIndex(of: grabbed))
         }
         // Cancel: pick the last block up, drag it to the top, press Escape.
         var before: [String] = []
@@ -121,10 +116,11 @@ extension App {
         later { /* commit */ }
         later {
             let now = ids()
-            check("Move up: last block is one slot higher \(now) drag \(String(describing: self.state.isCarryingBlock))", now.firstIndex(of: before[before.count - 1]) == before.count - 2)
-            check("persisted too", SectionOrderStore(defaults: defaults).saved("claude").firstIndex(of: before[before.count - 1]) == before.count - 2)
+            let moved = before[before.count - 1]
+            check("Move up: the last tile is higher \(now)", (now.firstIndex(of: moved) ?? 99) < before.count - 1)
+            check("persisted too", (self.panelStore.load().tiles["claude"] ?? []).firstIndex(of: moved) == now.firstIndex(of: moved))
             snap("keyboard-move-up")
-            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: self.panelStore.url)
             print(log.joined(separator: "\n"))
             print("dragframes \(failed ? "FAILED" : "ok"): \(frameNumber) frames in \(dir)")
             exit(failed ? 1 : 0)
