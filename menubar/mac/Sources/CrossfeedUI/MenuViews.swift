@@ -65,6 +65,14 @@ public final class MenuState: ObservableObject {
     public var onReorder: (String, String) -> Void = { _, _ in }
     @Published public var providerOrder: [String] = []
     @Published var draggedTile: String?
+    /// The reorderable blocks of a card (CrossfeedUI/BlockReorder.swift): saved order per tab, frames, and the drag.
+    @Published public var blockOrders: [String: [String]] = [:]
+    @Published var blockDrag: BlockDrag?
+    public var blockFrames: [String: BlockFrame] = [:]
+    var pressedBlock: (id: String, origin: CGPoint)?
+    public var onReorderBlocks: (String, [String]) -> Void = { _, _ in }
+    /// True while a block is carried or settling; the host listens for Escape only then.
+    public var onBlockDragActive: (Bool) -> Void = { _ in }
     @Published var dropTile: String?
     private var pressedTile: (id: String, origin: CGPoint)?
     public var onOpenStatus: (URL) -> Void = { _ in }
@@ -90,15 +98,26 @@ public final class MenuState: ObservableObject {
     public func ownsPointer(at point: CGPoint) -> Bool {
         tile(at: point) != nil || policyFrames.values.contains { $0.contains(point) }
             || controlFrames.values.contains { $0.contains(point) }
+            || block(at: point) != nil
             || statusFrames.values.contains { $0.frame.contains(point) }
     }
 
     public func beginPointer(at point: CGPoint) {
         cancelPointer()
         pressedTile = tile(at: point).map { ($0, point) }
+        pressedBlock = pressedTile == nil ? block(at: point).map { ($0, point) } : nil
     }
 
     public func movePointer(to point: CGPoint) {
+        if blockDrag != nil {
+            moveBlockDrag(toY: point.y)
+            return
+        }
+        if let press = pressedBlock {
+            if hypot(point.x - press.origin.x, point.y - press.origin.y) >= BlockMotion.slop,
+               beginBlockDrag(press.id, pressY: press.origin.y) { moveBlockDrag(toY: point.y) }
+            return
+        }
         guard let press = pressedTile else { return }
         if draggedTile == nil {
             guard press.id != Presenter.overviewID else { return }
@@ -113,6 +132,10 @@ public final class MenuState: ObservableObject {
     public func endPointer(at point: CGPoint) -> Bool {
         movePointer(to: point)
         defer { cancelPointer() }
+        if blockDrag != nil {
+            releaseBlockDrag()
+            return true // a drag cannot choose a stop or open a link
+        }
         if let source = draggedTile {
             if let target = tile(at: point), target != source, target != Presenter.overviewID { onReorder(source, target) }
             return true // a drag cannot select a tab or move a dial
@@ -122,6 +145,8 @@ public final class MenuState: ObservableObject {
 
     public func cancelPointer() {
         pressedTile = nil
+        pressedBlock = nil
+        cancelBlockDrag()
         if draggedTile != nil { draggedTile = nil }
         if dropTile != nil { dropTile = nil }
     }
@@ -200,6 +225,7 @@ public struct CrossfeedMenuView: View {
         .onPreferenceChange(PolicyFrames.self) { state.policyFrames = $0 }
         .onPreferenceChange(StatusFrames.self) { state.statusFrames = $0 }
         .onPreferenceChange(ControlFrames.self) { state.controlFrames = $0 }
+        .onPreferenceChange(BlockFrames.self) { state.blockFrames = $0 }
         .background(CF.paper.opacity(0.9))
         .foregroundStyle(CF.ink)
     }
@@ -387,7 +413,8 @@ struct UsageCard: View {
             .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 16)
             ForEach(Array(card.allowanceSections.enumerated()), id: \.element.id) { index, section in
                 if index > 0 { MenuDivider(inset: true).padding(.vertical, 10) }
-                SectionView(section: section, state: state, now: now, isAllowance: card.isAntigravity)
+                SectionView(section: section, state: state, now: now, isAllowance: card.isAntigravity,
+                            reorderTab: card.usagePool == "claude" && card.allowanceSections.count == 1 ? "claude" : nil)
             }
             if let policy = card.subscriptionPolicy {
                 MenuDivider(inset: true).padding(.vertical, 12)
@@ -448,9 +475,40 @@ struct SectionView: View {
     @ObservedObject var state: MenuState
     let now: Date
     let isAllowance: Bool
+    /// The tab whose blocks (windows, spend policy, status) can be dragged into another order. Nil: fixed order.
+    var reorderTab: String?
 
     /// Every window unread: the reason joins the "Not read" line instead of standing under it.
     private var mergesNote: Bool { !section.rows.isEmpty && section.rows.allSatisfy { $0.bar == nil && !$0.inactive } }
+
+    private func rowView(_ row: RowModel) -> MetricRow {
+        // A window with nothing to draw says "Not read" and why on one line, not two.
+        var shown = row
+        if row.bar == nil, let note = section.note, mergesNote {
+            shown.usedText = row.usedText + " · " + note
+        }
+        return MetricRow(row: shown)
+    }
+
+    private func noteView(_ note: String) -> some View {
+        Text(isAllowance && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
+            .font(CF.face(11)).foregroundStyle(CF.quiet)
+            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The same pieces as the fixed layout, one block each, for the drag to put in another order.
+    private var blocks: [Block] {
+        var result = section.rows.map { Block(id: "row:" + $0.id, title: $0.title, content: AnyView(rowView($0))) }
+        if let note = section.note, !mergesNote { result.append(Block(id: "note", title: "Note", content: AnyView(noteView(note)))) }
+        if let policy = section.policy {
+            result.append(Block(id: "policy", title: "Spend policy", content: AnyView(PolicyControl(policy: policy, state: state, now: now))))
+        }
+        if ProviderExtrasView.hasContent(section.extras) {
+            result.append(Block(id: "status", title: "Status",
+                                content: AnyView(ProviderExtrasView(extras: section.extras, id: section.id, openStatus: state.onOpenStatus))))
+        }
+        return result
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -462,30 +520,23 @@ struct SectionView: View {
                     if let badge = section.badge { StateBadge(text: badge).layoutPriority(1) }
                 }
             }
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(section.rows) { row in
-                    // A window with nothing to draw says "Not read" and why on one line, not two.
-                    var shown = row
-                    if row.bar == nil, let note = section.note, mergesNote {
-                        shown.usedText = row.usedText + " · " + note
-                    }
-                    return MetricRow(row: shown)
+            if let reorderTab {
+                ReorderableBlocks(tab: reorderTab, blocks: blocks, state: state)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(section.rows) { row in rowView(row) }
                 }
+                if let note = section.note, !mergesNote { noteView(note) }
+                if isAllowance, !section.models.isEmpty {
+                    Text(section.models.joined(separator: " · ")).font(CF.face(11)).foregroundStyle(CF.quiet)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Models: " + section.models.joined(separator: ", "))
+                }
+                if let policy = section.policy {
+                    PolicyControl(policy: policy, state: state, now: now).padding(.top, 8)
+                }
+                ProviderExtrasView(extras: section.extras, id: section.id, openStatus: state.onOpenStatus)
             }
-            if let note = section.note, !mergesNote {
-                Text(isAllowance && note.hasPrefix("Last reading kept") ? "Last reading kept · refresh unavailable" : note)
-                    .font(CF.face(11)).foregroundStyle(CF.quiet)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-            }
-            if isAllowance, !section.models.isEmpty {
-                Text(section.models.joined(separator: " · ")).font(CF.face(11)).foregroundStyle(CF.quiet)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Models: " + section.models.joined(separator: ", "))
-            }
-            if let policy = section.policy {
-                PolicyControl(policy: policy, state: state, now: now).padding(.top, 8)
-            }
-            ProviderExtrasView(extras: section.extras, id: section.id, openStatus: state.onOpenStatus)
         }
         .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 4)
     }
@@ -533,9 +584,12 @@ struct ProviderExtrasView: View {
     let openStatus: (URL) -> Void
     @State private var hoveringStatus = false
 
+    static func hasContent(_ extras: ProviderExtras) -> Bool {
+        !extras.credits.isEmpty || extras.status != nil || extras.incident != nil || !extras.billing.isEmpty || !extras.modelQuota.isEmpty
+    }
+
     var body: some View {
-        if !extras.credits.isEmpty || extras.status != nil
-            || extras.incident != nil || !extras.billing.isEmpty || !extras.modelQuota.isEmpty {
+        if Self.hasContent(extras) {
             VStack(alignment: .leading, spacing: 10) {
                 if let incident = extras.incident {
                     // The word carries the level; terracotta only for a major incident or outage.
