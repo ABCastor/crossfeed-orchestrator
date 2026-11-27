@@ -15,6 +15,11 @@ import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+try:
+    from . import subscriptions
+except ImportError:  # imported as a sibling module with scripts/ on the path
+    import subscriptions
+
 SYMBOLS = {"EUR": "€", "USD": "$", "GBP": "£"}
 WEEK_MINUTES = 10080
 OPERATOR = "me"
@@ -24,6 +29,12 @@ LIMITS = ("Estimates at API list prices from usage logs on one Mac, not what any
 
 def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-") or "other"
+
+
+def share_fraction(value: Any) -> str:
+    """The operator's part of a split in fewest words: 50 -> "½", 60 -> "3/5"."""
+    fraction = subscriptions.share_fraction(value) or ""
+    return "½" if fraction == "1/2" else fraction
 
 
 def money(currency: str | None, amount: Any) -> str:
@@ -130,7 +141,8 @@ def build(ledger: dict[str, Any], overview: dict[str, Any], now: float | None = 
     ordered = [people.pop(OPERATOR), *sorted(people.values(), key=lambda p: p["name"].casefold())]
     for person in ordered:
         person["owed"] = {code: str(total) for code, total in sorted(owed.get(person["key"], {}).items())}
-    return {"plans": plans, "people": [p for p in ordered if p["plans"]], "unavailable": False, "as_of": now}
+    return {"plans": plans, "people": [p for p in ordered if p["plans"]], "unavailable": False, "as_of": now,
+            **({"usd": ledger["usd"]} if ledger.get("usd") else {})}
 
 
 def _plan_lines(plan: dict[str, Any], share: dict[str, Any], me: bool) -> list[tuple[str, str]]:
@@ -140,9 +152,8 @@ def _plan_lines(plan: dict[str, Any], share: dict[str, Any], me: bool) -> list[t
     if share["percent"] is None:
         lines.append(("row", f"Share not set: {money(cur, plan['monthly'])} a month in all"))
     else:
-        percent = Decimal(share["percent"]).normalize()
-        lines.append(("row", f"{'My' if me else 'Your'} share {percent:f}% of {money(cur, plan['monthly'])} a month: "
-                             f"{money(cur, share['monthly'])}"))
+        lines.append(("row", f"{share_fraction(share['percent'])} of {money(cur, plan['monthly'])} a month"
+                             f" · {'mine' if me else 'yours'} {money(cur, share['monthly'])}"))
     if plan.get("split_assumed"):
         lines.append(("row", "The split is assumed until it is agreed"))
     if use["percent"] is not None:
@@ -181,6 +192,9 @@ def card_lines(model: dict[str, Any], key: str) -> list[tuple[str, str]]:
              ("sub", f"{'My share' if me else person['name'] + chr(39) + 's share'} · as of {_day(model['as_of'])}")]
     for item in person["plans"]:
         lines += _plan_lines(plans[item["plan"]], item, me)
+    if (block := model.get("usd")):
+        own = f", {usd(float(block['operator']))} {'mine' if me else 'yours'}" if block.get("operator") is not None else ""
+        lines.append(("row", f"≈ ${block['total']} a month in all{own} · rates {block['rates_as_of']}"))
     owed = ", ".join(money(code, total) for code, total in person["owed"].items())
     lines.append(("total", f"{'I owe' if me else 'You owe'} {owed} a month" if owed else "No share set"))
     lines.append(("note", LIMITS))

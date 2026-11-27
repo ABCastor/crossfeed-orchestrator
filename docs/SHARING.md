@@ -12,7 +12,7 @@ Some plans are paid by more than one person. The console's **Share** page (`/sha
 
 ## What a card contains
 
-For each plan the person shares: the share and the amount a month; the account's use of its weekly allowance and what that is at API list prices (only when the plan has a weekly dollar value in the roster, `value_capacity`); what this Mac measured since the weekly reset (hourly buckets of the local usage logs); the remainder, labelled "about" or "at most". The remainder is other people's use **and also your own use on the web, a phone or another computer**. A person's card says so in those words.
+For each plan the person shares: the share in fewest words (`½ of €200.00 a month · yours €100.00`), and after the plans one USD line for everything (`≈ $428.75 a month in all, $214.38 mine · rates 2026-11-27`), converted at ECB reference rates fetched at most once a day and kept in local state; the line is absent when no rate is known. A plan whose split the access overlay states arrives confirmed; a name-based "shared with" stays marked as an assumption. Then: the account's use of its weekly allowance and what that is at API list prices (only when the plan has a weekly dollar value in the roster, `value_capacity`); what this Mac measured since the weekly reset (hourly buckets of the local usage logs); the remainder, labelled "about" or "at most". The remainder is other people's use **and also your own use on the web, a phone or another computer**. A person's card says so in those words.
 
 ## What cannot be known
 

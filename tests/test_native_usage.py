@@ -148,18 +148,43 @@ class ClaudeTests(unittest.TestCase):
         self.assertEqual(snap["windows"]["claude-weekly-scoped-fable"]["label"], "Fable only")
         self.assertEqual(snap["plan"], "Claude Max 20x")
 
-    def test_idle_session_is_kept_as_an_inactive_five_hour_window(self):
+    def test_no_five_hour_window_is_invented_when_the_answer_has_none(self):
+        # BR-QUOTA-002: the operator, 27 Nov: "I don't think there is a five hour in Claude, at
+        # least in our subscription." The subscription answer reports weekly_all and a scoped
+        # weekly only, and the synthetic idle "Session" row this reader used to add was wrong.
         body = {"five_hour": None, "seven_day": {"utilization": 36, "resets_at": "2026-12-01T12:59:59+00:00"},
                 "limits": [{"kind": "weekly_all", "percent": 36, "resets_at": "2026-12-01T12:59:59+00:00"},
                            {"kind": "weekly_scoped", "percent": 16, "resets_at": "2026-12-01T12:59:59+00:00",
                             "scope": {"model": {"display_name": "Fable"}, "surface": None}}]}
         snap = native.parse_claude(json.dumps(body), observed_at=NOW)
         self.assertEqual(set(snap["windows"]), {"weekly", "claude-weekly-scoped-fable"})
-        self.assertEqual(snap["idle_windows"]["session"], {
-            "used_percent": 0, "window_minutes": 300, "label": "Session",
-            "active": False, "note": "Starts with your next message"})
+        self.assertNotIn("idle_windows", snap)
         running = native.parse_claude(fixture("claude-usage.json"), observed_at=NOW)
         self.assertNotIn("idle_windows", running)
+        # A verified Ultra account reports the weekly limit alone, so it has no session row either.
+        ultra = {"limits": [{"kind": "weekly_all", "percent": 22,
+                             "resets_at": "2026-12-01T13:00:00+00:00"}]}
+        snap = native.parse_claude(json.dumps(ultra), observed_at=NOW)
+        self.assertEqual(set(snap["windows"]), {"weekly"})
+        self.assertNotIn("idle_windows", snap)
+
+    def test_a_reported_five_hour_session_limit_is_kept_with_its_own_reset(self):
+        # Pro and Max carry a five-hour session limit as well as the weekly one: the older answer
+        # shape sends it as a top-level field, the newer one as a "session"/"five_hour" limit.
+        snap = native.parse_claude(fixture("claude-usage-five-hour.json"), observed_at=NOW)
+        self.assertEqual(snap["windows"]["session"]["used_percent"], 40)
+        self.assertEqual(snap["windows"]["session"]["window_minutes"], 300)
+        self.assertEqual(snap["windows"]["session"]["label"], "Session")
+        self.assertEqual(snap["windows"]["session"]["reset_at"], "2026-10-29T23:00:00Z")
+        self.assertEqual(snap["windows"]["weekly"]["used_percent"], 12)
+        for kind in ("session", "five_hour"):
+            with self.subTest(kind=kind):
+                listed = {"limits": [{"kind": kind, "percent": 40, "resets_at": "2026-10-29T23:00:00+00:00"},
+                                     {"kind": "weekly_all", "percent": 12,
+                                      "resets_at": "2026-11-05T00:00:00+00:00"}]}
+                snap = native.parse_claude(json.dumps(listed), observed_at=NOW)
+                self.assertEqual((snap["windows"]["session"]["used_percent"],
+                                  snap["windows"]["session"]["reset_at"]), (40, "2026-10-29T23:00:00Z"))
 
     def test_every_scoped_weekly_and_extra_usage_expiry_are_kept(self):
         at = "2026-11-03T13:00:00Z"
@@ -171,7 +196,7 @@ class ClaudeTests(unittest.TestCase):
         self.assertEqual(set(snap["windows"]), {"weekly", "claude-weekly-scoped-sonnet", "claude-weekly-scoped-opus",
                                                 "claude-weekly-scoped-oauth-apps", "claude-weekly-scoped-cowork"})
         self.assertEqual(snap["credits"]["renews_at"], "2026-12-01T00:00:00Z")
-        self.assertEqual(snap["idle_windows"]["session"]["active"], False)
+        self.assertNotIn("session", snap.get("idle_windows", {}))
 
     def test_older_answer_without_limits_list(self):
         snap = native.parse_claude(fixture("claude-usage-legacy.json"))
@@ -196,13 +221,47 @@ class ClaudeTests(unittest.TestCase):
         self.assertEqual(snap["resets"], [
             {"label": "One full limit reset (November 2026)", "left": 1, "total": 1,
              "clears": ["weekly", "claude-weekly-scoped-fable"], "expires_at": "2026-12-10T22:00:00Z",
-             "usable_now": True, "kind": "claude_grant"},
+             "usable_now": True, "next": False, "key": "weekly", "kind": "claude_grant"},
             {"label": "New model launch: one Fable reset", "left": 1, "total": 1,
              "clears": ["claude-weekly-scoped-fable"], "expires_at": "2027-03-09T07:59:00Z",
-             "usable_now": True, "kind": "claude_grant"}])
+             "usable_now": True, "next": False, "key": "claude-weekly-scoped-fable", "kind": "claude_grant"}])
         # The windows the grants ride on are unchanged, and no grant or next-grant id is kept.
         self.assertEqual(snap["windows"]["weekly"]["used_percent"], 26)
         self.assertNotIn("private", json.dumps(snap))
+
+    def test_the_next_grant_is_marked_and_every_handle_is_unique(self):
+        grants = json.loads(json.dumps(CEDAR_GRANTS))["cedar_ember"]["grants"]
+        body = {**json.loads(fixture("claude-usage.json")),
+                "cedar_ember": {"grants": grants, "next_grant_id": "private-grant-id"}}
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual([row["next"] for row in snap["resets"]], [True, False])
+        self.assertEqual([row["key"] for row in snap["resets"]], ["weekly", "claude-weekly-scoped-fable"])
+        self.assertNotIn("private", json.dumps(snap))
+        # Two grants that clear the same first window still get distinct handles, so a menu can name one.
+        twin = {**grants[1], "id": "another-private-id", "label": "Another Fable reset",
+                "ends_at": "2027-04-09T07:59:00+00:00"}
+        body["cedar_ember"]["grants"] = [grants[1], twin]
+        snap = native.parse_claude(json.dumps(body), observed_at=NOW)
+        self.assertEqual([row["key"] for row in snap["resets"]],
+                         ["claude-weekly-scoped-fable", "claude-weekly-scoped-fable-2"])
+        self.assertNotIn("private", json.dumps(snap))
+
+    def test_the_claim_helper_keeps_the_own_ids_a_reading_never_does(self):
+        body = {**json.loads(fixture("claude-usage.json")), **json.loads(json.dumps(CEDAR_GRANTS))}
+        rows = native.claude_claim_grants(json.loads(json.dumps(body)), NOW)
+        self.assertEqual([row["key"] for row in rows], ["weekly", "claude-weekly-scoped-fable"])
+        self.assertEqual([row["grant_id"] for row in rows], ["private-grant-id", "private-launch-id"])
+        self.assertEqual(native.claude_claim_url("org-uuid-1"),
+                         "https://api.anthropic.com/api/organizations/org-uuid-1/reset_rate_limits")
+        self.assertRegex(native.claude_reset_request_id(), r"^[A-Za-z0-9_-]{1,64}$")
+        # The one config read that names the organization: never printed, never stored.
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / ".claude.json"
+            path.write_text(json.dumps({"oauthAccount": {"organizationUuid": "org-uuid-1"}}))
+            self.assertEqual(native.claude_organization_uuid(path), "org-uuid-1")
+            path.write_text(json.dumps({"oauthAccount": {"organizationUuid": "not an uuid"}}))
+            self.assertIsNone(native.claude_organization_uuid(path))
+            self.assertIsNone(native.claude_organization_uuid(Path(folder) / "absent.json"))
 
     def test_expired_spent_and_unreadable_grants_are_dropped(self):
         grants = json.loads(json.dumps(CEDAR_GRANTS))["cedar_ember"]["grants"]

@@ -21,6 +21,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    import native_usage
+except ImportError:  # imported from the console as scripts.mac_readings
+    from scripts import native_usage
+
 SCHEMA = 1
 CONFIG = "readings-source.json"
 CACHE = "mac-readings.json"
@@ -30,9 +35,11 @@ MIN_INTERVAL_S = 60  # one attempt a minute at most, so a sleeping Mac never cos
 ATTEMPT = "mac-readings.attempt"
 GRACE_S = 900  # an adopted reading this young needs no local read: the Mac keeps its own refresh clock
 # What a snapshot may carry across. Anything else is dropped at the door, on both sides.
+# `resets` (the glance's `limit_resets`) and `tokens` travel with the numbers they belong to: without
+# them the other machine's glance showed neither the reset grants nor the token sparkline.
 KEYS = ("available", "observed_at", "source", "plan", "windows", "idle_windows", "precision_percentage_points",
         "provider_used_percent", "provider", "credits", "spend_credits", "account_usage", "billing",
-        "per_model", "per_model_error", "model_quota")
+        "per_model", "per_model_error", "model_quota", "resets", "tokens")
 SECRETISH = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+|sk-[\w-]{12,}|Bearer\s+\S+|eyJ[\w-]{20,}")
 
 
@@ -40,12 +47,35 @@ def _clean(snapshot: Any) -> dict[str, Any] | None:
     if not isinstance(snapshot, dict) or snapshot.get("available") is not True:
         return None
     kept = {key: snapshot[key] for key in KEYS if key in snapshot}
+    if "tokens" in kept and (block := native_usage._token_block(kept["tokens"])) is None:
+        del kept["tokens"]
+    elif "tokens" in kept:
+        kept["tokens"] = block
     if not isinstance(kept.get("observed_at"), str) or SECRETISH.search(json.dumps(kept)):
         return None
     return kept
 
 
-def export(state_dir: Path, now: dt.datetime | None = None) -> dict[str, Any]:
+def _pool_tokens(state_dir: Path, roster: dict[str, Any] | None, now: dt.datetime | None) -> dict[str, Any]:
+    """{pool: {today, days}} from this machine's saved usage-cost caches; a pool with no cache has none."""
+    out: dict[str, Any] = {}
+    for pool, config in ((roster or {}).get("quota_pools") or {}).items():
+        reader = (config or {}).get("quota_refresh") if isinstance(config, dict) else None
+        oracle = (reader or {}).get("oracle") if isinstance(reader, dict) else None
+        provider = native_usage.COST_ORACLES.get(oracle) if isinstance(oracle, str) else None
+        if not provider or not isinstance(pool, str):
+            continue
+        try:
+            cost = json.loads((state_dir / f"{provider}-cli-usage-cost.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(cost, dict) and (block := native_usage.token_history(cost, now)):
+            out[pool] = block
+    return out
+
+
+def export(state_dir: Path, now: dt.datetime | None = None,
+           roster: dict[str, Any] | None = None) -> dict[str, Any]:
     """The readings this machine would share: usable snapshots only, allow-listed keys."""
     try:
         runtime = json.loads((state_dir / "runtime.json").read_text(encoding="utf-8"))
@@ -54,6 +84,9 @@ def export(state_dir: Path, now: dt.datetime | None = None) -> dict[str, Any]:
     snapshots = runtime.get("quota_snapshots") if isinstance(runtime, dict) else None
     cleaned = {pool: row for pool, snap in sorted((snapshots or {}).items())
                if isinstance(pool, str) and (row := _clean(snap))}
+    for pool, block in _pool_tokens(state_dir, roster, now).items():
+        if pool in cleaned:
+            cleaned[pool] = {**cleaned[pool], "tokens": block}
     stamp = (now or dt.datetime.now(dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"schema": SCHEMA, "generated_at": stamp, "snapshots": cleaned}
 

@@ -135,6 +135,9 @@ class Console:
         def refresh():
             try:
                 fleetctl.refresh_stale_pools(self.state_dir, fleetctl.quota_sources(roster), roster=roster)
+                # BR-SUBS-004: the day's reference rates, never on a page render's path.
+                if not fleetctl.auto_refresh_disabled():
+                    fleetctl.subscriptions.refresh_fx(self.state_dir)
             finally:
                 self._refresh_lock.release()
 
@@ -181,7 +184,7 @@ class Console:
         overview = fleetctl.fleet_overview(roster, runtime, self.state_dir)
         overview['_brief_context'] = {'roster': roster, 'runtime': runtime}
         overview['subscription_spend'] = fleetctl.subscriptions.view(
-            fleetctl.subscriptions.path_for(self.overlay_path), roster, overview)
+            fleetctl.subscriptions.path_for(self.overlay_path), roster, overview, state_dir=self.state_dir)
         overview['provider_sources'] = providers.list_sources(roster)
         evidence = fleetctl.load_json(self.state_dir / 'evidence' / 'levels.json', {}) or {}
         overview['console_order'] = display_order(overview, runtime.get('console_order'), roster, evidence)
@@ -616,13 +619,26 @@ def plan_summary(row: dict, split: bool = True) -> str:
     if row.get('promo'):
         until = row.get('promo_until')
         parts.append(f'promo until {MONTHS[int(until[5:7]) - 1]} {until[:4]}' if until else 'promo')
-    if split and row.get('other_payer') and row.get('operator_share_percent') is not None:
-        share = Decimal(row['operator_share_percent']).normalize()
-        other = Decimal(100) - share
-        split = (f'{share:f}/{other:f}' if row.get('share_source') != 'default' else f'assumed {share:f}/{other:f}')
-        parts.append(f'shared with {row["other_payer"]} · {split}'
-                     + (' · change' if row.get('share_source') == 'default' else ''))
+    if split and (words := _share_words(row)):
+        parts.append(words)
     return ' · '.join(parts)
+
+
+def _share_words(row: dict, change: bool = True) -> str:
+    """Fewest words for who pays the rest: "½ with Edo · yours $100" (BR-SUBS-003)."""
+    fraction = fleetctl.subscriptions.share_fraction(row.get('operator_share_percent'))
+    if fraction is None or fraction == '1/1' or not row.get('other_payer'):
+        return ''
+    shown = '½' if fraction == '1/2' else fraction
+    assumed = row.get('share_source') == 'default'
+    mine = row.get('operator_monthly')
+    if mine is None:
+        months = Decimal(12) if row.get('period') == 'yearly' else Decimal(1)
+        mine = Decimal(str(row.get('amount') or 0)) / months * Decimal(str(row['operator_share_percent'])) / 100
+    code = row.get('currency') or ''
+    yours = f'{SYMBOLS.get(code, code + " " if code else "$")}{Decimal(str(mine)).normalize():f}'
+    text = f'{"assumed " if assumed else ""}{shown} with {row["other_payer"]} · yours {yours}'
+    return text + (' · change' if assumed and change else '')
 
 
 def _subscription_settings(overview: dict, token: str) -> str:
@@ -634,6 +650,10 @@ def _subscription_settings(overview: dict, token: str) -> str:
         own = (f'{month["currency"]} {month["operator"]}' if month['operator'] is not None else 'not set')
         out.append(f'<p>{html.escape(month["currency"])} {html.escape(month["total"])} / month recorded'
                    f' · Your share: {html.escape(own)}</p>')
+    # BR-SUBS-004: one USD total for everything, at the day's reference rates.
+    if (usd := ledger.get('usd')):
+        own = f' · yours ${html.escape(usd["operator"])}' if usd.get('operator') is not None else ''
+        out.append(f'<p>≈ ${html.escape(usd["total"])} a month{own} · rates {html.escape(usd["rates_as_of"])}</p>')
     if ledger.get('unpriced'):
         out.append(f'<p class="quiet">{ledger["unpriced"]} without a price. No price is assumed.</p>')
     labels = {p['pool']: p['label'] for p in overview.get('pools', [])}
@@ -2171,13 +2191,13 @@ def _split_notes(overview):
 
 
 def _split_note(row):
-    """Who pays the rest of a shared plan, with its assumption named."""
-    if not (row.get('other_payer') and row.get('operator_share_percent') is not None):
+    """Who pays the rest of a shared plan, with its assumption named (BR-SUBS-003)."""
+    words = _share_words(row, change=False)
+    if not words:
         return ''
-    share = Decimal(row['operator_share_percent']).normalize()
     assumed = row.get('share_source') == 'default'
-    text = f'Shared with {html.escape(row["other_payer"])} · {"assumed " if assumed else ""}{share:f}/{Decimal(100) - share:f}'
-    return f'<p class="wb-meta">{text}' + (' · <a href="/settings#subscriptions">change</a>' if assumed else '') + '</p>'
+    link = ' · <a href="/settings#subscriptions">change</a>' if assumed else ''
+    return f'<p class="wb-meta">{html.escape(words)}{link}</p>'
 
 
 def _refresh_form(form_token, return_fields=''):

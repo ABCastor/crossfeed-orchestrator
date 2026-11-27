@@ -42,7 +42,7 @@ class Sharing(unittest.TestCase):
         self.assertAlmostEqual(use["rest_usd"], 7.1)
         self.assertAlmostEqual(use["measured_share"], 58.0, places=0)
         text = sharing.card_text(model, "sam")
-        self.assertIn("Your share 50% of €100.00 a month: €50.00", text)
+        self.assertIn("½ of €100.00 a month · yours €50.00", text)
         self.assertIn("The account used 26% of its weekly allowance, about $16.90 at API list prices", text)
         self.assertIn("Measured on my Mac since the weekly reset on", text)
         self.assertIn("$9.80", text)

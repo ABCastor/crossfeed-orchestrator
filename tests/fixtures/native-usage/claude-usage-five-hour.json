@@ -1,0 +1,4 @@
+{
+  "five_hour": {"utilization": 40.0, "resets_at": "2026-10-29T23:00:00+00:00"},
+  "seven_day": {"utilization": 12.0, "resets_at": "2026-11-05T00:00:00+00:00"}
+}
