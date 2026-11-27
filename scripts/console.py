@@ -24,6 +24,7 @@ import fcntl
 import hashlib
 import hmac
 import html
+from decimal import Decimal
 import http.server
 import importlib.util
 import json
@@ -598,6 +599,31 @@ def _settings_content(overview: dict[str, Any], token: str, *, panel: bool = Fal
                  '<div class="setting-row"><a href="/phone">Phone view</a></div></section>')
 
 
+MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+SYMBOLS = {'EUR': '€', 'USD': '$', 'GBP': '£'}
+
+
+def plan_summary(row: dict) -> str:
+    """One short line per plan: price, promo end, and who pays the rest, saying what is still an assumption."""
+    if row.get('amount') is None:
+        return 'No price set'
+    if row.get('free') or Decimal(row['amount']) == 0:
+        return 'Free'
+    code = row['currency']
+    price = f'{SYMBOLS.get(code, code + " ")}{row["amount"]} a {"year" if row["period"] == "yearly" else "month"}'
+    parts = [price]
+    if row.get('promo'):
+        until = row.get('promo_until')
+        parts.append(f'promo until {MONTHS[int(until[5:7]) - 1]} {until[:4]}' if until else 'promo')
+    if row.get('other_payer') and row.get('operator_share_percent') is not None:
+        share = Decimal(row['operator_share_percent']).normalize()
+        other = Decimal(100) - share
+        split = (f'{share:f}/{other:f}' if row.get('share_source') != 'default' else f'assumed {share:f}/{other:f}')
+        parts.append(f'shared with {row["other_payer"]} · {split}'
+                     + (' · change' if row.get('share_source') == 'default' else ''))
+    return ' · '.join(parts)
+
+
 def _subscription_settings(overview: dict, token: str) -> str:
     ledger = overview.get('subscription_spend') or {}
     out = ['<section class="setting-row" id="subscriptions"><h2>Subscriptions</h2>']
@@ -610,13 +636,17 @@ def _subscription_settings(overview: dict, token: str) -> str:
     if ledger.get('unpriced'):
         out.append(f'<p class="quiet">{ledger["unpriced"]} without a price. No price is assumed.</p>')
     labels = {p['pool']: p['label'] for p in overview.get('pools', [])}
+    for free in ledger.get('free', []):
+        out.append(f'<p class="setting-row plan-row"><span>{html.escape(free["name"])}</span>'
+                   '<span class="plan-meta">Free</span></p>')
 
     def input_field(row, name, label, kind='text', attrs=''):
         value = html.escape(row[name] or '', quote=True)
         return f'<label>{label}<input name="{name}" type="{kind}" value="{value}" {attrs}></label>'
 
     for row in ledger.get('subscriptions', []):
-        out.append(f'<details class="setting-row"><summary>{html.escape(row["name"])}</summary>'
+        out.append(f'<details class="setting-row"><summary><span>{html.escape(row["name"])}</span>'
+                   f'<span class="plan-meta">{html.escape(plan_summary(row))}</span></summary>'
                    '<form method="post" action="/settings/subscriptions">'
                    f'<input type="hidden" name="t" value="{html.escape(token, quote=True)}">'
                    f'<input type="hidden" name="id" value="{html.escape(row["id"], quote=True)}">')
@@ -637,7 +667,7 @@ def _subscription_settings(overview: dict, token: str) -> str:
             value = row['pool_value'].get(pool)
             equivalent = (f'USD {value["used_usd_equivalent"]} of {value["capacity_usd_equivalent"]} equivalent'
                           if value else 'Value not measured')
-            paid = f'{row["currency"]} {row["monthly"]} / month for the plan' if row['monthly'] is not None else 'Price not set'
+            paid = f'{row["currency"]} {row["monthly"]} / month for the plan' + (' (from plan)' if row.get('source') == 'default' else '') if row['monthly'] is not None else 'Price not set'
             out.append(f'<p class="quiet">{html.escape(labels.get(pool, pool))}: {html.escape(equivalent)}'
                        f' · {html.escape(paid)}</p>')
         out.append('</details>')

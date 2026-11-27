@@ -113,7 +113,8 @@ def build(ledger: dict[str, Any], overview: dict[str, Any], now: float | None = 
         mine = None if entry.get("operator_share_percent") is None else Decimal(entry["operator_share_percent"])
         plan = {"id": entry["id"], "name": entry.get("name") or entry["id"], "currency": entry["currency"],
                 "monthly": str(monthly), "operator_percent": None if mine is None else str(mine),
-                "other_name": entry.get("other_payer") or "Other payer", "use": _use(entry, pools)}
+                "other_name": entry.get("other_payer") or "Other payer", "use": _use(entry, pools),
+                "split_assumed": entry.get("share_source") == "default"}
         plans.append(plan)
         shares = [(OPERATOR, "Me", mine)]
         if mine is not None and mine < 100:
@@ -142,6 +143,8 @@ def _plan_lines(plan: dict[str, Any], share: dict[str, Any], me: bool) -> list[t
         percent = Decimal(share["percent"]).normalize()
         lines.append(("row", f"{'My' if me else 'Your'} share {percent:f}% of {money(cur, plan['monthly'])} a month: "
                              f"{money(cur, share['monthly'])}"))
+    if plan.get("split_assumed"):
+        lines.append(("row", "The split is assumed until it is agreed"))
     if use["percent"] is not None:
         part = f"The account used {use['percent']:g}% of its weekly allowance"
         if use["total_usd"] is not None:
