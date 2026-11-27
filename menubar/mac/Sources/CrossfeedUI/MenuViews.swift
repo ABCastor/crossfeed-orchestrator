@@ -11,7 +11,8 @@ import SwiftUI
 
 /// Every button the host routes by position, because a click inside an open NSMenu reaches the hosting view, not SwiftUI.
 public enum MenuControl: Hashable {
-    case refresh, settings, back, reset, notifyLow, notifyReset
+    case refresh, settings, back, reset, notifyLow, notifyReset, overviewHidden
+    case openTab(String), usage(String?), toggleTab(String), moveTab(String, Int), settingsPage(Int)
     case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset), refreshEvery(Int)
 }
 
@@ -25,6 +26,10 @@ public final class MenuState: ObservableObject {
     /// What the menu bar item shows, and whether the menu is on its settings pane.
     @Published public var prefs = BarPrefs()
     @Published public var showsSettings = false
+    /// Which half of the settings pane is open: 0 the menu bar item, 1 the tabs.
+    @Published public var settingsPage = 0
+    /// Which provider tabs are shown, and whether hidden ones still count in Overview.
+    @Published public var layout = TabLayout()
     @Published public var isReloading = false
     /// One height for every tab and the settings pane, set by the host so the panel never jumps; the content scrolls inside.
     /// Nil sizes the menu to its content (what the height is measured from).
@@ -38,8 +43,21 @@ public final class MenuState: ObservableObject {
 
     /// Switch provider tab. The card fades and slides in; the panel keeps its height.
     public func choose(_ id: String) {
-        guard id != selected else { return }
+        guard id != current else { return }
         withAnimation(Self.animation) { selected = id }
+    }
+
+    /// The tab on screen: Overview unless a provider tab that is still shown was chosen.
+    public var current: String {
+        guard let selected, selected != Presenter.overviewID, layout.isVisible(selected),
+              orderedTabs.contains(where: { $0.id == selected }) else { return Presenter.overviewID }
+        return selected
+    }
+
+    /// Overview, then the provider tabs that are shown.
+    public var shownTabs: [TabModel] {
+        [TabModel(id: Presenter.overviewID, title: "Overview", logo: nil, used: nil, pace: .unknown, hot: false)]
+            + orderedTabs.filter { layout.isVisible($0.id) }
     }
     public var canEditPolicy = true
     public var onPolicyChange: (PolicyChange) -> Void = { _ in }
@@ -61,7 +79,7 @@ public final class MenuState: ObservableObject {
     public var statusFrames: [String: StatusTarget] = [:]
     public var controlFrames: [MenuControl: CGRect] = [:]
 
-    var orderedTabs: [TabModel] {
+    public var orderedTabs: [TabModel] {
         guard let tabs = presenter?.tabs else { return [] }
         let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         let ordered = providerOrder.compactMap { byID[$0] }
@@ -83,6 +101,7 @@ public final class MenuState: ObservableObject {
     public func movePointer(to point: CGPoint) {
         guard let press = pressedTile else { return }
         if draggedTile == nil {
+            guard press.id != Presenter.overviewID else { return }
             guard hypot(point.x - press.origin.x, point.y - press.origin.y) >= 5 else { return }
             draggedTile = press.id
         }
@@ -95,7 +114,7 @@ public final class MenuState: ObservableObject {
         movePointer(to: point)
         defer { cancelPointer() }
         if let source = draggedTile {
-            if let target = tile(at: point), target != source { onReorder(source, target) }
+            if let target = tile(at: point), target != source, target != Presenter.overviewID { onReorder(source, target) }
             return true // a drag cannot select a tab or move a dial
         }
         return routeClick(at: point)
@@ -134,7 +153,7 @@ public final class MenuState: ObservableObject {
 
     public init(presenter: Presenter? = nil, selected: String? = nil, failure: String? = nil) {
         self.presenter = presenter
-        self.selected = selected ?? presenter?.defaultTab
+        self.selected = selected ?? Presenter.overviewID
         self.failure = failure
     }
 }
@@ -194,19 +213,18 @@ public struct CrossfeedMenuView: View {
                 MenuDivider()
                 scrolling {
                     VStack(alignment: .leading, spacing: 0) {
+                        let tab = state.current
                         ZStack(alignment: .topLeading) {
-                            if let tab = state.selected, let card = presenter.card(for: tab) {
-                                UsageCard(card: card, state: state, now: presenter.now).padding(.top, 6)
+                            if tab == Presenter.overviewID {
+                                OverviewView(presenter: presenter, state: state)
+                                    .id(tab)
+                                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 5)), removal: .opacity))
+                            } else if let card = presenter.card(for: tab) {
+                                UsageCard(card: card, state: state, now: presenter.now).padding(.top, 10)
                                     .id(tab)
                                     .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 5)), removal: .opacity))
                             }
                         }
-                        MenuDivider(inset: true)
-                        if let share = presenter.spend.share {
-                            ShareCard(model: share).padding(.top, 4)
-                            MenuDivider(inset: true).padding(.top, 4)
-                        }
-                        SpendCard(model: presenter.spend).padding(.vertical, 4)
                         failureBanner
                     }
                 }
@@ -240,11 +258,11 @@ struct ProviderSwitcher: View {
     @ObservedObject var state: MenuState
 
     var body: some View {
-        let tabs = state.orderedTabs
+        let tabs = state.shownTabs
         let source = tabs.firstIndex { $0.id == state.draggedTile }
-        HStack(spacing: 2) {
+        HStack(spacing: 1) {
             ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                ProviderTile(tab: tab, isSelected: tab.id == state.selected) { state.onSelect(tab.id) }
+                ProviderTile(tab: tab, isSelected: tab.id == state.current) { state.onSelect(tab.id) }
                     .opacity(tab.id == state.draggedTile ? 0.5 : 1)
                     .overlay(alignment: (source ?? index) < index ? .trailing : .leading) {
                         if tab.id == state.dropTile && tab.id != state.draggedTile {
@@ -253,10 +271,10 @@ struct ProviderSwitcher: View {
                         }
                     }
                     .accessibilityAction(named: "Move left") {
-                        if index > 0 { state.onReorder(tab.id, tabs[index - 1].id) }
+                        if index > 1, tab.id != Presenter.overviewID { state.onReorder(tab.id, tabs[index - 1].id) }
                     }
                     .accessibilityAction(named: "Move right") {
-                        if index + 1 < tabs.count { state.onReorder(tab.id, tabs[index + 1].id) }
+                        if index + 1 < tabs.count, tab.id != Presenter.overviewID { state.onReorder(tab.id, tabs[index + 1].id) }
                     }
             }
         }
@@ -274,16 +292,24 @@ struct ProviderTile: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 if let logo = tab.logo { ProviderMark(logo: logo, size: 17) }
-                Text(tab.title).font(CF.face(10.5, isSelected ? .semibold : .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                else if tab.id == Presenter.overviewID {
+                    // Icon only, so the strip keeps room for every provider's name.
+                    Image(systemName: "square.grid.2x2").font(.system(size: 15, weight: .regular)).frame(height: 17)
+                }
+                if tab.id != Presenter.overviewID {
+                    Text(tab.title).font(CF.face(10.5, isSelected ? .semibold : .medium)).lineLimit(1).minimumScaleFactor(0.7)
+                }
             }
             .foregroundStyle(isSelected ? CF.machineText : CF.quiet)
-            .frame(maxWidth: .infinity, minHeight: 30).padding(.top, 5).padding(.bottom, 9)
+            .frame(maxWidth: tab.id == Presenter.overviewID ? 32 : .infinity, minHeight: 30).padding(.top, 5).padding(.bottom, 9)
             .background(RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? CF.machine.opacity(0.13) : (hovering ? CF.ink.opacity(0.07) : Color.clear)))
             .background(GeometryReader { geo in
                 Color.clear.preference(key: TileFrames.self, value: [tab.id: geo.frame(in: .named(MenuMetrics.space))])
             })
-            .overlay(alignment: .bottom) { QuotaTick(tab: tab, onFill: isSelected).padding(.horizontal, 5).padding(.bottom, 3) }
+            .overlay(alignment: .bottom) {
+                if tab.id != Presenter.overviewID { QuotaTick(tab: tab, onFill: isSelected).padding(.horizontal, 5).padding(.bottom, 3) }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -358,18 +384,21 @@ struct UsageCard: View {
                     HeaderButton(symbol: "slider.horizontal.3", label: "Menu bar settings", control: .settings, state: state)
                 }
             }
-            .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 12)
+            .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 16)
             ForEach(Array(card.allowanceSections.enumerated()), id: \.element.id) { index, section in
-                if index > 0 { MenuDivider(inset: true).padding(.vertical, 5) }
+                if index > 0 { MenuDivider(inset: true).padding(.vertical, 10) }
                 SectionView(section: section, state: state, now: now, isAllowance: card.isAntigravity)
             }
             if let policy = card.subscriptionPolicy {
-                MenuDivider(inset: true).padding(.vertical, 7)
+                MenuDivider(inset: true).padding(.vertical, 12)
                 PolicyControl(policy: policy, state: state, now: now)
                     .padding(.horizontal, MenuMetrics.horizontal)
             }
+            // Cost and usage by model live on the console; one quiet row goes there.
+            LinkRow(title: "Usage and cost", control: .usage(card.usagePool), state: state)
+                .padding(.top, 10)
         }
-        .padding(.bottom, 6)
+        .padding(.bottom, 8)
     }
 }
 
@@ -424,7 +453,7 @@ struct SectionView: View {
     private var mergesNote: Bool { !section.rows.isEmpty && section.rows.allSatisfy { $0.bar == nil && !$0.inactive } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 7) {
             if let title = section.title {
                 HStack(spacing: 6) {
                     if let logo = section.logo { ProviderMark(logo: logo, size: 13) }
@@ -433,7 +462,7 @@ struct SectionView: View {
                     if let badge = section.badge { StateBadge(text: badge).layoutPriority(1) }
                 }
             }
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 14) {
                 ForEach(section.rows) { row in
                     // A window with nothing to draw says "Not read" and why on one line, not two.
                     var shown = row
@@ -454,11 +483,35 @@ struct SectionView: View {
                     .accessibilityLabel("Models: " + section.models.joined(separator: ", "))
             }
             if let policy = section.policy {
-                PolicyControl(policy: policy, state: state, now: now)
+                PolicyControl(policy: policy, state: state, now: now).padding(.top, 8)
             }
             ProviderExtrasView(extras: section.extras, id: section.id, openStatus: state.onOpenStatus)
         }
         .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 4)
+    }
+}
+
+/// A quiet row that opens something on the console: a label and an arrow, no colour until it is pointed at.
+struct LinkRow: View {
+    let title: String
+    let control: MenuControl
+    @ObservedObject var state: MenuState
+    @State private var hovering = false
+
+    var body: some View {
+        Button { state.onControl(control) } label: {
+            HStack(spacing: 6) {
+                Text(title).font(CF.face(12, .medium))
+                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(hovering ? CF.ink : CF.quiet)
+            .frame(minHeight: 26, alignment: .leading)
+            .padding(.horizontal, MenuMetrics.horizontal)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).routed(control).onHover { hovering = $0 }
+        .accessibilityAddTraits(.isLink)
     }
 }
 
@@ -481,9 +534,9 @@ struct ProviderExtrasView: View {
     @State private var hoveringStatus = false
 
     var body: some View {
-        if !extras.credits.isEmpty || !extras.usage.isEmpty || !extras.perModel.isEmpty || extras.status != nil
-            || extras.incident != nil || !extras.billing.isEmpty || !extras.modelQuota.isEmpty || !extras.costByModel.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
+        if !extras.credits.isEmpty || extras.status != nil
+            || extras.incident != nil || !extras.billing.isEmpty || !extras.modelQuota.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
                 if let incident = extras.incident {
                     // The word carries the level; terracotta only for a major incident or outage.
                     (Text(incident.title).font(CF.face(11.5, .semibold)).foregroundColor(incident.isSevere ? CF.humanText : CF.ink)
@@ -513,9 +566,6 @@ struct ProviderExtrasView: View {
                         }
                     }
                 }
-                if !extras.usage.isEmpty { extraRows("Usage cost estimate", rows: extras.usage) }
-                if !extras.perModel.isEmpty { extraRows("Spend by model · last 30 days", rows: extras.perModel) }
-                if !extras.costByModel.isEmpty { extraRows("Cost by model · last 30 days", rows: extras.costByModel) }
                 if let url = extras.status {
                     Button { openStatus(url) } label: {
                         Label("Status page", systemImage: "arrow.up.right.square")
@@ -533,7 +583,7 @@ struct ProviderExtrasView: View {
                     .accessibilityAddTraits(.isLink)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, 6)
         }
     }
 
@@ -619,34 +669,30 @@ struct MetricRow: View {
 
 // MARK: Spend and actions
 
-/// CodexBar's Extra usage card: a labelled bar, what it holds on the left and how much on the right.
-struct ShareCard: View {
-    let model: ShareModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(model.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
-            ShareBar(share: model.fraction, label: model.title)
-            HStack(alignment: .firstTextBaseline) {
-                Measure(model.left, size: 11.5)
-                Spacer(minLength: 8)
-                Measure(model.right, size: 11.5).foregroundStyle(CF.quiet)
-            }
-        }
-        .padding(.horizontal, MenuMetrics.horizontal).padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// CodexBar's Cost card: the month's subscriptions as plain lines.
+/// The month's subscriptions: each plan with its price, then the total and the operator's share as quiet lines.
 struct SpendCard: View {
     let model: SpendModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(model.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
-            ForEach(model.lines, id: \.self) { line in
-                Measure(line, size: 11.5)
+            if model.plans.isEmpty {
+                ForEach(model.lines, id: \.self) { line in Measure(line, size: 12) }
+            } else {
+                ForEach(Array(model.plans.enumerated()), id: \.offset) { _, plan in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(plan.name).font(CF.face(12.5, .medium)).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Measure(plan.price, size: 11.5).foregroundStyle(plan.priced ? CF.ink : CF.quiet).lineLimit(1).fixedSize()
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+                if !model.lines.isEmpty {
+                    ForEach(model.lines, id: \.self) { line in Measure(line, size: 11.5).foregroundStyle(CF.quiet) }
+                }
+            }
+            if let share = model.share, model.plans.isEmpty {
+                Measure("Your share \(share.left) · \(share.right)", size: 11.5).foregroundStyle(CF.quiet)
             }
             if let note = model.note {
                 Text(note).font(CF.face(11)).foregroundStyle(CF.quiet)
@@ -654,22 +700,6 @@ struct SpendCard: View {
         }
         .padding(.horizontal, MenuMetrics.horizontal).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct ShareBar: View {
-    let share: Double
-    let label: String
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(CF.ink.opacity(0.14))
-                Capsule().fill(CF.machine).frame(width: max(6, geo.size.width * share))
-            }
-        }
-        .frame(height: 6)
-        .accessibilityLabel(label)
-        .accessibilityValue("\(Int((share * 100).rounded())) percent")
     }
 }
 

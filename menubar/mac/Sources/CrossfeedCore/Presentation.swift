@@ -91,6 +91,21 @@ public struct TabModel: Equatable, Identifiable {
     }
 }
 
+/// One provider in the Overview tab.
+public struct OverviewRow: Equatable, Identifiable {
+    /// What wants a look: a provider that is used up or has a major incident (terracotta), or a minor one (olive).
+    public enum Flag: Equatable { case none, minor, severe, usedUp }
+    public var id: String
+    public var title: String
+    public var logo: ProviderLogo?
+    public var used: Double?
+    public var window: String         // "Week", "5h"
+    public var usedText: String       // "50%", "Used up", "Not read"
+    public var reset: String?         // "4d 5h", or the clock time
+    public var bar: BarModel?
+    public var flag: Flag
+}
+
 public struct CardModel: Equatable {
     public var title: String
     public var subtitle: String       // "Updated 2 min ago"
@@ -98,6 +113,8 @@ public struct CardModel: Equatable {
     public var sections: [SectionModel]
     public var isAntigravity: Bool
     public var subscriptionPolicy: PolicyModel?
+    /// The pool the console's /usage page opens at for this tab.
+    public var usagePool: String?
 
     public var heading: String { isAntigravity ? "Google AI Pro" : title }
 
@@ -140,6 +157,14 @@ public struct SpendModel: Equatable {
     public var lines: [String]        // "This month: EUR 20.00"
     public var note: String?          // "2 plans have no price yet"
     public var share: ShareModel?
+    /// One line per plan when the glance lists them: ("Claude Max 20x", "£183/mo"). A plan with no price says so.
+    public var plans: [PlanLine] = []
+}
+
+public struct PlanLine: Equatable {
+    public var name: String
+    public var price: String          // "£183/mo", "No price"
+    public var priced: Bool
 }
 
 /// What the menu bar item draws: an icon (the two tanks, or the provider's logo) and a line of text that
@@ -272,7 +297,8 @@ public struct Presenter {
         let read = group.pools.contains { $0.measured || $0.usedPercent != nil }
         return CardModel(title: title, subtitle: Self.updated(age: age, hasReading: read),
                          badge: multi || agy ? nil : stateWord(head?.state), sections: sections,
-                         isAntigravity: agy, subscriptionPolicy: subscriptionPolicy)
+                         isAntigravity: agy, subscriptionPolicy: subscriptionPolicy,
+                         usagePool: agy ? "antigravity" : head?.pool)
     }
 
     func ageSeconds() -> Double? {
@@ -468,7 +494,76 @@ public struct Presenter {
         } else if spend.unpriced > 0 {
             note = spend.unpriced == 1 ? "1 plan has no price yet" : "\(spend.unpriced) plans have no price yet"
         }
-        return SpendModel(title: "Subscriptions", lines: lines, note: note, share: share)
+        let plans = spend.plans.map { plan in
+            Self.planPrice(plan).map { PlanLine(name: plan.name, price: $0, priced: true) }
+                ?? PlanLine(name: plan.name, price: "No price", priced: false)
+        }
+        if !plans.isEmpty {
+            // Each plan names its own price, so the lines shrink to one total and a share only where one is set.
+            lines = spend.monthly.isEmpty ? [] : ["Per month: " + spend.monthly.map { "\($0.currency) \($0.total)" }.joined(separator: " · ")]
+            lines += spend.monthly.filter { $0.operator_ != nil }.map { "Your share: \($0.currency) \($0.operator_ ?? "")" }
+            note = nil
+        }
+        return SpendModel(title: "Subscriptions", lines: lines, note: note, share: share, plans: plans)
+    }
+
+    /// "£183/mo", "€20/mo", "US$120/yr": the plan's own amount and period, or nil without an amount.
+    static func planPrice(_ plan: PlanPrice) -> String? {
+        guard let raw = plan.amount, let value = Double(raw), value >= 0 else { return nil }
+        let symbols = ["GBP": "£", "EUR": "€", "USD": "US$"]
+        let code = (plan.currency ?? "").uppercased()
+        let prefix = symbols[code] ?? (code.isEmpty ? "" : code + " ")
+        let number = value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
+        let periods = ["month": "/mo", "monthly": "/mo", "year": "/yr", "yearly": "/yr", "annual": "/yr", "week": "/wk", "weekly": "/wk"]
+        return prefix + number + (periods[(plan.period ?? "month").lowercased()] ?? "/mo")
+    }
+
+    // MARK: Overview
+
+    public static let overviewID = "overview"
+
+    /// One compact row per provider, in the given order: its tightest window, when that resets, and a dot when
+    /// something needs a look. Tapping a row opens that provider's tab.
+    public func overviewRows(order: [String]) -> [OverviewRow] {
+        let byID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.pools) })
+        let titles = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
+        return order.compactMap { id in
+            guard let pools = byID[id], let tab = titles[id] else { return nil }
+            let row = overviewRow(tab: tab, pools: pools)
+            // "Other" holds pools with no percentage; with nothing to say it has no row.
+            return id == "other" && row.used == nil && row.flag == .none ? nil : row
+        }
+    }
+
+    func overviewRow(tab: TabModel, pools: [Pool]) -> OverviewRow {
+        let live = pools.filter { !$0.isRetired }
+        let shown = live.isEmpty ? pools : live
+        var candidates: [(limit: Limit?, used: Double, pace: Pace?)] = []
+        for pool in shown {
+            let windows = pool.limits.filter { $0.kind == "window" && $0.usedPercent != nil && $0.isActive }
+            if windows.isEmpty, pool.limits.isEmpty, let used = pool.usedPercent, pool.measured {
+                candidates.append((nil, used, pool.pace))
+            }
+            candidates += windows.map { ($0, min(100, max(0, $0.usedPercent ?? 0)), $0.pace) }
+        }
+        let tight = candidates.max { lhs, rhs in
+            (lhs.pace?.status == "deficit" ? 1 : 0, lhs.used) < (rhs.pace?.status == "deficit" ? 1 : 0, rhs.used)
+        } ?? candidates.max { $0.used < $1.used }
+        let incident = shown.compactMap(\.incident).first { ["maintenance", "minor", "major", "critical"].contains($0.level) }
+        var flag = OverviewRow.Flag.none
+        if let incident { flag = incident.level == "major" || incident.level == "critical" ? .severe : .minor }
+        guard let tight else {
+            return OverviewRow(id: tab.id, title: tab.title, logo: tab.logo, used: nil, window: "", usedText: "Not read",
+                               reset: nil, bar: nil, flag: flag)
+        }
+        let usedUp = tight.used >= Self.usedUp
+        if usedUp { flag = .usedUp }
+        let date = tight.limit?.resetAt.flatMap { Self.iso.date(from: $0) }
+        let reset = date.map { resetClock ? clockText($0, today: "") : Self.shortCountdown(to: $0, now: now) }
+        return OverviewRow(id: tab.id, title: tab.title, logo: tab.logo, used: tight.used,
+                           window: Self.barWindow(tight.limit).short,
+                           usedText: usedUp ? "Used up" : "\(Int(tight.used.rounded()))%",
+                           reset: reset, bar: Self.bar(used: tight.used, pace: tight.pace), flag: flag)
     }
 
     // MARK: Menu bar

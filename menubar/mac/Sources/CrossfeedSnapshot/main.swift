@@ -46,6 +46,10 @@ do {
     if let v = argument("--extra").flatMap(BarPrefs.Extra.init) { prefs.extra = v }
     if let v = argument("--reset").flatMap(BarPrefs.Reset.init) { prefs.reset = v }
     let settings = CommandLine.arguments.contains("--settings")
+    let layout = TabLayout(hidden: Set((argument("--hide") ?? "").split(separator: ",").map(String.init)),
+                           hiddenInOverview: CommandLine.arguments.contains("--hidden-in-overview"))
+    let order = (argument("--order") ?? "").split(separator: ",").map(String.init)
+    let providerOrder = TabOrder.otherLast(order + presenter.tabs.map(\.id).filter { !order.contains($0) })
     if let stripsOut = argument("--strips-out") {
         // One row per look: the bar item alone, on a light and a dark bar.
         var looks: [(title: String, summary: BarSummary)] = []
@@ -80,19 +84,22 @@ do {
     let tabs = (argument("--tabs") ?? argument("--tab") ?? "").split(separator: ",").map(String.init)
     var panels: [(title: String, image: NSImage)] = []
     // One panel height for every tab, as the live menu uses (--no-fixed draws the old content-sized menu).
-    let heights = PanelSizing.measure(presenter: presenter, prefs: prefs, cap: argument("--cap").flatMap { Double($0) }.map { CGFloat($0) } ?? 760)
+    let heights = PanelSizing.measure(presenter: presenter, prefs: prefs, layout: layout, order: providerOrder, cap: argument("--cap").flatMap { Double($0) }.map { CGFloat($0) } ?? 760)
     if CommandLine.arguments.contains("--heights") {
         print("panel \(Int(heights.panel)) settings \(Int(heights.settings)) tabs " + heights.perTab.sorted { $0.key < $1.key }.map { "\($0.key) \(Int($0.value))" }.joined(separator: " "))
     }
-    for tab in tabs.isEmpty ? [presenter.defaultTab ?? ""] : tabs {
+    for tab in tabs.isEmpty ? [""] : tabs {
         let state = MenuState(presenter: presenter, selected: tab.isEmpty ? nil : tab)
         state.prefs = prefs
+        state.layout = layout
+        state.providerOrder = providerOrder
+        state.settingsPage = argument("--settings-page").flatMap { Int($0) } ?? 0
         if !CommandLine.arguments.contains("--no-fixed") { state.panelHeight = heights.panel }
         state.showsSettings = settings
         let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale)
         let screen = Compose.screen(menu: menu, summary: presenter.barSummary(prefs), appearance: appearance, scale: scale)
-        let name = presenter.tabs.first { $0.id == state.selected }?.title ?? "menu"
-        panels.append(("Crossfeed, \(name) tab, fixture glance JSON", screen))
+        let name = state.current == Presenter.overviewID ? "Overview" : (presenter.tabs.first { $0.id == state.current }?.title ?? "menu")
+        panels.append((settings ? "Crossfeed, settings, \(state.settingsPage == 1 ? "Tabs" : "Menu bar") page" : "Crossfeed, \(name) tab, fixture glance JSON", screen))
     }
     var all: [(title: String, image: NSImage)] = []
     if let reference = argument("--side-by-side") {

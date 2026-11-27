@@ -36,12 +36,12 @@ final class Round7GapsTests: XCTestCase {
         XCTAssertEqual(major?.isSevere, true)
     }
 
-    func testBillingShowsPeriodGrantAndCreditUse() throws {
+    func testBillingShowsPeriodAndGrantButLeavesCreditUseToTheConsole() throws {
         let e = try extras(#"{"pool":"codex","name":"Codex","billing":{"plan":"pro","period":"monthly","renews_at":"2026-12-04T10:58:38Z","grants":[{"credits":12048,"granted":62500,"expires_at":"2027-01-01T00:00:00Z"}],"credits_today":1098,"credits_7d":2816,"credits_30d":42051}}"#)
-        XCTAssertEqual(e.billing.count, 3)
+        XCTAssertEqual(e.billing.count, 2)
         XCTAssertTrue(e.billing[0].hasPrefix("Pro · Monthly renews "))
         XCTAssertTrue(e.billing[1].hasPrefix("Funded credits 12,048 of 62,500 left, expire "))
-        XCTAssertEqual(e.billing[2], "Credits used 1,098 today · 2,816 in 7 days · 42,051 in 30 days")
+        XCTAssertFalse(e.billing.contains { $0.hasPrefix("Credits used") }, "usage reports are on the console's /usage page")
     }
 
     func testModelQuotaAndAntigravityCostByModel() throws {
