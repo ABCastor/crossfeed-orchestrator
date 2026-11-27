@@ -10,8 +10,8 @@ from tests.test_console import console
 ROSTER = {"schema_version": 3, "quota_pools": {
     "claude": {"plan": {"billing": "subscription", "name": "Claude Max 20x", "price": 183, "currency": "GBP",
                         "as_of": "2026-09", "price_source": "his receipt"}},
-    "codex": {"plan": {"billing": "subscription", "name": "ChatGPT Pro, shared with Edo", "price": 200,
-                       "currency": "USD", "as_of": "2026-09", "price_source": "the 200-a-month plan, shared with Edo"}},
+    "codex": {"plan": {"billing": "subscription", "name": "ChatGPT Pro, shared with Sam", "price": 200,
+                       "currency": "USD", "as_of": "2026-09", "price_source": "the 200-a-month plan, shared with Sam"}},
     "antigravity-gemini": {"plan": {"billing": "subscription", "name": "Google AI Pro (second account, promo)",
                                     "price": 5.5, "currency": "EUR", "as_of": "2026-10",
                                     "price_source": "read as EUR 5.50/month for the first three months"}},
@@ -56,18 +56,18 @@ class PlanPrices(unittest.TestCase):
         self.assertEqual(self.rows()["codex"]["source"], "default")
 
     # BR-SUBS-002
-    def test_chatgpt_pro_is_assumed_half_with_edo_until_the_operator_sets_it(self):
+    def test_chatgpt_pro_is_assumed_half_with_a_co_payer_until_the_operator_sets_it(self):
         row = self.rows()["codex"]
-        self.assertEqual((row["operator_share_percent"], row["other_payer"], row["share_source"]), ("50", "Edo", "default"))
-        self.assertEqual(console.plan_summary(row), "$200 a month · shared with Edo · assumed 50/50 · change")
-        subscriptions.save(self.path, ROSTER, "codex", {"operator_share_percent": "60", "other_payer": "Edo"})
+        self.assertEqual((row["operator_share_percent"], row["other_payer"], row["share_source"]), ("50", "Sam", "default"))
+        self.assertEqual(console.plan_summary(row), "$200 a month · shared with Sam · assumed 50/50 · change")
+        subscriptions.save(self.path, ROSTER, "codex", {"operator_share_percent": "60", "other_payer": "Sam"})
         row = self.rows()["codex"]
         self.assertEqual((row["operator_share_percent"], row["share_source"]), ("60", "operator"))
-        self.assertEqual(console.plan_summary(row), "$200 a month · shared with Edo · 60/40")
+        self.assertEqual(console.plan_summary(row), "$200 a month · shared with Sam · 60/40")
 
-    def test_edo_card_shows_his_share_and_names_the_assumption(self):
+    def test_cosharer_card_shows_his_share_and_names_the_assumption(self):
         model = sharing.build(subscriptions.view(self.path, ROSTER, {}), {"pools": []}, 1.7e9)
-        text = sharing.card_text(model, "edo")
+        text = sharing.card_text(model, "sam")
         self.assertIn("Your share 50% of $200.00 a month: $100.00", text)
         self.assertIn("The split is assumed until it is agreed", text)
         self.assertIn("never split by person", text)
@@ -84,8 +84,8 @@ class PlanPrices(unittest.TestCase):
         prices = console._plan_prices(overview)
         self.assertEqual((prices["claude"], prices["github-copilot-student"]), ("£183 a month", "Free"))
         self.assertEqual(prices["antigravity-gemini"], "€5.50 a month · promo until Jan 2027")
-        self.assertIn("Shared with Edo · assumed 50/50 · <a", console._split_notes(overview)["codex"])
-        self.assertNotIn("claude", console._split_notes(overview))
+        self.assertIn("Shared with Sam · assumed 50/50 · <a", console._split_notes(overview)["codex"])
+        self.assertEqual(console._split_notes(overview)["claude"], "")
 
     def test_free_plan_reads_free(self):
         self.assertEqual(console.plan_summary({"amount": "0.00", "currency": "USD", "period": "monthly"}), "Free")

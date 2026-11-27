@@ -249,9 +249,9 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - tested-by: `tests/test_business_round10_subscriptions.py::PlanPrices::test_prices_come_from_the_plan_when_the_operator_set_none`, `test_an_operator_edit_wins_and_is_saved_alone` (control: an operator value reads `operator`), `test_promo_shows_its_end_when_known_and_plain_promo_otherwise`, `test_free_plan_reads_free`.
 - Review when: the operator sets the promo end date, or a plan's price changes in the overlay.
 
-## BR-SUBS-002 — ChatGPT Pro is assumed split 50/50 with Edo until the operator sets it [PROPOSED 2026-11-27]
+## BR-SUBS-002 — ChatGPT Pro is assumed split 50/50 with a co-payer until the operator sets it [PROPOSED 2026-11-27]
 
-- RULE (assumed): ChatGPT Pro, "shared with Edo", is split 50% operator and 50% Edo, shown as "assumed 50/50 · change" and on Edo's share card as assumed, until the operator saves a split.
-- Authority: the operator said the plan is shared with Edo (28 Sep) and asked on 27 Nov "what about the shared system?"; the 50/50 figure is the lead's default, not his words, so it awaits his decision.
+- RULE (assumed): ChatGPT Pro, "shared with" another person, is split 50% operator and 50% co-payer, shown as "assumed 50/50 · change" and on the co-payer's share card as assumed, until the operator saves a split.
+- Authority: Operator, 27 Nov: "what about the shared system?" The overlay records the plan as shared; the 50/50 figure is a default the operator has not confirmed.
 - implemented-by: `scripts/subscriptions.py:_share_defaults` · `scripts/sharing.py:build`, `_plan_lines`.
-- tested-by: `tests/test_business_round10_subscriptions.py::PlanPrices::test_chatgpt_pro_is_assumed_half_with_edo_until_the_operator_sets_it`, `test_edo_card_shows_his_share_and_names_the_assumption`.
+- tested-by: `tests/test_business_round10_subscriptions.py::PlanPrices::test_chatgpt_pro_is_assumed_half_with_a_co_payer_until_the_operator_sets_it`, `test_cosharer_card_shows_his_share_and_names_the_assumption`.
