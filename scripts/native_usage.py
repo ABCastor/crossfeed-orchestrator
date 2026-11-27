@@ -1509,8 +1509,11 @@ def display_observation(snapshot, failure, now, ttl_s):
     if stamp is None:
         return {}
     age = max(0, int((now - stamp).total_seconds()))
+    shared = snapshot.get("origin") == "mac"  # adopted from the Mac's readings (scripts/mac_readings.py)
     return {"reading_age_s": age, "reading_source": snapshot.get("source") or "unknown",
-            "reading_observed_at": _iso(stamp), "reading_stale": bool(failure) or age > ttl_s}
+            "reading_observed_at": _iso(stamp), "reading_stale": bool(failure) or age > ttl_s,
+            "reading_origin": "mac" if shared else "local",
+            **({"reading_origin_fetched_at": snapshot["origin_fetched_at"]} if shared and snapshot.get("origin_fetched_at") else {})}
 
 
 def display_extras(pool, config, snapshot, failure, state_dir, now, *, refresh):

@@ -16,9 +16,10 @@ import stat
 from pathlib import Path
 
 try:
+    import mac_readings
     import sharing
 except ImportError:  # imported from the console as scripts.phone_view
-    from scripts import sharing
+    from scripts import mac_readings, sharing
 
 CSS = ("html{color-scheme:light dark;font:16px system-ui}body{margin:0 auto;padding:1rem;max-width:32rem}"
        "h1{margin:.35rem 0;font-size:1.65rem}h2{font-size:1rem;margin:1.4rem 0 .5rem}"
@@ -138,7 +139,7 @@ def operator_login(path: Path) -> str:
     return login
 
 
-def make_handler(login, snapshot, share=None):
+def make_handler(login, snapshot, share=None, readings=None):
     class Phone(http.server.BaseHTTPRequestHandler):
         server_version = 'Crossfeed'
         sys_version = ''
@@ -165,6 +166,14 @@ def make_handler(login, snapshot, share=None):
             identities = self.headers.get_all('Tailscale-User-Login') or []
             if len(identities) != 1 or not LOGIN.fullmatch(identities[0]) or not hmac.compare_digest(identities[0], login):
                 self.send_page(403, 'Crossfeed is available only to the configured tailnet login.\n')
+                return
+            if self.path in {'/readings.json', '/crossfeed/readings.json'} and readings:
+                try:
+                    body = json.dumps(readings(), sort_keys=True)
+                except Exception:
+                    self.send_page(503, 'Readings unavailable.\n')
+                    return
+                self.send_page(200, body, 'application/json', CSP)
                 return
             sharing_page = self.path in {'/share', '/crossfeed/share', '/share/', '/crossfeed/share/'}
             if self.path not in {'/', '/crossfeed', '/crossfeed/'} and not (sharing_page and share):
@@ -196,19 +205,19 @@ class LoopbackPhoneServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 
-def open_loopback_server(port: int, login: str, snapshot, share=None):
+def open_loopback_server(port: int, login: str, snapshot, share=None, readings=None):
     if not 1024 <= port <= 65535:
         raise ValueError('loopback port must be 1024-65535')
-    return LoopbackPhoneServer(('127.0.0.1', port), make_handler(login, snapshot, share))
+    return LoopbackPhoneServer(('127.0.0.1', port), make_handler(login, snapshot, share, readings))
 
 
-def open_server(path: Path, login: str, snapshot, share=None):
+def open_server(path: Path, login: str, snapshot, share=None, readings=None):
     if not path.is_absolute():
         raise ValueError('socket path must be absolute')
     parent = path.parent.lstat()
     if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700):
         raise ValueError('socket directory must be private')
-    server = PhoneServer(str(path), make_handler(login, snapshot, share))
+    server = PhoneServer(str(path), make_handler(login, snapshot, share, readings))
     try:
         path.chmod(0o600)
     except OSError:
@@ -233,8 +242,9 @@ def main() -> int:
         login = operator_login(cfg.config.expanduser())
         view = lambda: cached_snapshot(fleetctl, overlay, state)
         cards = lambda: cached_share(fleetctl, overlay, state)
-        server = (open_loopback_server(cfg.loopback_port, login, view, cards) if cfg.loopback_port
-                  else open_server(cfg.socket, login, view, cards))
+        shared = lambda: mac_readings.export(state)
+        server = (open_loopback_server(cfg.loopback_port, login, view, cards, shared) if cfg.loopback_port
+                  else open_server(cfg.socket, login, view, cards, shared))
     except (ValueError, OSError, RecursionError):
         print('Crossfeed phone view needs a private mode-600 config and an unused socket in a mode-700 directory.')
         return 2
