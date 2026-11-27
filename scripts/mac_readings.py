@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import os
 import re
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -25,6 +26,8 @@ CONFIG = "readings-source.json"
 CACHE = "mac-readings.json"
 MAX_BYTES = 1_000_000
 FETCH_TIMEOUT_S = 4
+MIN_INTERVAL_S = 60  # one attempt a minute at most, so a sleeping Mac never costs every command its timeout
+ATTEMPT = "mac-readings.attempt"
 # What a snapshot may carry across. Anything else is dropped at the door, on both sides.
 KEYS = ("available", "observed_at", "source", "plan", "windows", "idle_windows", "precision_percentage_points",
         "provider_used_percent", "provider", "credits", "spend_credits", "account_usage", "billing",
@@ -73,14 +76,33 @@ def _http_get(url: str, timeout: float) -> bytes:
         return response.read(MAX_BYTES + 1)
 
 
+def _last_good(cache: Path) -> dict[str, Any] | None:
+    try:
+        kept = json.loads(cache.read_text(encoding="utf-8"))
+        return kept if isinstance(kept, dict) and isinstance(kept.get("snapshots"), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def pull(state_dir: Path, *, fetch: Callable[[str, float], bytes] | None = None,
-         now: dt.datetime | None = None) -> dict[str, Any] | None:
+         now: dt.datetime | None = None, min_interval_s: float = MIN_INTERVAL_S) -> dict[str, Any] | None:
     """Fetch the other machine's readings and keep them; on any failure return the last copy."""
     url = source_url(state_dir)
     if not url:
         return None
     now = now or dt.datetime.now(dt.timezone.utc)
     cache = state_dir / CACHE
+    attempt = state_dir / ATTEMPT
+    try:
+        if min_interval_s > 0 and 0 <= time.time() - attempt.stat().st_mtime < min_interval_s:
+            return _last_good(cache)
+    except OSError:
+        pass
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        attempt.touch()
+    except OSError:
+        pass
     try:
         body = (fetch or _http_get)(url, FETCH_TIMEOUT_S)
         if len(body) > MAX_BYTES:
@@ -97,11 +119,7 @@ def pull(state_dir: Path, *, fetch: Callable[[str, float], bytes] | None = None,
         os.replace(temporary, cache)
         return kept
     except Exception:  # noqa: BLE001 - asleep, offline or odd: serve the last good copy
-        try:
-            kept = json.loads(cache.read_text(encoding="utf-8"))
-            return kept if isinstance(kept, dict) and isinstance(kept.get("snapshots"), dict) else None
-        except (OSError, ValueError):
-            return None
+        return _last_good(cache)
 
 
 def _parse(stamp: Any) -> dt.datetime | None:

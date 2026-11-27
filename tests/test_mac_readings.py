@@ -59,7 +59,7 @@ class PullTests(unittest.TestCase):
         fetch = mock.Mock()
         with mock.patch.dict("os.environ", {}, clear=False) as env:
             env.pop("FLEET_READINGS_URL", None)
-            self.assertIsNone(mac.pull(self.state, fetch=fetch))
+            self.assertIsNone(mac.pull(self.state, min_interval_s=0, fetch=fetch))
         fetch.assert_not_called()
 
     def test_plain_http_is_refused(self):
@@ -70,24 +70,32 @@ class PullTests(unittest.TestCase):
 
     def test_pull_keeps_a_copy_with_its_fetch_time_and_serves_it_when_the_mac_sleeps(self):
         self.configure()
-        got = mac.pull(self.state, fetch=lambda url, t: payload(claude=snap(2)), now=NOW)
+        got = mac.pull(self.state, min_interval_s=0, fetch=lambda url, t: payload(claude=snap(2)), now=NOW)
         self.assertEqual(got["fetched_at"], "2026-11-27T09:00:00Z")
         self.assertEqual(list(got["snapshots"]), ["claude"])
         asleep = mock.Mock(side_effect=OSError("timed out"))
-        again = mac.pull(self.state, fetch=asleep, now=NOW + dt.timedelta(hours=3))
+        again = mac.pull(self.state, min_interval_s=0, fetch=asleep, now=NOW + dt.timedelta(hours=3))
         self.assertEqual(again["fetched_at"], "2026-11-27T09:00:00Z")  # the old fetch time, honestly
         self.assertEqual(again["snapshots"], got["snapshots"])
 
     def test_odd_answers_keep_the_last_copy_and_asleep_with_no_copy_is_none(self):
         self.configure()
-        self.assertIsNone(mac.pull(self.state, fetch=mock.Mock(side_effect=OSError("down"))))
+        self.assertIsNone(mac.pull(self.state, min_interval_s=0, fetch=mock.Mock(side_effect=OSError("down"))))
         for body in (b"not json", b'{"schema":2,"snapshots":{}}', b'[]', b"x" * (mac.MAX_BYTES + 1)):
-            self.assertIsNone(mac.pull(self.state, fetch=lambda u, t, b=body: b))
+            self.assertIsNone(mac.pull(self.state, min_interval_s=0, fetch=lambda u, t, b=body: b))
         self.assertFalse((self.state / mac.CACHE).exists())
+
+    def test_a_minute_passes_between_attempts_so_a_sleeping_mac_costs_one_timeout(self):
+        self.configure()
+        mac.pull(self.state, fetch=lambda u, t: payload(claude=snap(2)), now=NOW)
+        fetch = mock.Mock(side_effect=OSError("asleep"))
+        got = mac.pull(self.state, fetch=fetch)
+        fetch.assert_not_called()
+        self.assertEqual(list(got["snapshots"]), ["claude"])
 
     def test_a_secret_shaped_snapshot_is_dropped_on_arrival(self):
         self.configure()
-        got = mac.pull(self.state, fetch=lambda u, t: payload(
+        got = mac.pull(self.state, min_interval_s=0, fetch=lambda u, t: payload(
             ok=snap(1), bad=snap(1, plan="someone@example.com")), now=NOW)
         self.assertEqual(list(got["snapshots"]), ["ok"])
 
