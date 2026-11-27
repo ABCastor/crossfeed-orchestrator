@@ -18,6 +18,8 @@ struct Config {
     var fonts = ""
     var selftest = false
     var selftestTab: String?
+    /// With -selftest: drive a real drag through the host view's mouse events and save frames here.
+    var dragFrames: String?
 }
 
 /// Accepts the LaunchAgent's Go-style flags (-python ...) and their double-dash forms.
@@ -36,6 +38,7 @@ func parse(_ args: [String]) -> Config {
         case "fonts": c.fonts = next; i += 1
         case "selftest": c.selftest = true
         case "tab": c.selftestTab = next; i += 1
+        case "dragframes": c.dragFrames = next; i += 1
         default: break
         }
         i += 1
@@ -127,6 +130,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     var timers: [Timer] = []
     let tabOrder = TabOrder(defaults: .standard)
     let layoutStore = TabLayoutStore(defaults: .standard)
+    let sectionStore = SectionOrderStore(defaults: .standard)
+    var escapeMonitor: Any?
     /// The menu bar choices. A self test writes to a throwaway domain, never to the operator's preferences.
     let barStore: BarPrefsStore
     let console: ConsoleSession
@@ -149,7 +154,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
         state.prefs = barStore.load()
-        if !config.selftest && config.fixture.isEmpty { state.layout = layoutStore.load() }
+        if !config.selftest && config.fixture.isEmpty {
+            state.layout = layoutStore.load()
+            state.blockOrders["claude"] = sectionStore.saved("claude")
+        }
+        state.onReorderBlocks = { [weak self] tab, order in
+            guard let self, self.config.fixture.isEmpty, !self.config.selftest else { return }
+            self.sectionStore.save(tab, order: order)
+        }
+        state.onBlockDragActive = { [weak self] active in self?.listenForEscape(active) }
         state.onControl = { [weak self] control in self?.handle(control) }
         state.canEditPolicy = config.fixture.isEmpty || config.selftest
         state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
@@ -407,6 +420,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         syncMenu()
     }
 
+    /// Escape while a block is carried puts it back and writes nothing. A local monitor sees the key during menu
+    /// tracking; it is installed only for the length of a drag.
+    func listenForEscape(_ on: Bool) {
+        if on, escapeMonitor == nil {
+            escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard event.keyCode == 53, let self, self.state.isCarryingBlock else { return event }
+                self.state.cancelBlockDrag()
+                return nil
+            }
+        } else if !on, let monitor = escapeMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeMonitor = nil
+        }
+    }
+
     func reorder(_ source: String, onto target: String) {
         guard config.fixture.isEmpty, !config.selftest, let ids = state.presenter?.tabs.map(\.id),
               tabOrder.move(source, onto: target, among: ids) else { return }
@@ -543,6 +571,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     }
 
     func selftestCards(host: MenuHostingView, window: NSWindow, overviewOK: Bool) {
+        if let dir = config.dragFrames { recordDrag(host: host, window: window, into: dir); return }
         do {
             let tiles = self.state.tileFrames.count
             let fonts = NSFont(name: "Commissioner-Medium", size: 13) != nil && NSFont(name: "MartianMono-Regular", size: 13) != nil
