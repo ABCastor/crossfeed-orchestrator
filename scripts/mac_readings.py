@@ -28,6 +28,7 @@ MAX_BYTES = 1_000_000
 FETCH_TIMEOUT_S = 4
 MIN_INTERVAL_S = 60  # one attempt a minute at most, so a sleeping Mac never costs every command its timeout
 ATTEMPT = "mac-readings.attempt"
+GRACE_S = 900  # an adopted reading this young needs no local read: the Mac keeps its own refresh clock
 # What a snapshot may carry across. Anything else is dropped at the door, on both sides.
 KEYS = ("available", "observed_at", "source", "plan", "windows", "idle_windows", "precision_percentage_points",
         "provider_used_percent", "provider", "credits", "spend_credits", "account_usage", "billing",

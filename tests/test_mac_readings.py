@@ -148,6 +148,21 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(runtime["quota_snapshots"]["claude"]["origin"], "mac")
         self.assertNotIn("claude", runtime.get("quota_refresh_errors", {}))
 
+    def test_a_mac_reading_inside_the_grace_stays_unread_locally_even_past_the_pool_ttl(self):
+        runtime, reader = self.run_refresh({"available": False, "reason": "x"}, snap(10, used=44))  # ttl 900s = 15 min
+        reader.assert_not_called()
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            (state / mac.CONFIG).write_text(json.dumps({"url": URL}))
+            short = {"quota_pools": {"claude": {"quota_refresh": {"oracle": "codexbar", "provider": "claude", "ttl_s": 120}}}}
+            fleetctl.atomic_json(state / "runtime.json", {"quota_snapshots": {}})
+            reader = mock.Mock(return_value={"available": False, "reason": "x"})
+            with mock.patch.object(mac, "_http_get", lambda u, t: payload(claude=snap(10))), \
+                 mock.patch.object(fleetctl, "utc_now", return_value=NOW), \
+                 mock.patch.dict(fleetctl.ORACLE_REGISTRY, {"codexbar": reader}):
+                fleetctl.refresh_stale_pools(state, ["claude"], roster=short)
+            reader.assert_not_called()
+
     def test_aged_mac_reading_falls_back_to_our_reader_and_stays_marked_stale(self):
         runtime, reader = self.run_refresh({"available": False, "reason": "no sign-in"}, snap(600, used=44))
         reader.assert_called_once()
@@ -155,7 +170,10 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(row["origin"], "mac")  # last good reading kept, not blanked
         self.assertIn("claude", runtime["quota_refresh_errors"])
         shown = native.display_observation(row, runtime["quota_refresh_errors"]["claude"], NOW, 900)
-        self.assertTrue(shown["reading_stale"])
+        self.assertTrue(shown["reading_stale"])  # ten hours old: stale because of its age
+        young = native.display_observation(dict(row, observed_at=(NOW - dt.timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+                                           runtime["quota_refresh_errors"]["claude"], NOW, 900)
+        self.assertFalse(young["reading_stale"])  # our reader failing does not make the Mac's fresh reading stale
         self.assertEqual((shown["reading_origin"], shown["reading_age_s"]), ("mac", 600 * 60))
 
     def test_asleep_mac_leaves_our_reader_in_charge(self):

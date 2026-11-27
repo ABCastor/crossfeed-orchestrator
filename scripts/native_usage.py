@@ -1518,7 +1518,7 @@ def display_observation(snapshot, failure, now, ttl_s):
     age = max(0, int((now - stamp).total_seconds()))
     shared = snapshot.get("origin") == "mac"  # adopted from the Mac's readings (scripts/mac_readings.py)
     return {"reading_age_s": age, "reading_source": snapshot.get("source") or "unknown",
-            "reading_observed_at": _iso(stamp), "reading_stale": bool(failure) or age > ttl_s,
+            "reading_observed_at": _iso(stamp), "reading_stale": (bool(failure) and not shared) or age > ttl_s,  # our reader failing says nothing about the Mac's reading
             "reading_origin": "mac" if shared else "local",
             **({"reading_origin_fetched_at": snapshot["origin_fetched_at"]} if shared and snapshot.get("origin_fetched_at") else {})}
 

@@ -1632,6 +1632,8 @@ def snapshot_needs_refresh(
     ttl = pool_refresh_ttl(pool, ttl_s, sources)
     snapshot = (runtime.get("quota_snapshots") or {}).get(pool)
     if snapshot:
+        if snapshot.get("origin") == "mac":
+            ttl = max(ttl, mac_readings.GRACE_S)  # the Mac refreshes on its own clock; ours covers only a longer silence
         try:
             if (now - parse_iso(snapshot["observed_at"])).total_seconds() <= ttl:
                 return False
@@ -1686,7 +1688,7 @@ def _filtered_observation(observed: dict[str, Any], config: dict[str, Any]) -> d
     return result
 
 
-def adopt_remote_readings(state_dir: Path, pools: set[str]) -> list[str]:
+def adopt_remote_readings(state_dir: Path, pools: set[str] | None = None) -> list[str]:
     """When a readings source is configured, take its newer snapshots; our own readers cover what it lacks.
 
     Never raises and never blocks past the fetch timeout: a sleeping source leaves the last copy in place.
@@ -1725,7 +1727,7 @@ def refresh_stale_pools(
     wanted = list(dict.fromkeys(pool for pool in pools if pool in sources))
     if not wanted:
         return {}
-    adopt_remote_readings(state_dir, set(sources))
+    adopt_remote_readings(state_dir)
 
     def due(runtime, pool):
         return snapshot_needs_refresh(runtime, pool, ttl_s=ttl_s, cooldown_s=cooldown_s, sources=sources)
