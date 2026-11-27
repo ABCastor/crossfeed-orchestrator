@@ -65,6 +65,8 @@ class PullTests(unittest.TestCase):
     def test_plain_http_is_refused(self):
         (self.state / mac.CONFIG).write_text(json.dumps({"url": "http://mac.example/readings.json"}))
         self.assertIsNone(mac.source_url(self.state))
+        (self.state / mac.CONFIG).write_text(json.dumps({"url": "http://127.0.0.1:9/readings.json"}))
+        self.assertIsNotNone(mac.source_url(self.state))
 
     def test_pull_keeps_a_copy_with_its_fetch_time_and_serves_it_when_the_mac_sleeps(self):
         self.configure()
@@ -161,6 +163,40 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual((shown["reading_origin"], shown["reading_origin_fetched_at"], shown["reading_stale"]),
                          ("mac", "2026-11-27T09:00:00Z", False))
         self.assertEqual(native.display_observation(snap(3), None, NOW, 900)["reading_origin"], "local")
+
+
+class LinuxFallbackTests(unittest.TestCase):
+    def test_agy_session_comes_from_the_cli_file_when_there_is_no_macos_keychain(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d) / "antigravity-cli"
+            folder.mkdir()
+            doc = {"token": {"access_token": "placeholder-token", "expiry": "2026-11-27T10:00:00Z"}}
+            target = folder / "antigravity-oauth-token"
+            target.write_text(json.dumps(doc))
+            target.chmod(0o600)
+            with mock.patch.dict("os.environ", {"GEMINI_CLI_HOME": d}), \
+                 mock.patch.object(native.Path, "is_file", return_value=False):
+                self.assertEqual(native._agy_cli_keychain(3), doc)
+                target.chmod(0o644)  # not owner-only: refused, not read
+                self.assertEqual(native._agy_cli_keychain(3), {})
+                target.unlink()
+                self.assertEqual(native._agy_cli_keychain(3), {})
+
+    def test_go_key_file_stands_in_only_for_an_op_reference_on_a_machine_without_op(self):
+        go = fleetctl.opencode_go_usage
+        with tempfile.TemporaryDirectory() as d:
+            key = Path(d) / "opencode"
+            key.write_text("placeholder-go-key\n")
+            key.chmod(0o600)
+            env = {"PI_KEYS_DIR": d}
+            with mock.patch.dict("os.environ", env), mock.patch.object(go.shutil, "which", return_value=None):
+                self.assertEqual(go.resolve_key({"key": "op://v/i/f"}), ("placeholder-go-key", None))
+                key.chmod(0o640)
+                self.assertEqual(go.resolve_key({"key": "op://v/i/f"})[0], None)
+                key.chmod(0o600)
+            with mock.patch.dict("os.environ", env), mock.patch.object(go.shutil, "which", return_value="/usr/bin/op"), \
+                 mock.patch.object(go, "_providers_module", side_effect=RuntimeError("op failed")):
+                self.assertIn("could not be read", go.resolve_key({"key": "op://v/i/f"})[1]["reason"])
 
 
 class ServedTests(unittest.TestCase):

@@ -61,7 +61,9 @@ def source_url(state_dir: Path) -> str | None:
             url = json.loads((state_dir / CONFIG).read_text(encoding="utf-8")).get("url")
         except (OSError, ValueError, AttributeError):
             return None
-    return url if isinstance(url, str) and url.startswith("https://") else None
+    # https, or plain http only to this machine itself (an ssh tunnel or a local relay)
+    ok = isinstance(url, str) and (url.startswith("https://") or url.startswith(("http://127.0.0.1:", "http://localhost:")))
+    return url if ok else None
 
 
 def _http_get(url: str, timeout: float) -> bytes:

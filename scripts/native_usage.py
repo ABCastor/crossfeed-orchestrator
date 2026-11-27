@@ -1112,8 +1112,15 @@ def _agy_acp_access(doc: dict[str, Any], timeout: float) -> tuple[str | None, st
 
 def _agy_cli_keychain(timeout: float) -> dict[str, Any]:
     """Antigravity CLI's own macOS go-keyring entry, captured without a shell or logs."""
-    if timeout <= 0 or not Path("/usr/bin/security").is_file():
+    if timeout <= 0:
         return {}
+    if not Path("/usr/bin/security").is_file():
+        # Linux: the same session document lives in the CLI's own owner-only file.
+        base = Path(os.environ.get("GEMINI_CLI_HOME") or Path.home() / ".gemini")
+        try:
+            return _mapping(_json(_owner_file(base / "antigravity-cli" / "antigravity-oauth-token").decode("utf-8")))
+        except (OSError, ValueError, RuntimeError):
+            return {}
     found = subprocess.run(
         ["/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"],
         capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
