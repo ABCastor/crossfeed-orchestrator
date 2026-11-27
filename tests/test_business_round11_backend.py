@@ -216,9 +216,8 @@ class UsdTotal(unittest.TestCase):
     # BR-SUBS-004
     def test_one_usd_total_converts_each_plan_and_the_operators_share(self):
         view = self.view(lambda: self.rates())
-        # £183 / 0.8 = $228.75, $200 exact. The operator's part stays unknown while one plan has
-        # no agreed split, so it is null rather than the shared plan alone passed off as the total.
-        self.assertEqual(view["usd"], {"total": "428.75", "operator": None,
+        # £183 / 0.8 = $228.75, $200 exact. A plan with no share set is the operator's alone (BR-SUBS-005).
+        self.assertEqual(view["usd"], {"total": "428.75", "operator": "328.75",
                                        "rates_as_of": "2026-11-27", "approximate": True})
         self.assertEqual([(row["currency"], row["monthly"]) for row in view["subscriptions"]],
                          [("GBP", "183.00"), ("USD", "200.00")])

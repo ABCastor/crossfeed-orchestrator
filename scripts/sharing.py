@@ -150,7 +150,7 @@ def _plan_lines(plan: dict[str, Any], share: dict[str, Any], me: bool) -> list[t
     here = "this Mac" if me else "my Mac"
     lines = [("plan", plan["name"])]
     if share["percent"] is None:
-        lines.append(("row", f"Share not set: {money(cur, plan['monthly'])} a month in all"))
+        lines.append(("row", f"Yours alone · {money(cur, plan['monthly'])} a month"))
     else:
         lines.append(("row", f"{share_fraction(share['percent'])} of {money(cur, plan['monthly'])} a month"
                              f" · {'mine' if me else 'yours'} {money(cur, share['monthly'])}"))

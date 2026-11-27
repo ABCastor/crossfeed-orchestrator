@@ -108,7 +108,7 @@ class Sharing(unittest.TestCase):
         self.assertEqual(owed["sam"], {"EUR": "68.00"})
         self.assertEqual(owed["alex"], {"USD": "5.00"})
         self.assertEqual(owed["me"], {"EUR": "62.00", "USD": "5.00"})   # d has no share, so it adds nothing to "owed"
-        self.assertIn("Share not set", sharing.card_text(model, "me"))
+        self.assertIn("Yours alone", sharing.card_text(model, "me"))  # BR-SUBS-005
 
     def test_unpriced_unavailable_and_unknown_person(self):
         self.assertEqual(sharing.build({"unavailable": True}, {}, NOW)["people"], [])

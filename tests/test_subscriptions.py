@@ -49,7 +49,7 @@ class SubscriptionTests(unittest.TestCase):
         ledger.save(self.path, ROSTER, 'antigravity', {'amount': '20', 'currency': 'USD', 'period': 'monthly'})
         data = ledger.view(self.path, ROSTER, {})
         self.assertEqual(data['monthly'], [{'currency': 'EUR', 'operator': '4.00', 'total': '10.00'},
-                                          {'currency': 'USD', 'operator': None, 'total': '20.00'}])
+                                          {'currency': 'USD', 'operator': '20.00', 'total': '20.00'}])  # BR-SUBS-005: no share set means the operator's alone
         self.assertEqual((data['unpriced'], data['unsplit']), (1, 1))
         rows = {row['id']: row for row in data['subscriptions']}
         self.assertEqual(rows['claude']['other_share_percent'], '60')

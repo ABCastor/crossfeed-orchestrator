@@ -436,9 +436,12 @@ def view(path: Path, roster: dict, overview: dict, *, state_dir: Path | None = N
         cost = Decimal(entry["amount"]) / PERIODS[entry["period"]]
         entry["monthly"] = _money(cost)
         totals.setdefault(currency, [Decimal(0), Decimal(0)])[0] += cost
+        # BR-SUBS-005: a plan with no share set belongs to the operator alone.
         if share is None:
             unsplit += 1
-            totals[currency][1] = None
+            entry["operator_monthly"] = _money(cost)
+            if totals[currency][1] is not None:
+                totals[currency][1] += cost
         else:
             contribution = cost * Decimal(share) / 100
             entry["operator_monthly"] = _money(contribution)
