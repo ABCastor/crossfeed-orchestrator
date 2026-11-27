@@ -1035,3 +1035,23 @@ details[open]:not(:is(.quota-explain,.efficient-effort)) > summary:not(:is(.pick
   .wb-ticket>.wb-advanced{margin-top:.9rem}
   .wb-wallet .lv{max-width:none}
 }
+
+/* Round 10 rhythm: one gap between the lines of a card's facts, links never touch their neighbours. */
+.wallet-extras:not(:empty){display:flex;flex-direction:column;align-items:flex-start;gap:.55rem}
+.wallet-extras>p,.wallet-extras>ul,.wallet-extras>details,.wallet-extras>form{margin:0;max-width:100%}
+.wallet-extras details>summary{padding:.2rem 0}
+.wallet-extras details[open]>summary{margin-bottom:.35rem}
+.wallet-extras .incident{align-self:stretch}
+.wallet-extras .wb-meta{color:var(--quiet)}
+.wb-cost a{margin-left:.8rem;white-space:nowrap}
+.wallet-extras>a{display:inline-block;padding:.35rem 0;margin-top:.15rem}
+.wb-ticket>.wb-plan{margin:.1rem 0 .55rem}
+.plan-meta{margin-left:.8rem;color:var(--quiet);font-weight:400}
+.setting-row.plan-row,.setting-row summary{display:flex;flex-wrap:wrap;gap:.2rem 0;align-items:baseline}
+.setting-row.plan-row{padding:.7rem 0}
+.us-head{gap:1rem}
+.us-action{display:inline-block;padding:.65rem 0}
+.us-head+.stamp,.us-head+.us-basis{margin-top:.5rem}
+.share-card+.share-card{margin-top:1.6rem}
+.share-actions{display:flex;flex-wrap:wrap;gap:.6rem .8rem;align-items:center;margin-top:.9rem}
+@media (max-width:640px){.wb-cost a{display:inline-block;margin-left:.6rem}}

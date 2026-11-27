@@ -79,6 +79,14 @@ class PlanPrices(unittest.TestCase):
         self.assertEqual(subscriptions._promo({"name": "X promo", "promo_until": "2027-02-14"}), (True, "2027-02"))
         self.assertEqual(subscriptions._promo({"name": "Plain", "price_source": "three months"}), (False, None))
 
+    def test_provider_cards_carry_the_price_the_promo_and_the_assumed_split(self):
+        overview = {"subscription_spend": subscriptions.view(self.path, ROSTER, {})}
+        prices = console._plan_prices(overview)
+        self.assertEqual((prices["claude"], prices["github-copilot-student"]), ("£183 a month", "Free"))
+        self.assertEqual(prices["antigravity-gemini"], "€5.50 a month · promo until Jan 2027")
+        self.assertIn("Shared with Edo · assumed 50/50 · <a", console._split_notes(overview)["codex"])
+        self.assertNotIn("claude", console._split_notes(overview))
+
     def test_free_plan_reads_free(self):
         self.assertEqual(console.plan_summary({"amount": "0.00", "currency": "USD", "period": "monthly"}), "Free")
 
