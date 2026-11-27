@@ -231,6 +231,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     }
 
     var reloadTimer: Timer?
+    /// A reset was just used: the row says so while the menu is open, and the next reading is taken when it closes.
+    var readAgainOnClose = false
 
     /// The reading interval is the operator's choice; the 20 s timer only moves countdowns.
     func scheduleReload() {
@@ -470,8 +472,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func useReset(_ key: String) {
         guard state.resetFlow?.key == key, state.resetFlow?.phase == .confirm else { return }
         state.resetFlow = ResetFlow(key: key, phase: .running)
-        guard config.fixture.isEmpty, !config.selftest else {
-            // A fixture is not an account: nothing is sent.
+        // A fixture is not an account: nothing is sent, unless the self test is given its own stand-in for fleetctl.
+        guard (config.fixture.isEmpty && !config.selftest) || (config.selftest && config.fleetctl.hasPrefix("/")) else {
             state.resetFlow = ResetFlow(key: key, phase: .failed("Fixture: nothing sent"))
             return
         }
@@ -481,7 +483,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             RunLoop.main.perform(inModes: [.common, .eventTracking]) {
                 guard let self, self.state.resetFlow?.key == key else { return }
                 switch outcome {
-                case .used(let left): self.state.resetFlow = ResetFlow(key: key, phase: .done(left)); self.reload()
+                case .used(let left):
+                    self.state.resetFlow = ResetFlow(key: key, phase: .done(left))
+                    if self.menuIsOpen { self.readAgainOnClose = true } else { self.reload() }
                 case .failed(let why): self.state.resetFlow = ResetFlow(key: key, phase: .failed(why))
                 }
             }
@@ -559,6 +563,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         state.addOpen = false
         state.policyOpen = false
         if state.resetFlow?.phase != .running { state.resetFlow = nil }
+        if readAgainOnClose { readAgainOnClose = false; reload() }
         // The menu opens on Overview every time.
         state.selected = Presenter.overviewID
         state.isReloading = false
@@ -673,6 +678,25 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
                 check("policy popup", click(.policyOpen, real: true) && self.state.policyOpen)
             }
             settle()
+        }
+        step { settle() }
+        step { // with a stand-in fleetctl: ask again, confirm, and the row reports what it printed
+            guard self.config.fleetctl.hasPrefix("/"), let reset = self.state.presenter?.providerPage(for: self.state.current, show: .used)?.resets.first(where: \.canUse) else { return }
+            check("asks again", click(.resetAsk(reset.id), real: true))
+            settle()
+        }
+        step { settle() }
+        step {
+            guard self.config.fleetctl.hasPrefix("/"), let flow = self.state.resetFlow else { return }
+            check("Use runs it", click(.resetUse(flow.key), real: true))
+        }
+        step { settle() }
+        step {
+            if self.config.fleetctl.hasPrefix("/") {
+                check("reset reported: \(String(describing: self.state.resetFlow))", self.state.resetFlow?.phase == .done(0))
+                self.state.resetFlow = nil
+                check("a refusal is shown in plain words, no retry", ResetRunner.run(self.config, key: "claude-weekly-scoped-fable") == .failed("Anthropic did not accept the reset (HTTP 429)"))
+            }
         }
         step { settle() }
         step {

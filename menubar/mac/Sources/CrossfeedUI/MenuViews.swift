@@ -422,7 +422,7 @@ struct OverviewHeader: View {
             HeaderButton(symbol: "arrow.clockwise", label: state.isReloading ? "Updating" : "Refresh now", control: .refresh, state: state)
             HeaderButton(symbol: "slider.horizontal.3", label: "Settings", control: .settings, state: state)
         }
-        .padding(.leading, 16).padding(.trailing, 10).padding(.top, 8).padding(.bottom, 8)
+        .padding(.leading, 16).padding(.trailing, 10).padding(.top, 4).padding(.bottom, 8)
     }
 }
 
@@ -453,7 +453,7 @@ struct ProviderHeader: View {
                 HeaderButton(symbol: "slider.horizontal.3", label: "Settings", control: .settings, state: state)
                     .padding(.trailing, -6)
             }
-            .padding(.top, 2)
+            .padding(.top, 9)
             if let incident = page.incident {
                 HStack(alignment: .top, spacing: 7) {
                     Circle().fill(CF.human).frame(width: 6, height: 6).padding(.top, 5)
@@ -465,7 +465,7 @@ struct ProviderHeader: View {
                 .accessibilityElement(children: .combine)
             }
         }
-        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 10)
+        .padding(.horizontal, 16).padding(.top, 1).padding(.bottom, 10)
     }
 }
 
@@ -519,7 +519,7 @@ struct ProviderTile: View {
                 }
                 Text(tab.title).font(CF.face(10, isSelected ? .semibold : .medium)).lineLimit(1).fixedSize()
             }
-            .foregroundStyle(isSelected ? CF.machineText : CF.quiet)
+            .foregroundStyle(isSelected ? CF.machineText : CF.ink)
             .padding(.horizontal, 3).padding(.top, 6).frame(height: 44, alignment: .top)
             .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? CF.tile : (hovering ? CF.hover : Color.clear)))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isSelected ? CF.tileEdge : Color.clear, lineWidth: 0.5))
