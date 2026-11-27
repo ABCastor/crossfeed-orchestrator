@@ -204,7 +204,11 @@ def pace_rows(pools: list[dict[str, Any]], title: Callable[[dict[str, Any]], str
                 f'{bar(used, elapsed)}'
                 f'<span class="num pc">{used:g}%</span><small>{html.escape(" · ".join(filter(None, [reset, words])))}</small></li>')
         if items:
-            groups.append(f'<section class="us-pace pv pv-{brand(pool["pool"])}"><h3>{html.escape(title(pool))}</h3><ul>{"".join(items)}</ul></section>')
+            anchor = html.escape(str(pool["pool"]), quote=True)
+            # The menu's AGY tab links to #antigravity: the first antigravity-* section answers it too.
+            family = "antigravity" if str(pool["pool"]).startswith("antigravity") else None
+            alias = f'<span id="{family}"></span>' if family and not any(f'id="{family}"' in g for g in groups) else ""
+            groups.append(f'<section class="us-pace pv pv-{brand(pool["pool"])}" id="{anchor}">{alias}<h3>{html.escape(title(pool))}</h3><ul>{"".join(items)}</ul></section>')
     return ''.join(groups) + ('<p class="us-note">The tick is how much of the window has passed; a fill beyond it is running ahead of an even pace.</p>'
                               if groups else '')
 

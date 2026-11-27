@@ -44,6 +44,7 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 ASSETS = HERE / "console-assets"
+LOGIN_NEXT = {"/", "/usage", "/share", "/settings", "/benchmarks"}
 COOKIE = "console_session"
 
 _spec = importlib.util.spec_from_file_location("fleetctl", HERE / "fleetctl.py")
@@ -2771,7 +2772,10 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                                  "Start the console again for a fresh one.")
                     return
                 cookie = f"{COOKIE}={console.session}; HttpOnly; SameSite=Strict; Path=/"
-                self._redirect("/", {"Set-Cookie": cookie})
+                # The menu links straight to a page; only known local pages, never another host.
+                # The link's #fragment stays on the browser side and carries over the redirect.
+                after = urllib.parse.parse_qs(url.query).get("next", ["/"])[0]
+                self._redirect(after if after in LOGIN_NEXT else "/", {"Set-Cookie": cookie})
                 return
             if url.path.startswith("/static/"):
                 self._static(url.path[len("/static/"):])

@@ -166,6 +166,13 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("SameSite=Strict", cookie)
         self.assertNotIn(self.app.login_key, cookie)
 
+    def test_login_follows_next_only_to_a_local_page(self):
+        # Round 10: the menu's "Usage and cost" row signs in and lands on /usage.
+        for target, landing in (("/usage", "/usage"), ("/share", "/share"),
+                                ("https://evil.example/", "/"), ("//evil.example", "/"), ("/static/x", "/")):
+            response, _ = self.request("GET", f"/login?key={self.app.login_key}&next={urllib.parse.quote(target, safe='')}")
+            self.assertEqual((response.status, response.getheader("Location")), (303, landing), target)
+
     def test_a_wrong_key_signs_nobody_in(self):
         response, _ = self.request("GET", "/login?key=guess")
         self.assertEqual(response.status, 403)
