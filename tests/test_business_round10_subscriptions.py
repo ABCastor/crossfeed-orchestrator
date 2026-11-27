@@ -93,3 +93,17 @@ class PlanPrices(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TraySummaryPlansTest(unittest.TestCase):
+    """The menu lists each plan's price, not only totals (round 10: 'why does it say no prices yet?')."""
+
+    def test_tray_summary_lists_each_plan(self):
+        ledger = {"subscriptions": [{"id": "claude", "name": "Claude Max 20x", "amount": "183", "currency": "GBP",
+                                     "period": "monthly", "source": "default", "pools": ["claude"]}],
+                  "monthly": [{"currency": "GBP", "total": "183.00", "operator": None}],
+                  "unpriced": 0, "unsplit": 1, "unavailable": False}
+        tray = subscriptions.tray_summary(ledger)
+        self.assertEqual(tray["plans"], [{"id": "claude", "name": "Claude Max 20x", "amount": "183",
+                                          "currency": "GBP", "period": "monthly", "source": "default"}])
+        self.assertEqual(tray["monthly"], ledger["monthly"])

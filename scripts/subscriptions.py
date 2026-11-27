@@ -294,4 +294,8 @@ def view(path: Path, roster: dict, overview: dict) -> dict:
 
 
 def tray_summary(ledger: dict) -> dict:
-    return {key: ledger[key] for key in ("monthly", "unpriced", "unsplit", "unavailable")}
+    """Totals plus one line per plan, so the menu can say "Claude Max 20x · £183/mo"."""
+    plans = [{"id": e["id"], "name": e.get("name") or e["id"], "amount": e.get("amount"),
+              "currency": e.get("currency"), "period": e.get("period"), "source": e.get("source")}
+             for e in ledger.get("subscriptions", [])]
+    return {**{key: ledger[key] for key in ("monthly", "unpriced", "unsplit", "unavailable")}, "plans": plans}
