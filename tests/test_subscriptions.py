@@ -101,9 +101,14 @@ class SubscriptionTests(unittest.TestCase):
         self.assertTrue(pool['measured'])
         self.assertIsNone(pool['used_percent'])
         self.assertIn('limits', pool)
-        self.assertEqual(body['subscription_spend'], {
+        spend = dict(body['subscription_spend'])
+        plans = spend.pop('plans')  # round 10: one line per plan for the menu, never a payer's name or share
+        self.assertEqual(spend, {
             'monthly': [{'currency': 'EUR', 'operator': '6.15', 'total': '12.30'}],
             'unpriced': 2, 'unsplit': 0, 'unavailable': False})
+        self.assertTrue(plans)
+        for plan in plans:
+            self.assertEqual(set(plan), {'id', 'name', 'amount', 'currency', 'period', 'source'})
 
     def test_console_write_requires_session_origin_and_form_token(self):
         app = console.Console(self.overlay, self.root, 0)
