@@ -6643,6 +6643,15 @@ def build_parser() -> argparse.ArgumentParser:
     glance.add_argument("--plugin", help="menu-bar plugin path, for its own 'read again' item")
     glance.add_argument("--no-refresh", action="store_true", help=refresh_help)
 
+    use_reset = sub.add_parser(
+        "use-reset",
+        help="use one Claude limit-reset grant: say which one, and send the single claim only with --yes")
+    use_reset.add_argument("pool", choices=("claude",), help="the pool whose reset grants to use")
+    use_reset.add_argument("--key", required=True,
+                           help="the grant's handle: the first window it clears, as glance's limit_resets show it")
+    use_reset.add_argument("--yes", action="store_true", help="actually use the reset; without this nothing is sent")
+    use_reset.add_argument("--json", action="store_true", help="print the outcome as JSON, for the menu")
+
     console = sub.add_parser("console", help="open the local console page (127.0.0.1 only, signed-in link)")
     console.add_argument("--port", type=int, default=8768, help="preferred port; the next free one is used if taken")
     console.add_argument("--no-open", action="store_true", help="print the sign-in link instead of opening a browser")
@@ -6668,8 +6677,78 @@ def menubar_renderer():
     return renderer
 
 
-def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None) -> dict:
-    ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview)
+def _claude_grant_for_key(payload: dict, key: str) -> dict | None:
+    """The one grant a handle names, from an answer this command just read. Never printed."""
+    return next((row for row in native_usage.claude_claim_grants(payload) if row.get("key") == key), None)
+
+
+def use_reset_command(args, state_dir: Path) -> int:
+    """One Claude limit-reset grant, chosen by its handle: say which, and only --yes spends it (BR-QUOTA-003)."""
+    def say(payload: dict) -> None:
+        if args.json:
+            print(json.dumps(payload, sort_keys=True))
+        elif payload.get("ok"):
+            print(f"Used: {payload['label']}. Left: {payload['left']}")
+        else:
+            print("fleetctl: " + payload["error"], file=sys.stderr)
+
+    def stop(error: str, **shown) -> int:
+        say({"ok": False, "pool": args.pool, "key": args.key, "label": shown.get("label"),
+             "left": shown.get("left"), "sent": bool(shown.get("sent")), "error": error})
+        return 1
+
+    answer, error = native_usage.claude_usage_document()
+    if error:
+        return stop(error)
+    grant = _claude_grant_for_key(answer, args.key)
+    if grant is None:
+        return stop(f"no limit reset with the key {args.key} in the current reading")
+    if not args.yes:
+        # Saying which one is free; the claim itself is the operator's.
+        if args.json:
+            print(json.dumps({"ok": True, "pool": args.pool, "key": grant["key"], "label": grant["label"],
+                              "left": grant["left"], "total": grant["total"], "sent": False,
+                              "would_use": True}, sort_keys=True))
+        else:
+            print(f"Would use: {grant['label']}. Left: {grant['left']} (add --yes to use it)")
+        return 0
+    answer, error = native_usage.claude_usage_document()   # a fresh answer, then exactly one claim
+    if error:
+        return stop(error)
+    grant = _claude_grant_for_key(answer, args.key)
+    if grant is None:
+        return stop(f"no limit reset with the key {args.key} in the fresh reading; nothing was sent")
+    if not grant.get("grant_id"):
+        return stop("that limit reset carries no id to claim", label=grant["label"])
+    token, _plan, unavailable = native_usage.claude_token()
+    if unavailable:
+        return stop(str(unavailable.get("reason") or "no usable Claude Code sign-in"))
+    organization = native_usage.claude_organization_uuid()
+    if not organization:
+        return stop("Claude Code's config names no organization for this sign-in")
+    status, _body = native_usage.post_claude_reset_claim(
+        grant["grant_id"], organization, token, native_usage.claude_reset_request_id())
+    if status is None:
+        return stop("the reset request could not be sent", label=grant["label"])
+    if not 200 <= status < 300:
+        return stop(f"Anthropic did not accept the reset (HTTP {status})", label=grant["label"])
+    after, error = native_usage.claude_usage_document()
+    left = None
+    if after is not None:
+        remaining = next((row for row in native_usage.claude_claim_grants(after)
+                          if row.get("grant_id") == grant["grant_id"]), None)
+        left = None if remaining is None else remaining["left"]
+    if left is None or left < grant["left"]:
+        say({"ok": True, "pool": args.pool, "key": grant["key"], "label": grant["label"],
+             "left": 0 if left is None else left, "total": grant["total"], "sent": True, "error": None})
+        return 0
+    return stop(f"the reset was sent but {grant['label']} still shows {left} left",
+                label=grant["label"], left=left, sent=True)
+
+
+def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None,
+                   state_dir: Path | None = None) -> dict:
+    ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview, state_dir=state_dir)
     payload = menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
     payload["subscriptions"] = overview.get("subscriptions", [])
     pools = {pool["pool"]: pool for pool in overview["pools"]}
@@ -6682,7 +6761,7 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
         row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "per_model",
                                                "per_model_error", "account_usage", "reading_age_s", "reading_source",
                                                "reading_observed_at", "reading_stale", "reading_origin", "reading_origin_fetched_at",
-                                               "last_observed_windows",
+                                               "last_observed_windows", "tokens",
                                                "incident", "billing", "billing_error", "model_quota")
                     if key in pool})
         if pool.get("resets"):  # the reset rows beside the shipped reset clock, never over it
@@ -6828,6 +6907,8 @@ def main() -> int:
             refresh(quota_sources(usage_roster), usage_roster)
             show_usage(state_dir, args.db.expanduser(), args.json, usage_roster, refresh_extras=not args.no_refresh)
             return 0
+        if args.command == "use-reset":
+            return use_reset_command(args, state_dir)
         if args.command == "snapshot":
             for value in (args.rolling_used, args.weekly_used, args.monthly_used):
                 if value < 0 or value > 100:
@@ -7021,8 +7102,11 @@ def main() -> int:
             runtime = load_json(state_dir / "runtime.json", {}) or {}
             overview = fleet_overview(roster, runtime, state_dir, refresh_extras=not args.no_refresh)
             lead = resolve_lead_pool(roster, args.lead)
+            # The day's reference rates for the USD total: once a day, off any page-render path.
+            if not args.no_refresh and not auto_refresh_disabled():
+                subscriptions.refresh_fx(state_dir)
             if args.format == "json":
-                print(json.dumps(glance_payload(args.overlay, roster, overview, lead), indent=2, sort_keys=True))
+                print(json.dumps(glance_payload(args.overlay, roster, overview, lead, state_dir), indent=2, sort_keys=True))
             elif args.format == "swiftbar":
                 sys.stdout.write(menubar_renderer().swiftbar(overview, lead, args.plugin))
             else:

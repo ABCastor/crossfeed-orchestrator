@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import http.client
 import json
+import math
 import os
 import re
 import stat
 import tempfile
+import urllib.request
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
+from typing import Any
 
 SCHEMA = 1
 PERIODS = {"monthly": Decimal(1), "yearly": Decimal(12)}
@@ -59,16 +63,20 @@ def _price_defaults(plan: dict) -> dict:
     return {"amount": amount, "currency": currency.strip().upper(), "period": "monthly"}
 
 
-def _share_defaults(plan: dict) -> dict:
+def _share_defaults(plan: dict) -> tuple[dict, str | None]:
+    """A split counts as confirmed only when the plan names both the share and the other payer."""
     other = plan.get("other_payer")
-    if not isinstance(other, str):
+    share = plan.get("operator_share_percent")
+    named = isinstance(share, (int, float, str)) and not isinstance(share, bool)
+    if not isinstance(other, str) or not other.strip():
         found = re.search(r"\bshared with ([A-Z][\w-]{0,30})", str(plan.get("name") or "") + " " + str(plan.get("price_source") or ""))
         other = found.group(1) if found else None
+        named = False
     if not other:
-        return dict.fromkeys(SHARE)
-    share = plan.get("operator_share_percent")
-    return {"operator_share_percent": str(share) if isinstance(share, (int, float, str)) and not isinstance(share, bool)
-            else ASSUMED_SHARE, "other_payer": other.strip()}
+        return dict.fromkeys(SHARE), None
+    # BR-SUBS-003: a split the overlay states is the operator's, not a default to change.
+    return ({"operator_share_percent": str(share) if named else ASSUMED_SHARE, "other_payer": other.strip()},
+            "overlay" if named else "default")
 
 
 def path_for(overlay: Path) -> Path:
@@ -90,8 +98,10 @@ def defaults(roster: dict) -> dict[str, dict]:
         name = plan.get("name") or config.get("label") or pool
         if key not in plans or pool == "antigravity-gemini":
             members = plans.get(key, {}).get("pools", [])
+            share, share_source = _share_defaults(plan)
             plans[key] = {"id": key, "name": str(name), "pools": members,
-                          "defaults": {**_price_defaults(plan), **_share_defaults(plan)},
+                          "defaults": {**_price_defaults(plan), **share},
+                          "share_source": share_source,
                           "promo": _promo(plan)[0], "promo_until": _promo(plan)[1],
                           "free": _price_defaults(plan)["amount"] == "0.00", **dict.fromkeys(FIELDS)}
         plans[key]["pools"].append(pool)
@@ -180,7 +190,7 @@ def _active(plans: dict[str, dict], saved: dict[str, dict]) -> list[dict]:
                 row[name] = base[name]
         row["source"] = "operator" if priced else "default" if row["amount"] is not None else None
         row["share_source"] = ("operator" if mine["operator_share_percent"] is not None else
-                               "default" if row["operator_share_percent"] is not None else None)
+                               plan.get("share_source") if row["operator_share_percent"] is not None else None)
         row["promo_until"] = plan.get("promo_until")
         rows.append(row)
     return rows
@@ -230,6 +240,151 @@ def _money(n: Decimal) -> str:
     return str(n.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+# BR-SUBS-004: one USD total, at ECB reference rates, fetched at most once a day.
+FX_URL = "https://api.frankfurter.dev/v1/latest?base=USD"
+FX_CACHE = "fx-rates.json"
+FX_TTL_S = 86400
+FX_TIMEOUT_S = 4
+FX_MAX_BYTES = 64 * 1024
+
+
+FX_ENV = "FLEET_FX_RATES"  # a fixed {"as_of", "rates"} document: keeps an offline or test host off the network
+
+
+def _fx_fetch(timeout: float = FX_TIMEOUT_S) -> dict[str, Any] | None:
+    """Today's USD reference rates from Frankfurter (ECB), or None. No key, no identifier sent."""
+    override = os.environ.get(FX_ENV)
+    if override:
+        try:
+            fixed = json.loads(override)
+        except ValueError:
+            return None
+        return _fx_checked(fixed)
+    request = urllib.request.Request(FX_URL, headers={"Accept": "application/json",
+                                                      "User-Agent": "crossfeed-orchestrator/1.0"})
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=timeout) as response:
+            payload = json.loads(response.read(FX_MAX_BYTES))
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if not isinstance(payload, dict) or (payload.get("base") not in (None, "USD")):
+        return None
+    return _fx_checked({**payload, "as_of": payload.get("as_of") or payload.get("date")})
+
+
+def _fx_checked(payload: Any) -> dict[str, Any] | None:
+    """A rates document checked: {as_of: YYYY-MM-DD, rates: {CODE: units per USD}} or None."""
+    if not isinstance(payload, dict):
+        return None
+    rates = {str(code).upper(): rate for code, rate in (payload.get("rates") or {}).items()
+             if isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate > 0}
+    as_of = payload.get("as_of")
+    if not rates or not isinstance(as_of, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", as_of):
+        return None
+    return {"as_of": as_of, "base": "USD", "rates": rates}
+
+
+def _fx_cache(path: Path) -> dict[str, Any] | None:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    rates = (doc or {}).get("rates") if isinstance(doc, dict) else None
+    as_of = (doc or {}).get("as_of") if isinstance(doc, dict) else None
+    if not isinstance(rates, dict) or not isinstance(as_of, str):
+        return None
+    kept = {str(code).upper(): rate for code, rate in rates.items()
+            if isinstance(rate, (int, float)) and not isinstance(rate, bool) and rate > 0}
+    return {"as_of": as_of, "base": "USD", "rates": kept} if kept else None
+
+
+def _fx_write(path: Path, doc: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".fx-rates-")
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(doc, handle, sort_keys=True)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    except OSError:
+        pass
+
+
+def fx_rates(state_dir: Path | None, now: dt.datetime | None = None,
+             fetch: Any = None) -> tuple[dict[str, float], str | None]:
+    """({currency: units per USD}, as_of) from the saved copy alone, or from an injected fetch.
+
+    A page render never waits on the network: only an explicit fetch (a test's, or
+    `refresh_fx` on the refresh path) can reach the reference feed.
+    """
+    if state_dir is None:
+        return {}, None
+    path = Path(state_dir).expanduser() / FX_CACHE
+    saved = _fx_cache(path)
+    today = (now or dt.datetime.now(dt.timezone.utc)).date().isoformat()
+    if saved and saved["as_of"] >= today:
+        return saved["rates"], saved["as_of"]
+    if fetch is not None:
+        fresh = fetch()
+        if fresh:
+            _fx_write(path, fresh)
+            return fresh["rates"], fresh["as_of"]
+    return (saved["rates"], saved["as_of"]) if saved else ({}, None)
+
+
+def refresh_fx(state_dir: Path | None, now: dt.datetime | None = None, fetch: Any = None) -> bool:
+    """Fetch the day's rates unless the saved copy is today's. One request at most; True when it wrote."""
+    if state_dir is None:
+        return False
+    path = Path(state_dir).expanduser() / FX_CACHE
+    today = (now or dt.datetime.now(dt.timezone.utc)).date().isoformat()
+    saved = _fx_cache(path)
+    if saved and saved["as_of"] >= today:
+        return False
+    fresh = (fetch or _fx_fetch)()
+    if not fresh:
+        return False
+    _fx_write(path, fresh)
+    return True
+
+
+def _rate(rates: dict[str, float], code: str | None) -> Decimal | None:
+    if code == "USD":
+        return Decimal(1)
+    value = rates.get(code or "")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        return None
+    return Decimal(str(value))
+
+
+def _usd_total(entries: list[dict], rates: dict[str, float], as_of: str | None) -> dict[str, Any] | None:
+    """One USD total and the operator's share of it; nothing when any priced plan lacks a rate."""
+    total = own = Decimal(0)
+    seen = False
+    unknown_own = False
+    for entry in entries:
+        if entry.get("monthly") is None:
+            continue
+        rate = _rate(rates, entry.get("currency"))
+        if rate is None:
+            return None
+        seen = True
+        total += Decimal(entry["monthly"]) / rate
+        if entry.get("operator_monthly") is None:
+            unknown_own = True
+        else:
+            own += Decimal(entry["operator_monthly"]) / rate
+    if not seen:
+        return None
+    return {"total": _money(total), "operator": None if unknown_own else _money(own),
+            "rates_as_of": as_of, "approximate": True}
+
+
 def _values(roster: dict, overview: dict) -> dict[str, dict]:
     configs = roster.get("quota_pools") or {}
     result = {}
@@ -255,7 +410,9 @@ def _values(roster: dict, overview: dict) -> dict[str, dict]:
     return result
 
 
-def view(path: Path, roster: dict, overview: dict) -> dict:
+def view(path: Path, roster: dict, overview: dict, *, state_dir: Path | None = None,
+         now: dt.datetime | None = None, fetch: Any = None) -> dict:
+    """The ledger for a page or a menu. Rates come from the saved copy; `fetch` is a test's seam."""
     try:
         entries = _active(defaults(roster), _read(path))
     except (OSError, ValueError, RecursionError):
@@ -290,12 +447,44 @@ def view(path: Path, roster: dict, overview: dict) -> dict:
     return {"subscriptions": entries, "free": free_plans(roster), "monthly": [
         {"currency": currency, "total": _money(total), "operator": _money(own) if own is not None else None}
         for currency, (total, own) in sorted(totals.items())
-    ], "unpriced": unpriced, "unsplit": unsplit, "unavailable": False}
+    ], "unpriced": unpriced, "unsplit": unsplit, "unavailable": False, **_usd_view(entries, state_dir, now, fetch)}
+
+
+def _usd_view(entries: list[dict], state_dir: Path | None, now: dt.datetime | None,
+              fetch: Any) -> dict[str, Any]:
+    """The one USD total for the ledger, omitted when no rate is known (BR-SUBS-004)."""
+    priced = [entry for entry in entries if entry.get("monthly") is not None]
+    if not priced:
+        return {}
+    rates, as_of = fx_rates(state_dir, now=now, fetch=fetch)
+    if not rates and not all(entry.get("currency") == "USD" for entry in priced):
+        return {}
+    block = _usd_total(priced, rates, as_of or (now or dt.datetime.now(dt.timezone.utc)).date().isoformat())
+    return {"usd": block} if block else {}
 
 
 def tray_summary(ledger: dict) -> dict:
     """Totals plus one line per plan, so the menu can say "Claude Max 20x · £183/mo"."""
     plans = [{"id": e["id"], "name": e.get("name") or e["id"], "amount": e.get("amount"),
-              "currency": e.get("currency"), "period": e.get("period"), "source": e.get("source")}
+              "currency": e.get("currency"), "period": e.get("period"), "source": e.get("source"),
+              "share": share_fraction(e.get("operator_share_percent")), "operator_amount": e.get("operator_monthly")}
              for e in ledger.get("subscriptions", [])]
-    return {**{key: ledger[key] for key in ("monthly", "unpriced", "unsplit", "unavailable")}, "plans": plans}
+    out = {**{key: ledger[key] for key in ("monthly", "unpriced", "unsplit", "unavailable")}, "plans": plans}
+    if ledger.get("usd"):
+        out["usd"] = ledger["usd"]
+    return out
+
+
+def share_fraction(value: Any) -> str | None:
+    """The operator's part of a split as a reduced fraction: 50 -> "1/2", 60 -> "3/5", none -> null."""
+    if value is None:
+        return None
+    try:
+        part = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not part.is_finite() or not 0 <= part <= 100:
+        return None
+    hundredths = int((part * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    divisor = math.gcd(hundredths, 10_000)
+    return f"{hundredths // divisor}/{10_000 // divisor}"

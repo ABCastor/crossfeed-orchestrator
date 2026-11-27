@@ -1161,6 +1161,46 @@ def _reserve_waiver(roster, runtime, state_dir, role, pressure, fleet, kwargs) -
 
 
 # BR-SELECT-002, BR-SELECT-003, BR-SELECT-004, BR-SELECT-006
+# BR-SELECT-012
+def _forced_pool_models(roster: dict, runtime: dict, scored: list[dict], fleet: Any,
+                        rejected: list[str]) -> list[dict]:
+    """A pool at Max runs its own smartest model for everything, whatever it costs.
+
+    The operator's Max means the model with the highest estimated success for this role and
+    difficulty; price never enters that choice, so a cheap model cannot win it. Ties go to the
+    newer model, in the roster's own card order. Effort still follows the job (BR-SELECT-011),
+    and every other pool is untouched.
+    """
+    by_pool: dict[str, list[dict]] = {}
+    for item in scored:
+        by_pool.setdefault(item["pool"], []).append(item)
+    best: dict[str, str] = {}
+    orders: dict[str, dict[str, int]] = {}
+    for pool, items in by_pool.items():
+        if fleet.pool_level(runtime, pool) != "forced":
+            continue
+        orders[pool] = {model: index for index, model in enumerate(fleet.model_order(roster, pool))}
+        models: dict[str, list[dict]] = {}
+        for item in items:
+            models.setdefault(item.get("model_identity") or item["model_key"], []).append(item)
+
+        def rank(model: str) -> tuple[float, int, str]:
+            members = models[model]
+            newer = min(orders[pool].get(item["model_key"], len(orders[pool])) for item in members)
+            return -max(float(item.get("p_success") or 0.0) for item in members), newer, model
+
+        best[pool] = min(models, key=rank)
+    kept = []
+    for item in scored:
+        winner = best.get(item["pool"])
+        model = item.get("model_identity") or item["model_key"]
+        if winner is not None and model != winner:
+            rejected.append(f"{item['model_key']}/{item['level']}: {item['pool']} is at Max, which runs {winner} for every job")
+            continue
+        kept.append(item)
+    return kept
+
+
 def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
                   stakes: str = "normal", family: str | None = None,
                   exclude_lineage: str | None = None, mode: str | None = None,
@@ -1421,6 +1461,7 @@ def select_option(roster: dict, runtime: dict, state_dir: Path, role: str, *,
             rejected.append(f"{item['model_key']}/{item['level']}: unknown cell dominated by measured equal-mean option")
     scored = [item for item in scored if not (item["q"]["unknown"] and item["q"]["mean"] in measured_means
                                              and not (item.get("pro_fallback") or item.get("hard_reasoning_opus")))]
+    scored = _forced_pool_models(roster, runtime, scored, fleet, rejected)
     if not scored:
         raise fleet.FleetError("no eligible selector option: " + "; ".join(rejected))
     exploration_cap = _number(policy.get("exploration_cap", rating_explore.DEFAULT_EXPLORATION_CAP))

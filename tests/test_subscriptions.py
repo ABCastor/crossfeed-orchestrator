@@ -1,6 +1,7 @@
 """Private ledger, signed write path and the tray's public JSON contract."""
 import http.client
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -89,8 +90,12 @@ class SubscriptionTests(unittest.TestCase):
                                                    'operator_share_percent': '50', 'other_payer': 'fixture-person'})
         cmd = [sys.executable, str(ROOT / 'scripts/fleetctl.py'), '--overlay', str(self.overlay),
                '--state-dir', str(self.root), 'glance', '--no-refresh']
+        # BR-SUBS-004: a saved rates file. The glance reads it and never reaches the network.
+        today = ledger.dt.datetime.now(ledger.dt.timezone.utc).date().isoformat()
+        (self.root / "fx-rates.json").write_text(json.dumps({"as_of": today, "base": "USD",
+                                                            "rates": {"EUR": 0.9}}))
         raw = subprocess.check_output([*cmd, '--json'], text=True)
-        self.assertEqual(json.loads(raw), json.loads(subprocess.check_output([*cmd, '--format', 'json'])))
+        self.assertEqual(json.loads(raw), json.loads(subprocess.check_output([*cmd, '--format', 'json'], text=True)))
         self.assertNotIn('fixture-person', raw)
         body = json.loads(raw)
         self.assertEqual(set(body), {'schema', 'title', 'pools', 'readings', 'reading_origin', 'subscription_spend', 'subscriptions'})
@@ -105,10 +110,12 @@ class SubscriptionTests(unittest.TestCase):
         plans = spend.pop('plans')  # round 10: one line per plan for the menu, never a payer's name or share
         self.assertEqual(spend, {
             'monthly': [{'currency': 'EUR', 'operator': '6.15', 'total': '12.30'}],
-            'unpriced': 2, 'unsplit': 0, 'unavailable': False})
+            'unpriced': 2, 'unsplit': 0, 'unavailable': False,
+            'usd': {'total': '13.67', 'operator': '6.83', 'rates_as_of': today, 'approximate': True}})
         self.assertTrue(plans)
         for plan in plans:
-            self.assertEqual(set(plan), {'id', 'name', 'amount', 'currency', 'period', 'source'})
+            self.assertEqual(set(plan), {'id', 'name', 'amount', 'currency', 'period', 'source', 'share',
+                                         'operator_amount'})
 
     def test_console_write_requires_session_origin_and_form_token(self):
         app = console.Console(self.overlay, self.root, 0)

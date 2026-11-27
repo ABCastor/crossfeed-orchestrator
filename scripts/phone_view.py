@@ -50,7 +50,7 @@ def cached_snapshot(fleet, overlay: Path, state: Path) -> dict:
     roster = fleet.read_overlay(overlay, state, discover=False)
     runtime = fleet.load_json(state / 'runtime.json', {}) or {}
     overview = fleet.fleet_overview(roster, runtime, state)
-    return fleet.glance_payload(overlay, roster, overview, fleet.resolve_lead_pool(roster, None))
+    return fleet.glance_payload(overlay, roster, overview, fleet.resolve_lead_pool(roster, None), state)
 
 
 def cached_share(fleet, overlay: Path, state: Path) -> dict:
@@ -59,7 +59,7 @@ def cached_share(fleet, overlay: Path, state: Path) -> dict:
     roster = fleet.read_overlay(overlay, state, discover=False)
     runtime = fleet.load_json(state / 'runtime.json', {}) or {}
     overview = fleet.fleet_overview(roster, runtime, state, refresh_extras=False)
-    ledger = fleet.subscriptions.view(fleet.subscriptions.path_for(overlay), roster, overview)
+    ledger = fleet.subscriptions.view(fleet.subscriptions.path_for(overlay), roster, overview, state_dir=state)
     return sharing.build(ledger, overview, time.time())
 
 
@@ -116,6 +116,10 @@ def render(snapshot: dict) -> str:
             own = html.escape(f'{row["currency"]} {row["operator"]}') if row['operator'] is not None else 'not set'
             out.append(f'<li><strong>{total}</strong><small>Your share: {own}</small></li>')
         out.append('</ul>')
+        if (usd := spend.get('usd')):
+            own = f' · yours ${usd["operator"]}' if usd.get('operator') is not None else ''
+            out.append(f'<p>≈ ${html.escape(usd["total"])} a month{html.escape(own)}'
+                       f' · rates {html.escape(usd["rates_as_of"])}</p>')
         if spend['unpriced']:
             out.append(f'<p>Partial total · {spend["unpriced"]} without a price</p>')
         out.append('<p><a class="go" href="share">Share costs</a></p>')
@@ -242,7 +246,13 @@ def main() -> int:
         login = operator_login(cfg.config.expanduser())
         view = lambda: cached_snapshot(fleetctl, overlay, state)
         cards = lambda: cached_share(fleetctl, overlay, state)
-        shared = lambda: mac_readings.export(state)
+        def shared():
+            # The token block is a nicety: an unreadable overlay shares the readings without it.
+            try:
+                roster = fleetctl.read_overlay(overlay, state, discover=False)
+            except (ValueError, OSError):
+                roster = None
+            return mac_readings.export(state, roster=roster)
         server = (open_loopback_server(cfg.loopback_port, login, view, cards, shared) if cfg.loopback_port
                   else open_server(cfg.socket, login, view, cards, shared))
     except (ValueError, OSError, RecursionError):

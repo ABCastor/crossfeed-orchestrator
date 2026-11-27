@@ -167,7 +167,7 @@ class ShareTests(unittest.TestCase):
                 self.assertEqual(body.count('<script>'), 1)
                 self.assertIn(f'<script>{phone.SHARE_SCRIPT}</script>', body)
                 self.assertIn('Sam', body)
-                self.assertIn('Your share 50% of €100.00 a month: €50.00', body)
+                self.assertIn('½ of €100.00 a month · yours €50.00', body)
                 self.assertIn('Claude &lt;Max&gt;', body)
                 self.assertNotIn('<Max>', body)
                 self.assertIn('data-share="card-sam"', body)

@@ -46,7 +46,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from pathlib import Path
 from typing import Any, Callable
 
@@ -168,6 +168,26 @@ def _http_get(url: str, headers: dict[str, str], timeout: float,
               opener: Callable[..., Any] | None) -> tuple[int, str]:
     """(status, body). Exceptions other than HTTP errors propagate for the caller's fixed message."""
     request = urllib.request.Request(url, method="GET", headers=headers)
+    open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
+    try:
+        with open_url(request, timeout=timeout) as response:
+            return int(getattr(response, "status", 200) or 200), \
+                response.read(MAX_BODY_BYTES + 1).decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        try:
+            body = error.read(4001).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            body = ""
+        finally:
+            error.close()
+        return int(error.code), body
+
+
+def _http_post(url: str, headers: dict[str, str], payload: bytes, timeout: float,
+               opener: Callable[..., Any] | None) -> tuple[int, str]:
+    """(status, body) for one POST. Exceptions propagate to the caller's fixed message, because a
+    traceback can carry the URL."""
+    request = urllib.request.Request(url, data=payload, method="POST", headers=headers)
     open_url = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open
     try:
         with open_url(request, timeout=timeout) as response:
@@ -677,7 +697,11 @@ CLAUDE_GRANT_KIND = "claude_grant"
 CLAUDE_GRANT_WINDOW_NAMES = {"seven_day": "weekly", "five_hour": "session"}
 CLAUDE_GRANT_SCOPED_KEY = "seven_day_overage_included"
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
-CLAUDE_LIMIT_KINDS = {"session": ("session", 300, "Session"), "weekly_all": ("weekly", 10080, "Weekly")}
+# A plan may report a five-hour session limit ("session", or "five_hour" in older answers) and a
+# weekly one. A verified Ultra account reports the weekly one only, and nothing is ever added here
+# that the answer did not send (BR-QUOTA-002).
+CLAUDE_LIMIT_KINDS = {"session": ("session", 300, "Session"), "five_hour": ("session", 300, "Session"),
+                      "weekly_all": ("weekly", 10080, "Weekly")}
 CLAUDE_FALLBACK_FIELDS = (
     ("five_hour", "session", 300, "Session"),
     ("seven_day", "weekly", 10080, "Weekly"),
@@ -693,10 +717,9 @@ def _slug(text: str) -> str:
     return "-".join("".join(c if c.isalnum() else " " for c in text.lower()).split())
 
 
-def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
-    payload = _json(body)
-    if not isinstance(payload, dict):
-        return None
+def _claude_windows(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(windows, idle) from one usage answer. Only what the answer reports: a window the plan may
+    have but the provider did not send is not invented (BR-QUOTA-002)."""
     windows: dict[str, Any] = {}
     idle: dict[str, Any] = {}
     limits = payload.get("limits")
@@ -723,10 +746,14 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
             if isinstance(window, dict):
                 _add(windows, idle, name, _percent(window.get("utilization")),
                      _parse_time(window.get("resets_at")), minutes, label)
-    if (windows or idle) and "session" not in windows and "session" not in idle:
-        # The API sends no 5-hour window until a message starts one; it still exists on the plan.
-        idle["session"] = {"used_percent": 0, "window_minutes": 300, "label": "Session",
-                           "active": False, "note": "Starts with your next message"}
+    return windows, idle
+
+
+def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
+    payload = _json(body)
+    if not isinstance(payload, dict):
+        return None
+    windows, idle = _claude_windows(payload)
     extra = _mapping(payload.get("extra_usage"))
     cap, spent = (_finite_amount(extra.get(key)) for key in ("monthly_limit", "used_credits"))
     result = _snapshot(CLAUDE_SOURCE, windows, idle, plan, observed_at)
@@ -740,7 +767,8 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
                                  "kind": "extra_usage", "used": spent / 100, "limit": cap / 100}
     resets = _claude_grants(payload.get("cedar_ember"), windows, observed_at or _now())
     if resets:
-        result["resets"] = resets
+        # The grant's own id never leaves this reader; the reading names it by its window handle.
+        result["resets"] = [{key: value for key, value in row.items() if key != "grant_id"} for row in resets]
     return result if windows or idle or "credits" in result or resets else None
 
 
@@ -788,10 +816,13 @@ def _grant_label(text: Any) -> str:
 
 
 def _claude_grants(cedar: Any, windows: dict[str, Any], observed_at: dt.datetime) -> list[dict[str, Any]]:
-    """Every limit-reset grant still worth using; never its id, the next grant or the event props."""
-    grants = _mapping(cedar).get("grants")
+    """Every limit-reset grant still worth using: its own id (stripped by parse_claude), a short
+    window handle, whether Claude Code would use it next, and never the event props."""
+    root = _mapping(cedar)
+    grants = root.get("grants")
     if not isinstance(grants, list):
         return []
+    next_id = root.get("next_grant_id")
     scoped = sorted(name for name in windows if name.startswith("claude-weekly-scoped-"))
     rows = []
     for raw in grants:
@@ -805,12 +836,37 @@ def _claude_grants(cedar: Any, windows: dict[str, Any], observed_at: dt.datetime
             continue
         total = grant.get("resets_total")
         label = _grant_label(grant.get("label"))
+        grant_id = grant.get("id")
         rows.append({"label": label, "left": left, "total": total if type(total) is int and total >= 0 else None,
                      "clears": _claude_grant_clears(grant.get("clears"), label, scoped),
                      "expires_at": _iso(end) if end else None, "usable_now": grant.get("usable_now") is True,
-                     "kind": CLAUDE_GRANT_KIND})
+                     "next": isinstance(grant_id, str) and grant_id == next_id,
+                     "kind": CLAUDE_GRANT_KIND, "grant_id": grant_id if isinstance(grant_id, str) else None})
     rows.sort(key=lambda row: (row["expires_at"] is None, row["expires_at"] or ""))
+    _claude_grant_keys(rows)
     return rows
+
+
+def _claude_grant_keys(rows: list[dict[str, Any]]) -> None:
+    """A short stable handle per grant: the first window it clears, made unique. Never an id."""
+    used: set[str] = set()
+    for row in rows:
+        base = row["clears"][0] if row["clears"] else "limit-reset"
+        key, count = base, 1
+        while key in used:
+            count += 1
+            key = f"{base}-{count}"
+        used.add(key)
+        row["key"] = key
+
+
+def claude_claim_grants(payload: dict[str, Any], observed_at: dt.datetime | None = None) -> list[dict[str, Any]]:
+    """The same grant rows as a reading, with the id the one claim call needs.
+
+    For the claim only: nothing here is written to a snapshot, a receipt or a log.
+    """
+    windows, _idle = _claude_windows(payload)
+    return _claude_grants(payload.get("cedar_ember"), windows, observed_at or _now())
 
 
 def _claude_credential_records() -> list[dict[str, Any]]:
@@ -866,11 +922,12 @@ def claude_token(records: list[dict[str, Any]] | None = None,
     return None, None, unavailable(CLAUDE_SOURCE, "no-key", "No usable Claude Code subscription sign-in")
 
 
-def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..., Any] | None = None,
-                   records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def _claude_usage_fetch(config: dict[str, Any], timeout: int, opener: Callable[..., Any] | None,
+                        records: list[dict[str, Any]] | None) -> tuple[int | None, str | None, str | None, dict[str, Any] | None]:
+    """(status, body, plan, unavailable-result) for one usage GET."""
     token, plan, failure = claude_token(records)
     if failure:
-        return failure
+        return None, None, None, failure
     try:
         status, body = _http_get(CLAUDE_USAGE_URL + CLAUDE_GRANTS_QUERY, {
             "Authorization": f"Bearer {token}",
@@ -879,7 +936,16 @@ def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..
             "User-Agent": claude_user_agent(),
         }, reader_timeout("claude", config, timeout), opener)
     except Exception as error:  # noqa: BLE001 - fixed message: exception text can carry the request
-        return unavailable(CLAUDE_SOURCE, "failed", f"Claude usage request failed ({type(error).__name__})")
+        return None, None, None, unavailable(CLAUDE_SOURCE, "failed",
+                                             f"Claude usage request failed ({type(error).__name__})")
+    return status, body, plan, None
+
+
+def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..., Any] | None = None,
+                   records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    status, body, plan, failure = _claude_usage_fetch(config, timeout, opener, records)
+    if failure:
+        return failure
     if status in (401, 403):
         return unavailable(CLAUDE_SOURCE, "unauthorized", "Anthropic rejected Claude Code's sign-in for usage")
     if status == 429:
@@ -887,6 +953,68 @@ def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..
     if status != 200:
         return unavailable(CLAUDE_SOURCE, "failed", f"Claude usage request failed (HTTP {status})")
     return parse_claude(body, plan) or unavailable(CLAUDE_SOURCE, "malformed", "Claude usage answer had no limits")
+
+
+def claude_usage_document(config: dict[str, Any] | None = None, timeout: int = 10,
+                          opener: Callable[..., Any] | None = None,
+                          records: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    """(answer, plain failure) for a caller that needs the grant ids a reading never keeps."""
+    status, body, _plan, failure = _claude_usage_fetch(config or {}, timeout, opener, records)
+    if failure:
+        return None, str(failure.get("reason") or "no usable Claude Code subscription sign-in")
+    if status != 200:
+        return None, f"Claude usage request failed (HTTP {status})"
+    payload = _json(body)
+    if not isinstance(payload, dict):
+        return None, "Claude usage answer was unreadable"
+    return payload, None
+
+
+# A limit-reset claim. The organisation comes from Claude Code's own config, and the request id is
+# fresh per claim; neither is ever printed, stored or logged.
+CLAUDE_RESET_CLAIM_PATH = "/api/organizations/{organization}/reset_rate_limits"
+CLAUDE_CONFIG_FILENAME = ".claude.json"
+MAX_CLAUDE_CONFIG_BYTES = 32 * 1024 * 1024
+
+
+def claude_claim_url(organization_uuid: str) -> str:
+    return "https://api.anthropic.com" + CLAUDE_RESET_CLAIM_PATH.format(organization=quote(organization_uuid, safe=""))
+
+
+def claude_organization_uuid(path: Path | None = None) -> str | None:
+    """`oauthAccount.organizationUuid` from Claude Code's config; never printed or stored."""
+    path = Path.home() / CLAUDE_CONFIG_FILENAME if path is None else path
+    try:
+        with path.open("rb") as handle:
+            data = json.loads(handle.read(MAX_CLAUDE_CONFIG_BYTES + 1))
+    except (OSError, ValueError, RecursionError):
+        return None
+    value = _mapping(_mapping(data).get("oauthAccount")).get("organizationUuid")
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9A-Za-z_-]{1,64}", value) else None
+
+
+def claude_reset_request_id() -> str:
+    """A fresh value matching Anthropic's `[A-Za-z0-9_-]{1,64}`; never printed or stored."""
+    return base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+
+
+def post_claude_reset_claim(grant_id: str, organization_uuid: str, token: str, request_id: str,
+                            timeout: float = 10, opener: Callable[..., Any] | None = None) -> tuple[int | None, str]:
+    """One claim POST: (status, body), or (None, "") when nothing reached Anthropic.
+
+    A response's shape is unknown, so only its status is read: 2xx means sent.
+    """
+    payload = json.dumps({"program": "cedar_ember", "grant_id": grant_id, "request_id": request_id}).encode()
+    try:
+        return _http_post(claude_claim_url(organization_uuid), {
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": claude_user_agent(),
+        }, payload, timeout, opener)
+    except Exception:  # noqa: BLE001 - the exception text can carry the request and the organisation
+        return None, ""
 
 
 # ---- Antigravity ----------------------------------------------------------------------------------
@@ -1662,6 +1790,10 @@ def display_extras(pool, config, snapshot, failure, state_dir, now, *, refresh):
     cost = usage_cost(reader, state_dir, now, refresh=refresh)
     if cost is not None:
         projection["usage_cost"] = cost
+    # Token use comes from this machine's own cost cache, or from the reading another machine shared.
+    tokens = token_history(cost, now) or _token_block(snapshot.get("tokens"))
+    if tokens:
+        projection["tokens"] = tokens
     incident = provider_incident(pool, oracle, state_dir, now, refresh=refresh)
     if incident is not None:
         projection["incident"] = incident
@@ -2037,6 +2169,39 @@ def _cost_breakdown(rows, now, *, strict):
                       "usd_7d": usd(row["week"]), "usd_today": usd(row["today"]),
                       "requests": int(row["all"][2])} for name, row in ranked[:8]],
     }
+
+
+TOKEN_SPARK_DAYS = 14
+
+
+def _token_block(value: Any) -> dict[str, Any] | None:
+    """{today, days} checked: nothing else, and a negative or non-integer count is dropped."""
+    block = _mapping(value)
+    today, days = block.get("today"), block.get("days")
+    if type(today) is not int or today < 0 or not isinstance(days, list) or not days:
+        return None
+    if not all(type(count) is int and count >= 0 for count in days):
+        return None
+    return {"today": today, "days": days[-TOKEN_SPARK_DAYS:]}
+
+
+def token_history(cost: dict[str, Any] | None, now: dt.datetime | None = None) -> dict[str, Any] | None:
+    """Today's tokens and the last 14 daily totals, oldest first, from a usage-cost cache.
+
+    A cache whose series does not end today is past its last scan, so today reads zero rather than
+    yesterday's count. Pools with no usage log have no block at all.
+    """
+    daily = _mapping(cost).get("daily")
+    if not isinstance(daily, list):
+        return None
+    series = [(row["day"], row["tokens"]) for row in (_mapping(raw) for raw in daily)
+              if isinstance(row.get("day"), str) and type(row.get("tokens")) is int and row["tokens"] >= 0]
+    if not series:
+        return None
+    series = series[-TOKEN_SPARK_DAYS:]
+    today = (now or _now()).astimezone().date().isoformat()
+    return _token_block({"today": series[-1][1] if series[-1][0] == today else 0,
+                         "days": [tokens for _day, tokens in series]})
 
 
 def local_usage_cost(provider, roots, models, now=None):

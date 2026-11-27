@@ -55,20 +55,36 @@ class PlanPrices(unittest.TestCase):
         subscriptions.save(self.path, ROSTER, "codex", {"amount": "200", "currency": "USD", "period": "monthly"})
         self.assertEqual(self.rows()["codex"]["source"], "default")
 
-    # BR-SUBS-002
+    # BR-SUBS-002 · BR-SUBS-003
     def test_chatgpt_pro_is_assumed_half_with_a_co_payer_until_the_operator_sets_it(self):
         row = self.rows()["codex"]
         self.assertEqual((row["operator_share_percent"], row["other_payer"], row["share_source"]), ("50", "Sam", "default"))
-        self.assertEqual(console.plan_summary(row), "$200 a month · shared with Sam · assumed 50/50 · change")
+        self.assertEqual(console.plan_summary(row), "$200 a month · assumed ½ with Sam · yours $100 · change")
         subscriptions.save(self.path, ROSTER, "codex", {"operator_share_percent": "60", "other_payer": "Sam"})
         row = self.rows()["codex"]
         self.assertEqual((row["operator_share_percent"], row["share_source"]), ("60", "operator"))
-        self.assertEqual(console.plan_summary(row), "$200 a month · shared with Sam · 60/40")
+        self.assertEqual(console.plan_summary(row), "$200 a month · 3/5 with Sam · yours $120")
+
+    # BR-SUBS-003
+    def test_a_split_the_overlay_states_is_the_operators_and_not_an_assumption(self):
+        roster = json.loads(json.dumps(ROSTER))
+        roster["quota_pools"]["codex"]["plan"].update({"operator_share_percent": 50, "other_payer": "Edo",
+                                                       "share_source": "the split we agreed on 12 November"})
+        row = {r["id"]: r for r in subscriptions.view(self.path, roster, {})["subscriptions"]}["codex"]
+        self.assertEqual((row["operator_share_percent"], row["other_payer"], row["share_source"]),
+                         ("50", "Edo", "overlay"))
+        self.assertEqual(console.plan_summary(row), "$200 a month · ½ with Edo · yours $100")
+        self.assertNotIn("assumed", console._split_notes({"subscription_spend": subscriptions.view(
+            self.path, roster, {})})["codex"])
+        # control: a name-only "shared with" stays an assumption until both fields are stated.
+        roster["quota_pools"]["codex"]["plan"].pop("operator_share_percent")
+        row = {r["id"]: r for r in subscriptions.view(self.path, roster, {})["subscriptions"]}["codex"]
+        self.assertEqual((row["operator_share_percent"], row["share_source"]), ("50", "default"))
 
     def test_cosharer_card_shows_his_share_and_names_the_assumption(self):
         model = sharing.build(subscriptions.view(self.path, ROSTER, {}), {"pools": []}, 1.7e9)
         text = sharing.card_text(model, "sam")
-        self.assertIn("Your share 50% of $200.00 a month: $100.00", text)
+        self.assertIn("½ of $200.00 a month · yours $100.00", text)
         self.assertIn("The split is assumed until it is agreed", text)
         self.assertIn("never split by person", text)
 
@@ -84,7 +100,7 @@ class PlanPrices(unittest.TestCase):
         prices = console._plan_prices(overview)
         self.assertEqual((prices["claude"], prices["github-copilot-student"]), ("£183 a month", "Free"))
         self.assertEqual(prices["antigravity-gemini"], "€5.50 a month · promo until Jan 2027")
-        self.assertIn("Shared with Sam · assumed 50/50 · <a", console._split_notes(overview)["codex"])
+        self.assertIn('assumed ½ with Sam · yours $100 · <a', console._split_notes(overview)["codex"])
         self.assertEqual(console._split_notes(overview)["claude"], "")
 
     def test_free_plan_reads_free(self):
@@ -105,5 +121,19 @@ class TraySummaryPlansTest(unittest.TestCase):
                   "unpriced": 0, "unsplit": 1, "unavailable": False}
         tray = subscriptions.tray_summary(ledger)
         self.assertEqual(tray["plans"], [{"id": "claude", "name": "Claude Max 20x", "amount": "183",
-                                          "currency": "GBP", "period": "monthly", "source": "default"}])
+                                          "currency": "GBP", "period": "monthly", "source": "default",
+                                          "share": None, "operator_amount": None}])
         self.assertEqual(tray["monthly"], ledger["monthly"])
+        self.assertNotIn("usd", tray)   # no rate known: no block rather than a guessed one
+
+    def test_tray_summary_carries_the_split_and_the_usd_total(self):
+        ledger = {"subscriptions": [{"id": "codex", "name": "ChatGPT Pro", "amount": "200", "currency": "USD",
+                                     "period": "monthly", "source": "default", "pools": ["codex"],
+                                     "other_payer": "Edo", "operator_share_percent": "50",
+                                     "monthly": "200.00", "operator_monthly": "100.00"}],
+                  "monthly": [{"currency": "USD", "total": "200.00", "operator": "100.00"}],
+                  "unpriced": 0, "unsplit": 0, "unavailable": False,
+                  "usd": {"total": "200.00", "operator": "100.00", "rates_as_of": "2026-11-27", "approximate": True}}
+        tray = subscriptions.tray_summary(ledger)
+        self.assertEqual((tray["plans"][0]["share"], tray["plans"][0]["operator_amount"]), ("1/2", "100.00"))
+        self.assertEqual(tray["usd"], ledger["usd"])

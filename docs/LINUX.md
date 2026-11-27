@@ -54,6 +54,8 @@ The reader is covered by synthetic tests; it has not been checked against a real
 
 or `{"available": false, "reason": "not logged in"}` when there is nothing to report. `window_minutes` lets the router estimate a burn rate; `will_last_to_reset` and `eta_seconds` are used first when your source can compute them.
 
+**Reading the Mac's numbers on the server.** The Mac serves its saved snapshots at `/crossfeed/readings.json` on the tailnet phone view, and the server adopts a pool's reading when it is newer than its own. What crosses is an allow-list, so the numbers the menu shows arrive with it: windows, reset clocks, `resets` (the glance's `limit_resets`), `tokens` and the account-level extras, and nothing else. Configure the puller with `<state>/readings-source.json` `{"url": "https://<mac>.<tailnet>.ts.net:8444/crossfeed/readings.json"}` or `FLEET_READINGS_URL`. A sleeping Mac leaves this machine's own readers in charge.
+
 **CodexBar, if you accept a third-party reader.** [CodexBar](https://github.com/steipete/CodexBar) publishes its own platform-specific installation instructions. It reads quota through existing sessions or browser cookies; it is not a vendor tool. Crossfeed only reads its output. Pools that declare `"oracle": "codexbar"` show as MISSING in `doctor` until it is on PATH. This optional reader has not been run with Crossfeed on Linux for this export.
 
 ## The daily market refresh
