@@ -12,6 +12,31 @@ from tests.test_native_usage import NOW, Response, TOKEN, fleetctl, native
 
 
 class ReaderExtras(unittest.TestCase):
+    def test_codex_reset_credits_read_as_one_reset_row_per_expiry_day(self):
+        soon = native._iso(NOW + dt.timedelta(days=2))
+        later = native._iso(NOW + dt.timedelta(days=9))
+        payload = {"available_count": 3, "clears": ["seven_day"],
+                   "credits": [{"status": "available", "expires_at": soon, "id": "private-credit-id"},
+                               {"status": "available", "expires_at": soon},
+                               {"status": "available", "expires_at": later,
+                                "clears": ["five_hour", "seven_day"]},
+                               {"status": "redeemed", "expires_at": later}]}
+        got = native.parse_codex_reset_credits(payload, NOW)
+        self.assertEqual(got["resets"], [
+            {"label": "Limit reset", "left": 2, "total": 2, "clears": ["weekly"],
+             "expires_at": soon, "usable_now": True, "kind": "codex_reset_credit"},
+            {"label": "Limit reset", "left": 1, "total": 1, "clears": ["session", "weekly"],
+             "expires_at": later, "usable_now": True, "kind": "codex_reset_credit"}])
+        self.assertEqual(got["expirations"], [soon, soon, later])   # the credits output is unchanged
+        self.assertEqual(got["balance"], 3)
+        self.assertNotIn("private", json.dumps(got))
+
+    def test_codex_reset_credits_without_a_window_say_so(self):
+        soon = native._iso(NOW + dt.timedelta(days=2))
+        got = native.parse_codex_reset_credits(
+            {"available_count": 1, "credits": [{"status": "available", "expires_at": soon}]}, NOW)
+        self.assertEqual(got["resets"][0]["clears"], [])
+
     def test_codex_separates_reset_inventory_from_spend_credits(self):
         expiry = native._iso(NOW + dt.timedelta(days=2))
         renewal = native._iso(NOW + dt.timedelta(days=30))

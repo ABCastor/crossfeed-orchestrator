@@ -7,9 +7,11 @@ quota source produces (`windows.<name> = {used_percent, reset_at, window_minutes
 - codex: Codex's own app server (`codex app-server`, `account/rateLimits/read`). Codex keeps
   its sign-in and renews it; this reader never sees a token.
 - codex-oauth: CodexBar's usage endpoint with Codex's existing ChatGPT sign-in. No renewal.
-- claude: Anthropic's usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`) with the
-  default subscription sign-in Claude Code keeps (macOS Keychain item `Claude Code-credentials`,
-  else `~/.claude/.credentials.json`), never a bridge token. An expired sign-in is not renewed here.
+- claude: Anthropic's usage endpoint (`GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1`,
+  asked with a `claude-cli/<version>` User-Agent: the limit-reset grants come back only for that
+  client) with the default subscription sign-in Claude Code keeps (macOS Keychain item
+  `Claude Code-credentials`, else `~/.claude/.credentials.json`), never a bridge token. An expired
+  sign-in is not renewed here.
 - antigravity: an operator export, a running local language server, or an explicitly selected
   existing ACP/CLI OAuth profile. Never starts the CLI or an interactive login.
 - copilot: GitHub's Copilot entitlement endpoint (`GET https://api.github.com/copilot_internal/user`)
@@ -353,13 +355,51 @@ def _credit(balance, unit, source, expires_at=None, renews_at=None):
             "expires_at": _iso(expiry) if expiry else None, "renews_at": _iso(renewal) if renewal else None}
 
 
+CODEX_RESET_KIND = "codex_reset_credit"
+CODEX_RESET_WINDOW_NAMES = {"seven_day": "weekly", "weekly": "weekly", "weekly_all": "weekly",
+                            "five_hour": "session", "session": "session"}
+
+
+def _reset_clear_names(raw: Any, names: dict[str, str]) -> list[str]:
+    """The windows a reset clears, in this reader's words, deduplicated and in the payload's order."""
+    if not isinstance(raw, list):
+        return []
+    clears: list[str] = []
+    for key in raw:
+        if not isinstance(key, str) or not key:
+            continue
+        name = names.get(key, key)
+        if name not in clears:
+            clears.append(name)
+    return clears
+
+
+def _codex_reset_rows(usable: list[tuple[str | None, dict[str, Any]]],
+                      fallback_clears: Any) -> list[dict[str, Any]]:
+    """One row per expiry day, the same shape Claude's grants read: never an inventory id."""
+    grouped: dict[str | None, list[dict[str, Any]]] = {}
+    for expiry, row in usable:
+        grouped.setdefault(expiry, []).append(row)
+    rows = []
+    for expiry, members in grouped.items():
+        clears: list[str] = []
+        for member in members:
+            for name in _reset_clear_names(member.get("clears", fallback_clears), CODEX_RESET_WINDOW_NAMES):
+                if name not in clears:
+                    clears.append(name)
+        rows.append({"label": "Limit reset", "left": len(members), "total": len(members), "clears": clears,
+                     "expires_at": expiry, "usable_now": True, "kind": CODEX_RESET_KIND})
+    rows.sort(key=lambda row: (row["expires_at"] is None, row["expires_at"] or ""))
+    return rows
+
+
 def parse_codex_reset_credits(payload: Any, observed_at: dt.datetime) -> dict[str, Any] | None:
     """Only available, unexpired credits; never persist redemption identifiers."""
     root = _mapping(payload)
     rows = root.get("credits")
     if not isinstance(rows, list) or type(root.get("available_count")) is not int:
         return None
-    expirations = []
+    usable = []
     for raw in rows:
         row = _mapping(raw)
         if row.get("status") != "available":
@@ -368,11 +408,13 @@ def parse_codex_reset_credits(payload: Any, observed_at: dt.datetime) -> dict[st
         expiry = _parse_time(raw_expiry)
         if (raw_expiry is not None and expiry is None) or (expiry and expiry <= observed_at):
             continue
-        expirations.append(_iso(expiry) if expiry else None)
-    expirations.sort(key=lambda value: (value is None, value))
+        usable.append((_iso(expiry) if expiry else None, row))
+    usable.sort(key=lambda item: (item[0] is None, item[0] or ""))
+    expirations = [expiry for expiry, _ in usable]
+    resets = _codex_reset_rows(usable, root.get("clears"))
     return {**_credit(len(expirations), "limit resets", CODEX_RESET_CREDITS_SOURCE,
                       expirations[0] if expirations else None, root.get("renews_at")),
-            "expirations": expirations}
+            "expirations": expirations, **({"resets": resets} if resets else {})}
 
 
 def parse_codex_oauth(payload: Any, observed_at: dt.datetime | None = None) -> dict[str, Any] | None:
@@ -601,7 +643,11 @@ def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
                         return unavailable(CODEX_OAUTH_SOURCE, "malformed", "Codex reset-credit inventory was unreadable")
                     if "credits" in observed:
                         observed["spend_credits"] = observed["credits"]
+                    # The credits dict keeps its shipped shape; the reset rows ride beside it.
+                    resets = inventory.pop("resets", None)
                     observed["credits"] = inventory
+                    if resets:
+                        observed["resets"] = resets
                 else:
                     return unavailable(CODEX_OAUTH_SOURCE, "failed", f"Codex reset credits returned HTTP {status}")
             if config.get("billing") is not False:
@@ -623,6 +669,13 @@ def observe_codex_oauth(config: dict[str, Any], timeout: int = 5,
 # ---- Claude ---------------------------------------------------------------------------------------
 CLAUDE_SOURCE = "claude-oauth-usage"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+# The limit-reset grants ride on the same answer, but only for a Claude Code client: the plain
+# User-Agent gets `eligible:false, ineligible_reason:"surface"` and no `cedar_ember` section.
+CLAUDE_GRANTS_QUERY = "?cedar_ember=1"
+CLAUDE_CLI_FALLBACK_VERSION = "2.1.332"
+CLAUDE_GRANT_KIND = "claude_grant"
+CLAUDE_GRANT_WINDOW_NAMES = {"seven_day": "weekly", "five_hour": "session"}
+CLAUDE_GRANT_SCOPED_KEY = "seven_day_overage_included"
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 CLAUDE_LIMIT_KINDS = {"session": ("session", 300, "Session"), "weekly_all": ("weekly", 10080, "Weekly")}
 CLAUDE_FALLBACK_FIELDS = (
@@ -685,7 +738,79 @@ def parse_claude(body: str, plan: str | None = None, observed_at: dt.datetime | 
             result["credits"] = {**_credit(max(0, cap - spent) / 100, currency, CLAUDE_SOURCE,
                                            extra.get("expires_at"), extra.get("renews_at")),
                                  "kind": "extra_usage", "used": spent / 100, "limit": cap / 100}
-    return result if windows or idle or "credits" in result else None
+    resets = _claude_grants(payload.get("cedar_ember"), windows, observed_at or _now())
+    if resets:
+        result["resets"] = resets
+    return result if windows or idle or "credits" in result or resets else None
+
+
+def _version_key(name: str) -> tuple[int, ...] | None:
+    if not re.fullmatch(r"\d+(?:\.\d+)*", name):
+        return None
+    return tuple(int(part) for part in name.split("."))
+
+
+def claude_cli_version(versions_dir: Path | None = None) -> str:
+    """The newest installed Claude Code version; the constant only when none is installed."""
+    folder = (Path.home() / ".local" / "share" / "claude" / "versions") if versions_dir is None else versions_dir
+    try:
+        found = [(key, entry.name) for entry in folder.iterdir() if (key := _version_key(entry.name)) is not None]
+    except OSError:
+        return CLAUDE_CLI_FALLBACK_VERSION
+    return max(found)[1] if found else CLAUDE_CLI_FALLBACK_VERSION
+
+
+def claude_user_agent(versions_dir: Path | None = None) -> str:
+    return f"claude-cli/{claude_cli_version(versions_dir)} (external, cli)"
+
+
+def _claude_grant_clears(raw: Any, label: str, scoped: list[str]) -> list[str]:
+    """A grant's windows in this reader's names; the scoped weekly one resolved from the same answer."""
+    clears = _reset_clear_names(raw, CLAUDE_GRANT_WINDOW_NAMES)
+    if CLAUDE_GRANT_SCOPED_KEY not in clears:
+        return clears
+    # Several scoped windows can be live at once: the grant's own label picks one, or the raw key stays.
+    resolved = scoped[0] if len(scoped) == 1 else None
+    if resolved is None and scoped:
+        slug = _slug(label)
+        matching = [name for name in scoped if name.removeprefix("claude-weekly-scoped-") in slug]
+        resolved = matching[0] if len(matching) == 1 else None
+    name = resolved or CLAUDE_GRANT_SCOPED_KEY
+    return [name if clear == CLAUDE_GRANT_SCOPED_KEY else clear for clear in clears]
+
+
+def _grant_label(text: Any) -> str:
+    """The vendor's own grant wording, whitespace-collapsed: never an address, never unbounded."""
+    label = " ".join(text.split()) if isinstance(text, str) else ""
+    if not label or "@" in label:
+        return "Limit reset"
+    return label if len(label) <= 120 else label[:117].rstrip() + "..."
+
+
+def _claude_grants(cedar: Any, windows: dict[str, Any], observed_at: dt.datetime) -> list[dict[str, Any]]:
+    """Every limit-reset grant still worth using; never its id, the next grant or the event props."""
+    grants = _mapping(cedar).get("grants")
+    if not isinstance(grants, list):
+        return []
+    scoped = sorted(name for name in windows if name.startswith("claude-weekly-scoped-"))
+    rows = []
+    for raw in grants:
+        grant = _mapping(raw)
+        left = grant.get("resets_left")
+        if type(left) is not int or left <= 0:
+            continue
+        raw_end = grant.get("ends_at")
+        end = _parse_time(raw_end)
+        if (raw_end is not None and end is None) or (end is not None and end <= observed_at):
+            continue
+        total = grant.get("resets_total")
+        label = _grant_label(grant.get("label"))
+        rows.append({"label": label, "left": left, "total": total if type(total) is int and total >= 0 else None,
+                     "clears": _claude_grant_clears(grant.get("clears"), label, scoped),
+                     "expires_at": _iso(end) if end else None, "usable_now": grant.get("usable_now") is True,
+                     "kind": CLAUDE_GRANT_KIND})
+    rows.sort(key=lambda row: (row["expires_at"] is None, row["expires_at"] or ""))
+    return rows
 
 
 def _claude_credential_records() -> list[dict[str, Any]]:
@@ -747,11 +872,11 @@ def observe_claude(config: dict[str, Any], timeout: int = 5, opener: Callable[..
     if failure:
         return failure
     try:
-        status, body = _http_get(CLAUDE_USAGE_URL, {
+        status, body = _http_get(CLAUDE_USAGE_URL + CLAUDE_GRANTS_QUERY, {
             "Authorization": f"Bearer {token}",
             "anthropic-beta": "oauth-2025-04-20",
             "Accept": "application/json",
-            "User-Agent": "crossfeed-orchestrator",
+            "User-Agent": claude_user_agent(),
         }, reader_timeout("claude", config, timeout), opener)
     except Exception as error:  # noqa: BLE001 - fixed message: exception text can carry the request
         return unavailable(CLAUDE_SOURCE, "failed", f"Claude usage request failed ({type(error).__name__})")
@@ -1521,7 +1646,7 @@ def display_extras(pool, config, snapshot, failure, state_dir, now, *, refresh):
     status = (STATUS_URLS.get(oracle) if isinstance(oracle, str) else None) or STATUS_URLS.get(pool)
     if status:
         projection["status_url"] = status
-    for field in ("credits", "spend_credits", "per_model", "per_model_error", "account_usage", "model_quota", "billing", "billing_error"):
+    for field in ("credits", "spend_credits", "resets", "per_model", "per_model_error", "account_usage", "model_quota", "billing", "billing_error"):
         if field in snapshot:
             projection[field] = snapshot[field]
     cost = usage_cost(reader, state_dir, now, refresh=refresh)
