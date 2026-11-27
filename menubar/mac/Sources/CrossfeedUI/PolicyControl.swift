@@ -6,6 +6,7 @@ struct PolicyControl: View {
     let policy: PolicyModel
     @ObservedObject var state: MenuState
     let now: Date
+    var showsTitle = true
     @State private var hovered: SpendLevel?
 
     private let levels = SpendLevel.allCases
@@ -30,7 +31,7 @@ struct PolicyControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text("Spend policy").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
+                if showsTitle { Text("Spend policy").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet) }
                 if selected == nil {
                     Spacer()
                     Text("Mixed").font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)

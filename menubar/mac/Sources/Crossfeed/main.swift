@@ -16,8 +16,12 @@ struct Config {
     var state = ""
     var fixture = ""
     var fonts = ""
+    /// panel.json for this run. A fixture or self test run never touches the real one.
+    var panel = ""
     var selftest = false
     var selftestTab: String?
+    /// With -selftest: drive a real drag through the host view's mouse events and save frames here.
+    var dragFrames: String?
 }
 
 /// Accepts the LaunchAgent's Go-style flags (-python ...) and their double-dash forms.
@@ -34,8 +38,10 @@ func parse(_ args: [String]) -> Config {
         case "state-dir": c.state = next; i += 1
         case "fixture": c.fixture = next; i += 1
         case "fonts": c.fonts = next; i += 1
+        case "panel": c.panel = next; i += 1
         case "selftest": c.selftest = true
         case "tab": c.selftestTab = next; i += 1
+        case "dragframes": c.dragFrames = next; i += 1
         default: break
         }
         i += 1
@@ -68,6 +74,32 @@ enum Reader {
         watchdog.cancel()
         guard process.terminationStatus == 0, data.count <= 2 << 20 else { return .failure(GlanceError.malformed) }
         return Result { try Glance.decode(data) }
+    }
+}
+
+enum ResetRunner {
+    /// `fleetctl use-reset claude --key KEY --yes --json`, 30 s at most, one try. Its JSON is read; nothing else is shown.
+    static func run(_ c: Config, key: String) -> ResetOutcome {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: c.python.hasPrefix("/") ? c.python : "/usr/bin/env")
+        var args = c.python.hasPrefix("/") ? [] : [c.python]
+        args.append(c.fleetctl)
+        if !c.overlay.isEmpty { args += ["--overlay", c.overlay] }
+        if !c.state.isEmpty { args += ["--state-dir", c.state] }
+        args += ["use-reset", "claude", "--key", key, "--yes", "--json"]
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return .failed("Could not start") }
+        var timedOut = false
+        let watchdog = DispatchWorkItem { if process.isRunning { timedOut = true; process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: watchdog)
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        watchdog.cancel()
+        if timedOut { return .failed("No answer") }
+        return ResetOutcome.parse(data.prefix(1 << 16), exitCode: process.terminationStatus)
     }
 }
 
@@ -125,8 +157,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     var revision = 0
     let io = DispatchQueue(label: "crossfeed.fleetctl", qos: .utility)
     var timers: [Timer] = []
-    let tabOrder = TabOrder(defaults: .standard)
-    let layoutStore = TabLayoutStore(defaults: .standard)
+    /// panel.json: the one place tab order, hidden tabs, tile order and Used/Left live.
+    let panelStore: PanelPrefsStore
+    var escapeMonitor: Any?
     /// The menu bar choices. A self test writes to a throwaway domain, never to the operator's preferences.
     let barStore: BarPrefsStore
     let console: ConsoleSession
@@ -140,6 +173,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     init(config: Config) {
         self.config = config
         self.console = ConsoleSession(config: config)
+        let isolated = config.selftest || !config.fixture.isEmpty
+        self.panelStore = PanelPrefsStore(url: !config.panel.isEmpty ? URL(fileURLWithPath: config.panel)
+            : (isolated ? FileManager.default.temporaryDirectory.appendingPathComponent("crossfeed-panel-\(UUID().uuidString).json")
+                        : PanelPrefsStore.defaultURL()))
         self.barStore = BarPrefsStore(defaults: config.selftest
             ? (UserDefaults(suiteName: "org.crossfeed.selftest.bar." + UUID().uuidString) ?? .standard) : .standard)
         self.alertStore = AlertStore(defaults: .standard)
@@ -149,15 +186,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
         state.prefs = barStore.load()
-        if !config.selftest && config.fixture.isEmpty { state.layout = layoutStore.load() }
+        if !config.selftest && config.fixture.isEmpty { PanelMigration.run(store: panelStore, defaults: .standard) }
+        state.panel = panelStore.load()
+        state.onPanelChange = { [weak self] prefs in self?.panelStore.save(prefs) }
+        state.onBlockDragActive = { [weak self] active in self?.listenForEscape(active) }
         state.onControl = { [weak self] control in self?.handle(control) }
         state.canEditPolicy = config.fixture.isEmpty || config.selftest
         state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
         state.onReorder = { [weak self] source, target in self?.reorder(source, onto: target) }
-        state.onOpenStatus = { [weak self] url in
-            self?.menu.cancelTracking()
-            NSWorkspace.shared.open(url)
-        }
         state.onOpenConsole = { [weak self] in self?.openConsole() }
         state.onReload = { [weak self] in self?.reload() }
         state.onAbout = { [weak self] in self?.about() }
@@ -195,6 +231,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     }
 
     var reloadTimer: Timer?
+    /// A reset was just used: the row says so while the menu is open, and the next reading is taken when it closes.
+    var readAgainOnClose = false
 
     /// The reading interval is the operator's choice; the 20 s timer only moves countdowns.
     func scheduleReload() {
@@ -218,15 +256,41 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         case .refresh: reload(); return
         case .openTab(let id): select(id); return
         case .usage(let pool): menu.cancelTracking(); console.open(.usage(pool: pool)); return
-        case .settingsPage(let page): withAnimation(MenuState.animation) { state.settingsPage = page }; return
+        case .console: menu.cancelTracking(); console.open(.providers); return
+        case .openURL(let url):
+            guard url.scheme == "https" else { return }
+            menu.cancelTracking()
+            NSWorkspace.shared.open(url)
+            return
+        case .settingsPage(let page): withAnimation(MenuState.animation) { state.settingsPage = page; state.addOpen = false }; return
         case .toggleTab(let id): toggleTab(id); return
-        case .overviewHidden:
-            state.layout.hiddenInOverview.toggle()
-            saveLayout(); return
         case .moveTab(let id, let step): moveTab(id, by: step); return
+        case .panelShow(let show): state.updatePanel { $0.show = show }; relayout(); return
+        case .settingsTab(let id): state.settingsTab = id; state.addOpen = false; return
+        case .toggleTile(let tab, let id):
+            let on = state.panel.listed(tab, builtIns: PanelPrefs.defaultTiles(for: tab)).on.contains(id)
+            state.updatePanel { $0.setTile(tab, id, on: !on) }
+            relayout(); return
+        case .moveTile(let tab, let id, let step):
+            state.updatePanel { prefs in
+                var ids = prefs.listed(tab, builtIns: PanelPrefs.defaultTiles(for: tab)).on
+                guard let from = ids.firstIndex(of: id), ids.indices.contains(from + step) else { return }
+                ids.swapAt(from, from + step)
+                prefs.setTileOrder(tab, shown: ids)
+            }
+            return
+        case .addOpen: state.addOpen.toggle(); relayout(); return
+        case .addTile(let tab, let id):
+            state.updatePanel { $0.setTile(tab, id, on: true) }
+            state.addOpen = false
+            relayout(); return
+        case .policyOpen: state.policyOpen.toggle(); relayout(); return
+        case .resetAsk(let key): state.resetFlow = ResetFlow(key: key, phase: .confirm); return
+        case .resetCancel: state.resetFlow = nil; return
+        case .resetUse(let key): useReset(key); return
         case .settings, .back:
             // Same panel height on both panes, so the menu does not move.
-            withAnimation(MenuState.animation) { state.showsSettings = control == .settings; state.settingsPage = 0 }
+            withAnimation(MenuState.animation) { state.showsSettings = control == .settings; state.settingsPage = 0; state.addOpen = false }
             return
         case .reset: barStore.reset(); prefs = BarPrefs()
         case .show(let id): prefs.show = id
@@ -351,9 +415,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         if let glance {
             let presenter = Presenter(glance: glance, loadedAt: loadedAt, now: Date(), resetClock: state.prefs.reset == .clock)
             state.presenter = presenter
-            let ids = presenter.tabs.map(\.id)
-            let order = config.fixture.isEmpty && !config.selftest ? tabOrder.ordered(ids) : ids
-            if order != state.providerOrder { state.providerOrder = order }
         } else {
             state.presenter = nil
         }
@@ -370,7 +431,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         // Room for the menu bar, the three native rows under the card and a margin.
         let cap = max(360, (screen?.visibleFrame.height ?? 800) - 150)
         let measured = MainActor.assumeIsolated {
-            PanelSizing.measure(presenter: presenter, prefs: state.prefs, layout: state.layout, order: state.providerOrder, failure: nil, cap: cap)
+            PanelSizing.measure(presenter: presenter, prefs: state.prefs, panel: state.panel, failure: nil, cap: cap)
         }
         if menuIsOpen, panelHeight != nil { return }
         panelHeight = measured.panel
@@ -390,27 +451,65 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     /// Show or hide a provider tab. Overview is not a provider and cannot be hidden.
     func toggleTab(_ id: String) {
         guard id != Presenter.overviewID else { return }
-        state.layout.toggle(id)
-        saveLayout()
+        state.updatePanel { $0.toggleTab(id) }
+        relayout()
     }
 
     func moveTab(_ id: String, by step: Int) {
-        guard !id.isEmpty, step != 0, config.fixture.isEmpty, !config.selftest, let ids = state.presenter?.tabs.map(\.id) else { return }
-        let order = tabOrder.ordered(ids).filter { $0 != "other" }
+        guard !id.isEmpty, step != 0, let ids = state.presenter?.tabs.map(\.id) else { return }
+        let order = state.panel.orderedTabs(ids).filter { $0 != "other" }
         guard let from = order.firstIndex(of: id), order.indices.contains(from + step) else { return }
         reorder(id, onto: order[from + step])
     }
 
-    func saveLayout() {
-        if config.fixture.isEmpty && !config.selftest { layoutStore.save(state.layout) }
+    /// The height may change when tiles come and go; it is applied when the menu is next built.
+    func relayout() {
         remeasureHeights()
         syncMenu()
     }
 
+    /// Runs `fleetctl use-reset claude --key KEY --yes --json`: once, no retry, and says what it printed in a few words.
+    func useReset(_ key: String) {
+        guard state.resetFlow?.key == key, state.resetFlow?.phase == .confirm else { return }
+        state.resetFlow = ResetFlow(key: key, phase: .running)
+        // A fixture is not an account: nothing is sent, unless the self test is given its own stand-in for fleetctl.
+        guard (config.fixture.isEmpty && !config.selftest) || (config.selftest && config.fleetctl.hasPrefix("/")) else {
+            state.resetFlow = ResetFlow(key: key, phase: .failed("Fixture: nothing sent"))
+            return
+        }
+        let c = config
+        io.async { [weak self] in
+            let outcome = ResetRunner.run(c, key: key)
+            RunLoop.main.perform(inModes: [.common, .eventTracking]) {
+                guard let self, self.state.resetFlow?.key == key else { return }
+                switch outcome {
+                case .used(let left):
+                    self.state.resetFlow = ResetFlow(key: key, phase: .done(left))
+                    if self.menuIsOpen { self.readAgainOnClose = true } else { self.reload() }
+                case .failed(let why): self.state.resetFlow = ResetFlow(key: key, phase: .failed(why))
+                }
+            }
+        }
+    }
+
+    /// Escape while a block is carried puts it back and writes nothing. A local monitor sees the key during menu
+    /// tracking; it is installed only for the length of a drag.
+    func listenForEscape(_ on: Bool) {
+        if on, escapeMonitor == nil {
+            escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard event.keyCode == 53, let self, self.state.isCarryingBlock else { return event }
+                self.state.cancelBlockDrag()
+                return nil
+            }
+        } else if !on, let monitor = escapeMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeMonitor = nil
+        }
+    }
+
     func reorder(_ source: String, onto target: String) {
-        guard config.fixture.isEmpty, !config.selftest, let ids = state.presenter?.tabs.map(\.id),
-              tabOrder.move(source, onto: target, among: ids) else { return }
-        state.providerOrder = tabOrder.ordered(ids)
+        guard let ids = state.presenter?.tabs.map(\.id) else { return }
+        state.updatePanel { $0.moveTab(source, onto: target, among: ids) }
     }
 
     // MARK: Status item and menu
@@ -461,6 +560,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         menuIsOpen = false
         state.showsSettings = false
         state.settingsPage = 0
+        state.addOpen = false
+        state.policyOpen = false
+        if state.resetFlow?.phase != .running { state.resetFlow = nil }
+        if readAgainOnClose { readAgainOnClose = false; reload() }
         // The menu opens on Overview every time.
         state.selected = Presenter.overviewID
         state.isReloading = false
@@ -503,9 +606,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
 
     // MARK: Self test (builds the menu without a status item, shows nothing)
 
+    /// Steps run one after another, each on its own turn of the run loop, so every view has laid out before the next click.
     func selftest() {
-        let load = Reader.load(config)
-        guard case .success(let data) = load else { print("selftest: cannot read the fixture"); exit(1) }
+        guard case .success(let data) = Reader.load(config) else { print("selftest: cannot read the fixture"); exit(1) }
         glance = data
         tick()
         let host = MenuHostingView(model: state)
@@ -513,156 +616,233 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
                               backing: .buffered, defer: false)
         window.contentView = host
         host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
-        host.layoutSubtreeIfNeeded()
-        // Overview first: every row routes to its provider's tab, and the usage link is there. Then a provider card.
-        let overviewIDs = self.state.presenter.map { $0.overviewRows(order: self.state.layout.overviewIDs(self.state.orderedTabs.map(\.id))).map(\.id) } ?? []
         state.selected = Presenter.overviewID
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            host.invalidateIntrinsicContentSize(); host.needsLayout = true
-            host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                let frames = self.state.controlFrames
-                var routed: MenuControl?
-                let realControl = self.state.onControl
-                self.state.onControl = { routed = $0 }
-                let wanted: [MenuControl] = overviewIDs.map { MenuControl.openTab($0) } + [MenuControl.usage(nil)]
-                let overviewOK = !overviewIDs.isEmpty && wanted.allSatisfy { control in
-                    guard let rect = frames[control] else { return false }
-                    routed = nil
-                    return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && routed == control
-                }
-                self.state.onControl = realControl
-                if !overviewOK { print("selftest: overview rows \(overviewIDs) frames \(frames.count)") }
-                self.state.selected = self.config.selftestTab ?? self.state.presenter?.defaultTab
-                host.invalidateIntrinsicContentSize(); host.needsLayout = true
-                host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
-                host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
-                DispatchQueue.main.async { self.selftestCards(host: host, window: window, overviewOK: overviewOK) }
-            }
-        }
-    }
-
-    func selftestCards(host: MenuHostingView, window: NSWindow, overviewOK: Bool) {
-        do {
-            let tiles = self.state.tileFrames.count
-            let fonts = NSFont(name: "Commissioner-Medium", size: 13) != nil && NSFont(name: "MartianMono-Regular", size: 13) != nil
-            let policyFrames = self.state.policyFrames
-            let card = self.state.selected.flatMap { self.state.presenter?.card(for: $0) }
-            let targets = (card?.sections.compactMap { $0.policy?.id } ?? []) + [card?.subscriptionPolicy?.id].compactMap { $0 }
-            var hit: PolicyChange?
-            self.state.onPolicyChange = { hit = $0 }
-            let routeOK = targets.allSatisfy { id in
-                SpendLevel.allCases.allSatisfy { level in
-                    let change = PolicyChange(pool: id, level: level)
-                    guard let rect = policyFrames[change] else { return false }
-                    hit = nil
-                    return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && hit == change
-                }
-            }
-            let dragOK = self.selftestDrag()
-            var statusClick: URL?
-            self.state.onOpenStatus = { statusClick = $0 }
-            let statuses = self.state.statusFrames
-            let statusOK = statuses.count == (card?.sections.compactMap { $0.extras.status }.count ?? 0)
-                && statuses.values.allSatisfy { link in
-                    statusClick = nil
-                    return self.state.endPointer(at: CGPoint(x: link.frame.midX, y: link.frame.midY))
-                        && statusClick == link.url
-                }
-            // Header buttons route by position, then the settings pane: every choice reaches the preferences and
-            // survives a fresh read of them.
-            var routed: MenuControl?
-            let realControl = self.state.onControl
-            self.state.onControl = { routed = $0 }
-            let headerFrames = self.state.controlFrames
-            let headerOK = [MenuControl.refresh, .settings].allSatisfy { control in
-                guard let rect = headerFrames[control] else { return false }
-                routed = nil
-                return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && routed == control
-            }
-            self.state.onControl = realControl
-            self.state.showsSettings = true
+        var log: [String] = []
+        var failed = false
+        func check(_ name: String, _ ok: Bool) { if !ok { failed = true; log.append("FAIL " + name) } }
+        func settle() {
             host.invalidateIntrinsicContentSize(); host.needsLayout = true
             host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: ceil(host.fittingSize.height))
             host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                let frames = self.state.controlFrames
-                var wanted: [MenuControl] = [.back, .reset, .settingsPage(0), .settingsPage(1)] + BarPrefs.windowChoices.map { .window($0) }
-                wanted += [.notifyLow, .notifyReset, .show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
-                wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
-                wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) } + BarPrefs.Reset.allCases.map { .resets($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
-                var settingsOK = wanted.allSatisfy { frames[$0] != nil }
-                if !settingsOK { print("selftest: frames \(frames.count) settings \(self.state.showsSettings) \(frames.keys.map { "\($0)" }.prefix(5))") }
-                func click(_ control: MenuControl) {
-                    if let rect = frames[control] { _ = self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) } else { settingsOK = false }
+        }
+        /// Click a routed control by its position, the way the host view does, and say what it routed to.
+        func click(_ control: MenuControl, real: Bool = false) -> Bool {
+            guard let rect = state.controlFrames[control] else { return false }
+            var routed: MenuControl?
+            let keep = state.onControl
+            state.onControl = { routed = $0; if real { keep($0) } }
+            defer { state.onControl = keep }
+            return state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && routed == control
+        }
+        var steps: [() -> Void] = []
+        func step(_ body: @escaping () -> Void) { steps.append(body) }
+        let ids = state.presenter?.tabs.map(\.id) ?? []
+        let providers = state.presenter?.overviewPage(order: ids.filter { $0 != "other" }, show: .used).providers.map(\.id) ?? []
+
+        step { settle() }
+        step { // Overview: every provider tile opens its tab; the links tile goes to the console
+            check("overview tiles", !providers.isEmpty && providers.allSatisfy { click(.openTab($0)) })
+            check("overview links", click(.usage(nil)) && click(.console))
+            check("tab strip", self.state.tileFrames.count == ids.count + 1)
+            check("provider tiles are draggable", self.state.blockFrames.keys.filter { $0.hasPrefix("provider:") }.count == providers.count)
+            self.state.selected = self.config.selftestTab ?? "claude"
+            settle()
+        }
+        step { settle() }
+        step { // a provider tab: header, links, a reset flow, the policy popup
+            let tab = self.state.current
+            let page = self.state.presenter?.providerPage(for: tab, show: .used)
+            check("header buttons", click(.refresh) && click(.settings))
+            if let page {
+                for link in page.links {
+                    switch link.kind {
+                    case .usage(let pool): check("usage link", click(.usage(pool)))
+                    case .status(let url): check("status link", click(.openURL(url)))
+                    case .console: check("console link", click(.console))
+                    }
                 }
-                click(.show("codex")); click(.window("Week")); click(.count(.left)); click(.icon(.logo))
-                click(.text(.window)); click(.notifyLow); click(.notifyReset); click(.extra(.reset)); click(.resets(.clock)); click(.refreshEvery(300))
-                var expected = BarPrefs()
-                expected.show = "codex"; expected.window = "Week"; expected.count = .left; expected.icon = .logo
-                expected.text = .window; expected.notifyLow = true; expected.notifyReset = true; expected.extra = .reset; expected.reset = .clock; expected.refreshSeconds = 300
-                let saved = self.barStore.load()
-                settingsOK = settingsOK && self.state.prefs == expected && saved == expected
-                if !settingsOK { print("selftest: prefs \(self.state.prefs) saved \(saved)") }
-                click(.reset)
-                settingsOK = settingsOK && self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs()
-                // The tabs editor: a switch hides a provider and the Overview choice flips, both routed by position.
-                click(.settingsPage(1))
-                host.invalidateIntrinsicContentSize(); host.needsLayout = true
-                host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.display()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    let tabFrames = self.state.controlFrames
-                    let ids = self.state.orderedTabs.map(\.id)
-                    var tabsOK = self.state.settingsPage == 1 && !ids.isEmpty && ids.allSatisfy { tabFrames[.toggleTab($0)] != nil }
-                        && tabFrames[.overviewHidden] != nil
-                    func tap(_ control: MenuControl) {
-                        if let rect = tabFrames[control] { _ = self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) } else { tabsOK = false }
-                    }
-                    if let first = ids.first {
-                        tap(.toggleTab(first)); tap(.overviewHidden)
-                        tabsOK = tabsOK && !self.state.layout.isVisible(first) && self.state.layout.hiddenInOverview
-                            && self.state.shownTabs.count == ids.count
-                    }
-                    settingsOK = settingsOK && tabsOK
-                    if !tabsOK { print("selftest: tabs editor \(tabFrames.count) frames, layout \(self.state.layout)") }
-                    click(.back)
-                    settingsOK = settingsOK && !self.state.showsSettings
-                    let ok = fonts && host.frame.height > 150 && tiles == (self.state.presenter?.tabs.count ?? -1) + 1
-                        && self.menu.items.count == 6 && routeOK && policyFrames.count == targets.count * SpendLevel.allCases.count
-                        && providerAssetCount == ProviderLogo.allCases.count && dragOK && statusOK && headerOK && settingsOK && overviewOK
-                    print("selftest \(ok ? "ok" : "FAILED"): fonts \(fonts), logos \(providerAssetCount), menu items \(self.menu.items.count), tiles \(tiles), overview rows \(overviewOK), dial stops \(policyFrames.count), drag \(dragOK), status links \(statuses.count), header buttons \(headerOK), settings controls \(wanted.count) \(settingsOK), card height \(Int(host.frame.height))")
-                    exit(ok ? 0 : 1)
+                if let reset = page.resets.first(where: \.canUse) {
+                    check("Use routes", click(.resetAsk(reset.id), real: true))
+                    check("confirm is asked", self.state.resetFlow == ResetFlow(key: reset.id, phase: .confirm))
                 }
             }
+            settle()
         }
+        step { settle() }
+        step {
+            if let flow = self.state.resetFlow {
+                check("confirm has Cancel and Use", self.state.controlFrames[.resetCancel] != nil && self.state.controlFrames[.resetUse(flow.key)] != nil)
+                check("Cancel closes it", click(.resetCancel, real: true) && self.state.resetFlow == nil)
+            }
+            if self.state.presenter?.providerPage(for: self.state.current, show: .used)?.policy != nil {
+                check("policy popup", click(.policyOpen, real: true) && self.state.policyOpen)
+            }
+            settle()
+        }
+        step { settle() }
+        step { // with a stand-in fleetctl: ask again, confirm, and the row reports what it printed
+            guard self.config.fleetctl.hasPrefix("/"), let reset = self.state.presenter?.providerPage(for: self.state.current, show: .used)?.resets.first(where: \.canUse) else { return }
+            check("asks again", click(.resetAsk(reset.id), real: true))
+            settle()
+        }
+        step { settle() }
+        step {
+            guard self.config.fleetctl.hasPrefix("/"), let flow = self.state.resetFlow else { return }
+            check("Use runs it", click(.resetUse(flow.key), real: true))
+        }
+        step { settle() }
+        step {
+            if self.config.fleetctl.hasPrefix("/") {
+                check("reset reported: \(String(describing: self.state.resetFlow))", self.state.resetFlow?.phase == .done(0))
+                self.state.resetFlow = nil
+                check("a refusal is shown in plain words, no retry", ResetRunner.run(self.config, key: "claude-weekly-scoped-fable") == .failed("Anthropic did not accept the reset (HTTP 429)"))
+            }
+        }
+        step { settle() }
+        step {
+            var hit: PolicyChange?
+            self.state.onPolicyChange = { hit = $0 }
+            let frames = self.state.policyFrames
+            if self.state.policyOpen {
+                check("dial stops", !frames.isEmpty && frames.allSatisfy { change, rect in
+                    hit = nil
+                    return self.state.endPointer(at: CGPoint(x: rect.midX, y: rect.midY)) && hit == change
+                })
+            }
+            _ = click(.policyOpen, real: true)
+            check("tab drag", self.selftestTabDrag())
+            check("tile drag", self.selftestTileDrag(settle: settle))
+        }
+        step { settle() }
+        step { // settings: Show, a tile off and on again, the tab list, the menu bar page
+            self.state.showsSettings = true; self.state.settingsPage = 0; settle()
+        }
+        step { settle() }
+        step {
+            let before = self.state.panel
+            check("settings frames", click(.panelShow(.left), real: true) && self.state.panel.show == .left)
+            check("show saved", self.panelStore.load().show == .left)
+            _ = click(.panelShow(.used), real: true)
+            check("tab chips", self.state.shownTabs.allSatisfy { click(.settingsTab($0.id), real: true) })
+            _ = click(.settingsTab("claude"), real: true)
+            settle()
+            let on = self.state.panel.listed("claude", builtIns: PanelPrefs.providerTiles).on
+            if let first = on.first(where: { $0 != "links" }) {
+                check("tile off", click(.toggleTile("claude", first), real: true) && !self.state.panel.listed("claude", builtIns: PanelPrefs.providerTiles).on.contains(first))
+                check("tile off saved", self.panelStore.load().hiddenTiles["claude"]?.contains(first) == true)
+                settle()
+                check("add tile list", click(.addOpen, real: true) && self.state.addOpen)
+                settle()
+                check("add tile", click(.addTile("claude", first), real: true) && self.state.panel.listed("claude", builtIns: PanelPrefs.providerTiles).on.contains(first))
+            } else { check("claude tiles listed", false) }
+            _ = before
+            settle()
+        }
+        step { settle() }
+        step {
+            check("tabs page", click(.settingsPage(1), real: true))
+            settle()
+        }
+        step { settle() }
+        step {
+            let ids = self.state.orderedTabs.map(\.id)
+            check("tab switches", !ids.isEmpty && ids.allSatisfy { self.state.controlFrames[.toggleTab($0)] != nil })
+            if let first = ids.first {
+                check("hide a tab", click(.toggleTab(first), real: true) && !self.state.panel.isTabVisible(first))
+                check("hidden saved", self.panelStore.load().hiddenTabs.contains(first))
+                _ = click(.toggleTab(first), real: true)
+            }
+            check("bar page", click(.settingsPage(2), real: true))
+            settle()
+        }
+        step { settle() }
+        step {
+            var wanted: [MenuControl] = [.back, .reset, .settingsPage(0), .settingsPage(1)] + BarPrefs.windowChoices.map { .window($0) }
+            wanted += [.notifyLow, .notifyReset, .show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
+            wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
+            wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) } + BarPrefs.Reset.allCases.map { .resets($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
+            let missing = wanted.filter { self.state.controlFrames[$0] == nil }
+            check("bar controls \(missing.prefix(3))", missing.isEmpty)
+            for control in [MenuControl.show("codex"), .window("Week"), .count(.left), .icon(.logo), .text(.window), .notifyLow, .notifyReset, .extra(.reset), .resets(.clock), .refreshEvery(300)] {
+                _ = click(control, real: true)
+            }
+            var expected = BarPrefs()
+            expected.show = "codex"; expected.window = "Week"; expected.count = .left; expected.icon = .logo
+            expected.text = .window; expected.notifyLow = true; expected.notifyReset = true; expected.extra = .reset; expected.reset = .clock; expected.refreshSeconds = 300
+            check("bar prefs saved", self.state.prefs == expected && self.barStore.load() == expected)
+            _ = click(.reset, real: true)
+            check("bar prefs reset", self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs())
+            check("back", click(.back, real: true) && !self.state.showsSettings)
+            let fonts = NSFont.systemFont(ofSize: 13).isFixedPitch == false
+            let ok = !failed && fonts && self.menu.items.count == 6 && providerAssetCount == ProviderLogo.allCases.count
+            print("selftest \(ok ? "ok" : "FAILED"): logos \(providerAssetCount), menu items \(self.menu.items.count), tabs \(ids.count), providers \(providers.count), panel file \(self.panelStore.exists)" + (log.isEmpty ? "" : "\n" + log.joined(separator: "\n")))
+            try? FileManager.default.removeItem(at: self.panelStore.url)
+            exit(ok ? 0 : 1)
+        }
+        if let dir = config.dragFrames {
+            self.state.selected = self.config.selftestTab ?? "claude"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                settle()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.recordDrag(host: host, window: window, into: dir) }
+            }
+            return
+        }
+        func run(_ index: Int) {
+            guard index < steps.count else { return }
+            steps[index]()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { run(index + 1) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { run(0) }
     }
 
-    private func selftestDrag() -> Bool {
+    /// Tab strip: a press and release selects, a press that travels past the slop and lands on another tab reorders,
+    /// a drag that ends outside does nothing. All through the pointer methods the host's mouse events call.
+    private func selftestTabDrag() -> Bool {
         let original = state.presenter?.tabs.map(\.id) ?? []
         guard original.count >= 2 else { return false }
         let source = original[1], target = original[0]
         guard let src = state.tileFrames[source], let dst = state.tileFrames[target] else { return false }
         let a = CGPoint(x: src.midX, y: src.midY), b = CGPoint(x: dst.midX, y: dst.midY)
-        let suite = "org.crossfeed.selftest." + UUID().uuidString
-        guard let defaults = UserDefaults(suiteName: suite) else { return false }
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let order = TabOrder(defaults: defaults)
+        let saved = state.panel
+        defer { state.panel = saved }
         var clicked: String?
         state.onSelect = { clicked = $0 }
-        state.onReorder = { from, to in _ = order.move(from, onto: to, among: original) }
+        let reorder = state.onReorder
+        state.onReorder = { from, to in self.state.panel.moveTab(from, onto: to, among: original) }
+        defer { state.onReorder = reorder }
         state.beginPointer(at: a)
-        guard state.endPointer(at: a), clicked == source, order.ordered(original) == original else { return false }
+        guard state.endPointer(at: a), clicked == source, state.panel.orderedTabs(original) == original else { return false }
         clicked = nil
         let outside = CGPoint(x: -20, y: -20)
         state.beginPointer(at: a)
         state.movePointer(to: outside)
-        guard state.endPointer(at: outside), clicked == nil, order.ordered(original) == original else { return false }
+        guard state.endPointer(at: outside), clicked == nil, state.panel.orderedTabs(original) == original else { return false }
         state.beginPointer(at: a)
         state.movePointer(to: b)
         let expected = [source, target] + original.dropFirst(2)
-        guard state.endPointer(at: b), clicked == nil, order.ordered(original) == expected,
-              let newDefaults = UserDefaults(suiteName: suite) else { return false }
-        return TabOrder(defaults: newDefaults).ordered(original) == expected
+        return state.endPointer(at: b) && clicked == nil && state.panel.orderedTabs(original) == expected
+    }
+
+    /// Tiles: a press that travels past the slop carries the tile; released past the next tile it takes that place, saved to panel.json.
+    private func selftestTileDrag(settle: () -> Void) -> Bool {
+        let tab = state.current
+        let ids = state.blockFrames.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }.map(\.key)
+        guard ids.count >= 2, let first = state.blockFrames[ids[0]]?.rect, let second = state.blockFrames[ids[1]]?.rect else { return false }
+        let press = CGPoint(x: first.minX + 20, y: first.minY + 6)
+        var changed: (String, [String])?
+        let keep = state.onReorderBlocks
+        state.onReorderBlocks = { changed = ($0, $1); keep($0, $1) }
+        defer { state.onReorderBlocks = keep }
+        state.beginPointer(at: press)
+        state.movePointer(to: CGPoint(x: press.x, y: press.y + 3))
+        let notYet = !state.isCarryingBlock
+        state.movePointer(to: CGPoint(x: press.x, y: press.y + 10))
+        let carried = state.isCarryingBlock
+        let travel = second.maxY - first.minY
+        state.movePointer(to: CGPoint(x: press.x, y: press.y + travel))
+        state.cancelPointer()   // a cancelled drag writes nothing
+        let cancelled = changed == nil
+        return notYet && carried && cancelled
     }
 }
 

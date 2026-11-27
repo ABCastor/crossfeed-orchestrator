@@ -127,6 +127,10 @@ public struct Pool: Decodable, Equatable {
     /// fleetctl sends null, a string, or an object with a `reason`; only the words survive.
     public var gaugeError: String?
     public var staleAgeS: Double?
+    /// Today's tokens and the last 14 days, from the saved usage-cost caches. Nil when nothing was read.
+    public var tokens: TokenSeries?
+    /// Limit resets held: Claude's carry a `key` the menu can use.
+    public var limitResets: [LimitReset]
 
     /// A pool whose every model is archived or withdrawn is on its way out: the bar never leads with it.
     public var isRetired: Bool {
@@ -139,7 +143,7 @@ public struct Pool: Decodable, Equatable {
         case resetAt = "reset_at", pace, limits, gaugeError = "gauge_error", staleAgeS = "stale_age_s"
         case levelControl = "level_control", models, archivedModels = "archived"
         case credits, statusURL = "status_url", usageCost = "usage_cost", perModel = "per_model"
-        case incident, billing, modelQuota = "model_quota"
+        case incident, billing, modelQuota = "model_quota", tokens, limitResets = "limit_resets"
     }
 
     public init(from decoder: Decoder) throws {
@@ -168,6 +172,8 @@ public struct Pool: Decodable, Equatable {
         pace = try? c.decodeIfPresent(Pace.self, forKey: .pace)
         limits = (try? c.decodeIfPresent([Limit].self, forKey: .limits)) ?? []
         staleAgeS = try? c.decodeIfPresent(Double.self, forKey: .staleAgeS)
+        tokens = try? c.decodeIfPresent(TokenSeries.self, forKey: .tokens)
+        limitResets = (try? c.decodeIfPresent([LimitReset].self, forKey: .limitResets)) ?? []
         if let text = try? c.decodeIfPresent(String.self, forKey: .gaugeError) {
             gaugeError = text
         } else if let object = try? c.decodeIfPresent([String: JSONScalar].self, forKey: .gaugeError) {
@@ -205,11 +211,17 @@ public struct PlanPrice: Decodable, Equatable {
     public var currency: String?
     public var period: String?
     public var source: String?
+    /// The operator's part of a split as a reduced fraction ("1/2"), nil when the plan is not split.
+    public var share: String?
+    /// What the operator pays a month, in the plan's own currency.
+    public var operatorAmount: String?
 
-    enum CodingKeys: String, CodingKey { case id, name, amount, currency, period, source }
+    enum CodingKeys: String, CodingKey { case id, name, amount, currency, period, source, share, operatorAmount = "operator_amount" }
 
-    public init(id: String, name: String = "", amount: String? = nil, currency: String? = nil, period: String? = nil, source: String? = nil) {
+    public init(id: String, name: String = "", amount: String? = nil, currency: String? = nil, period: String? = nil, source: String? = nil,
+                share: String? = nil, operatorAmount: String? = nil) {
         self.id = id; self.name = name; self.amount = amount; self.currency = currency; self.period = period; self.source = source
+        self.share = share; self.operatorAmount = operatorAmount
     }
 
     public init(from decoder: Decoder) throws {
@@ -222,6 +234,9 @@ public struct PlanPrice: Decodable, Equatable {
         currency = try? c.decodeIfPresent(String.self, forKey: .currency)
         period = try? c.decodeIfPresent(String.self, forKey: .period)
         source = try? c.decodeIfPresent(String.self, forKey: .source)
+        share = try? c.decodeIfPresent(String.self, forKey: .share)
+        operatorAmount = (try? c.decodeIfPresent(String.self, forKey: .operatorAmount))
+            ?? (try? c.decodeIfPresent(Double.self, forKey: .operatorAmount)).map { String($0) }
     }
 }
 
@@ -231,16 +246,19 @@ public struct Spend: Decodable, Equatable {
     public var unpriced: Int
     public var unsplit: Int
     public var unavailable: Bool
+    /// One USD total at reference rates, and the operator's own part of it. Nil when no rate is known.
+    public var usd: UsdTotal?
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        usd = try? c.decodeIfPresent(UsdTotal.self, forKey: .usd)
         plans = (try? c.decode([PlanPrice].self, forKey: .plans)) ?? (try? c.decode([PlanPrice].self, forKey: .subscriptions)) ?? []
         monthly = (try? c.decode([Money].self, forKey: .monthly)) ?? []
         unpriced = (try? c.decode(Int.self, forKey: .unpriced)) ?? 0
         unsplit = (try? c.decode(Int.self, forKey: .unsplit)) ?? 0
         unavailable = (try? c.decode(Bool.self, forKey: .unavailable)) ?? false
     }
-    enum CodingKeys: String, CodingKey { case plans, subscriptions, monthly, unpriced, unsplit, unavailable }
+    enum CodingKeys: String, CodingKey { case plans, subscriptions, monthly, unpriced, unsplit, unavailable, usd }
 }
 
 public struct Readings: Decodable, Equatable {
@@ -257,8 +275,10 @@ public struct Glance: Decodable, Equatable {
     public var readings: Readings?
     /// Nil when the key is missing (an older fleetctl): the menu then says spend is unavailable.
     public var spend: Spend?
+    /// Tiles the enabled plugins drew, already validated by fleetctl and checked again here.
+    public var plugins: [PluginEntry]
 
-    enum CodingKeys: String, CodingKey { case schema, title, pools, subscriptions, readings, spend = "subscription_spend" }
+    enum CodingKeys: String, CodingKey { case schema, title, pools, subscriptions, readings, spend = "subscription_spend", plugins }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -269,6 +289,7 @@ public struct Glance: Decodable, Equatable {
         subscriptions = (try? c.decode([GlanceSubscription].self, forKey: .subscriptions)) ?? []
         readings = try? c.decodeIfPresent(Readings.self, forKey: .readings)
         spend = try? c.decodeIfPresent(Spend.self, forKey: .spend)
+        plugins = (try? c.decodeIfPresent([PluginEntry].self, forKey: .plugins)) ?? []
     }
 
     public func policyLevel(for id: String) -> String? {

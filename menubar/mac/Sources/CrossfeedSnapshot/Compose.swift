@@ -23,16 +23,25 @@ enum Compose {
 
     /// The menu's content view, drawn the way the live menu draws it.
     @MainActor
-    static func menuImage(state: MenuState, appearance: NSAppearance, scale: CGFloat) -> NSImage {
-        let host = NSHostingView(rootView: CrossfeedMenuView(state: state))
+    static func menuImage(state: MenuState, appearance: NSAppearance, scale: CGFloat, showsActions: Bool = true,
+                          prepare: ((MenuState) -> Void)? = nil) -> NSImage {
+        let host = NSHostingView(rootView: CrossfeedMenuView(state: state, showsActions: showsActions))
         host.appearance = appearance
         let fit = host.fittingSize
-        let size = NSSize(width: MenuMetrics.width, height: ceil(fit.height))
-        host.frame = NSRect(origin: .zero, size: size)
+        host.frame = NSRect(origin: .zero, size: NSSize(width: MenuMetrics.width, height: ceil(fit.height)))
         let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.appearance = appearance
         window.contentView = host
         host.layoutSubtreeIfNeeded()
+        if let prepare {
+            // One pass first, so every tile has reported where it is; then the change (a confirm, a drag), then draw.
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            prepare(state)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            host.frame = NSRect(origin: .zero, size: NSSize(width: MenuMetrics.width, height: ceil(host.fittingSize.height)))
+            host.layoutSubtreeIfNeeded()
+        }
+        let size = NSSize(width: MenuMetrics.width, height: ceil(host.frame.height))
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
                                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!

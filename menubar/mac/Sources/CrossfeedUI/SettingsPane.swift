@@ -38,16 +38,17 @@ struct SettingsPane: View {
             .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 10)
 
             HStack(spacing: 2) {
-                Chip("Menu bar", selected: state.settingsPage == 0, control: .settingsPage(0), state: state)
+                Chip("Tiles", selected: state.settingsPage == 0, control: .settingsPage(0), state: state)
                 Chip("Tabs", selected: state.settingsPage == 1, control: .settingsPage(1), state: state)
+                Chip("Menu bar", selected: state.settingsPage == 2, control: .settingsPage(2), state: state)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, MenuMetrics.horizontal - 8).padding(.top, 6)
 
-            if state.settingsPage == 1 {
-                TabsEditor(state: state)
-            } else {
-                barOptions
+            switch state.settingsPage {
+            case 1: TabsEditor(state: state)
+            case 2: barOptions
+            default: TilesEditor(state: state)
             }
         }
     }
@@ -126,8 +127,8 @@ struct SettingsPane: View {
     }
 }
 
-/// Which provider tabs the menu shows, and in what order. A switch hides a tab; the arrows move it.
-/// "Other" always stays last. Hidden providers count in Overview only when the operator turns that on.
+/// Which provider tabs the menu shows, and in what order. A switch hides a tab; the arrows move it (a drag in the strip too).
+/// "Other" always stays last.
 struct TabsEditor: View {
     @ObservedObject var state: MenuState
 
@@ -135,24 +136,151 @@ struct TabsEditor: View {
         let tabs = state.orderedTabs
         let movable = tabs.filter { $0.id != "other" }
         VStack(alignment: .leading, spacing: 0) {
-            Text("Show the providers you use. Overview is always first.")
+            Text("Overview is always first.")
                 .font(CF.face(11)).foregroundStyle(CF.quiet).fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 12).padding(.bottom, 6)
             VStack(spacing: 0) {
                 ForEach(tabs) { tab in
                     let index = movable.firstIndex { $0.id == tab.id }
-                    TabEditRow(tab: tab, shown: state.layout.isVisible(tab.id),
+                    TabEditRow(tab: tab, shown: state.panel.isTabVisible(tab.id),
                                canUp: (index ?? 0) > 0, canDown: index.map { $0 + 1 < movable.count } ?? false, state: state)
                 }
             }
-            .padding(.horizontal, 6)
-            MenuDivider(inset: true).padding(.vertical, 10)
-            SwitchRow(title: "Count hidden in Overview", on: state.layout.hiddenInOverview, control: .overviewHidden, state: state)
-                .padding(.horizontal, 6)
-            Text("Hidden tabs stay out of the strip. Their rows can still show in Overview.")
-                .font(CF.face(11)).foregroundStyle(CF.quiet).fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 2).padding(.bottom, 10)
+            .padding(.horizontal, 6).padding(.bottom, 10)
         }
+    }
+}
+
+/// Used or Left, then one tab's tiles: on or off, and a grip to drag them into order. Add tile brings back what is off
+/// and lists every plugin tile.
+struct TilesEditor: View {
+    @ObservedObject var state: MenuState
+
+    private static let names = ["limits": "Limits", "resets": "Resets", "tokens": "Tokens", "policy": "Spend policy",
+                                "credits": "Credits", "links": "Links", "alert": "Alert", "providers": "Providers",
+                                "subscriptions": "Subscriptions"]
+
+    private func name(_ id: String, plugins: [PluginEntry]) -> String {
+        Self.names[id] ?? plugins.first { $0.id == id }?.doc.title ?? String(id.split(separator: "/").last ?? Substring(id))
+    }
+
+    var body: some View {
+        let presenter = state.presenter
+        let plugins = presenter?.glance.plugins ?? []
+        let tab = state.settingsTab
+        let builtIns: [String] = {
+            if tab == Presenter.overviewID {
+                let overview = presenter?.overviewPage(order: [], show: state.panel.show)
+                return [TileID.alert, TileID.providers, TileID.links]
+                    + (overview?.subscriptions != nil ? [TileID.subscriptions] : []) + (overview?.tokens != nil ? [TileID.tokens] : [])
+            }
+            return presenter?.providerPage(for: tab, show: state.panel.show)?.available ?? PanelPrefs.providerTiles
+        }()
+        let listed = state.panel.listed(tab, builtIns: builtIns)
+        let on = listed.on.filter { $0 != TileID.alert }
+        let alertOn = listed.on.contains(TileID.alert)
+        let pluginCandidates = plugins.map(\.id).filter { !listed.on.contains($0) }
+        let candidates = listed.off + builtIns.filter { !listed.on.contains($0) && !listed.off.contains($0) } + pluginCandidates
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingRow("Show") {
+                    Chip("Used", selected: state.panel.show == .used, control: .panelShow(.used), state: state)
+                    Chip("Left", selected: state.panel.show == .left, control: .panelShow(.left), state: state)
+                }
+                SettingRow("Tab") {
+                    ForEach(state.shownTabs) { tab in
+                        Chip(tab.title, selected: state.settingsTab == tab.id, control: .settingsTab(tab.id), state: state)
+                    }
+                }
+            }
+            .padding(.horizontal, MenuMetrics.horizontal - 8).padding(.top, 10)
+            MenuDivider(inset: true).padding(.vertical, 10)
+            if tab == Presenter.overviewID {
+                TileSwitchRow(title: name(TileID.alert, plugins: plugins), on: alertOn, control: .toggleTile(tab, TileID.alert), state: state)
+                    .padding(.horizontal, 8).padding(.bottom, 4)
+            }
+            if on.isEmpty {
+                Text("No tiles on.").font(CF.face(12)).foregroundStyle(CF.quiet).padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 6)
+            } else {
+                ReorderableTiles(tab: "settings:" + tab, tiles: on.map { id in
+                    TileItem(id: id, content: AnyView(TileSwitchRow(title: name(id, plugins: plugins), on: true, grip: true,
+                                                                   control: .toggleTile(tab, id), state: state)))
+                }, state: state, gap: 4)
+                .padding(.horizontal, 8)
+            }
+            Button { state.onControl(.addOpen) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: state.addOpen ? "minus" : "plus").font(.system(size: 11, weight: .semibold))
+                    Text("Add tile").font(CF.face(12, .medium))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(CF.machineText).frame(minHeight: 28, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).routed(.addOpen)
+            .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 6)
+            if state.addOpen {
+                VStack(spacing: 0) {
+                    if candidates.isEmpty {
+                        Text("Nothing to add.").font(CF.face(12)).foregroundStyle(CF.quiet).padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    ForEach(candidates, id: \.self) { id in
+                        AddTileRow(title: name(id, plugins: plugins), plugin: TileID.isPlugin(id), control: .addTile(tab, id), state: state)
+                    }
+                }
+                .padding(.horizontal, 6)
+            }
+            Spacer(minLength: 0).frame(height: 10)
+        }
+    }
+}
+
+struct TileSwitchRow: View {
+    let title: String
+    let on: Bool
+    var grip = false
+    let control: MenuControl
+    @ObservedObject var state: MenuState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if grip {
+                Image(systemName: "line.3.horizontal").font(.system(size: 10, weight: .semibold)).foregroundStyle(CF.faint)
+                    .frame(width: 14).accessibilityHidden(true)
+            }
+            Text(title).font(CF.face(13, .medium)).lineLimit(1)
+            Spacer(minLength: 4)
+            SwitchView(on: on).frame(width: 44, height: 30).contentShape(Rectangle()).routed(control)
+                .accessibilityElement(children: .ignore).accessibilityLabel(title)
+                .accessibilityValue(on ? "on" : "off").accessibilityAddTraits(.isButton)
+        }
+        .padding(.leading, 10).padding(.trailing, 4).frame(minHeight: 34)
+        .background(RoundedRectangle(cornerRadius: 8).fill(CF.tile))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(CF.tileEdge, lineWidth: 0.5))
+    }
+}
+
+struct AddTileRow: View {
+    let title: String
+    let plugin: Bool
+    let control: MenuControl
+    @ObservedObject var state: MenuState
+    @State private var hovering = false
+
+    var body: some View {
+        Button { state.onControl(control) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(CF.machineText).frame(width: 16)
+                Text(title).font(CF.face(13)).lineLimit(1)
+                if plugin { Text("Plugin").font(CF.face(11)).foregroundStyle(CF.quiet) }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).frame(minHeight: 30)
+            .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? CF.hover : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).routed(control).onHover { hovering = $0 }
+        .accessibilityLabel("Add \(title)")
     }
 }
 

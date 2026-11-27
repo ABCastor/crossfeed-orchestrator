@@ -2,7 +2,8 @@
 // the very NSHostingView the app puts in its menu is drawn into a bitmap.
 //
 //   CrossfeedSnapshot --fixture glance.json --now <ISO time> --fonts Resources/Fonts \
-//       --out menu.png [--appearance light|dark] [--tab codex] [--side-by-side codexbar.png]
+//       --out menu.png [--appearance light|dark] [--tab codex] [--side-by-side mockup.png] [--bare]
+//       [--mode used|left] [--panel panel.json] [--confirm] [--middrag] [--settings [--settings-page 0|1|2] [--settings-tab ID]]
 import AppKit
 import CrossfeedCore
 import CrossfeedUI
@@ -46,10 +47,11 @@ do {
     if let v = argument("--extra").flatMap(BarPrefs.Extra.init) { prefs.extra = v }
     if let v = argument("--reset").flatMap(BarPrefs.Reset.init) { prefs.reset = v }
     let settings = CommandLine.arguments.contains("--settings")
-    let layout = TabLayout(hidden: Set((argument("--hide") ?? "").split(separator: ",").map(String.init)),
-                           hiddenInOverview: CommandLine.arguments.contains("--hidden-in-overview"))
-    let order = (argument("--order") ?? "").split(separator: ",").map(String.init)
-    let providerOrder = TabOrder.otherLast(order + presenter.tabs.map(\.id).filter { !order.contains($0) })
+    var panel = argument("--panel").map { PanelPrefsStore(url: URL(fileURLWithPath: $0)).load() } ?? PanelPrefs()
+    if let mode = argument("--mode").flatMap(PanelPrefs.Show.init) { panel.show = mode }
+    for id in (argument("--hide") ?? "").split(separator: ",").map(String.init) where panel.isTabVisible(id) { panel.toggleTab(id) }
+    if let order = argument("--order") { panel.tabs = [PanelPrefs.fixedFirst] + order.split(separator: ",").map(String.init) + PanelPrefs.defaultTabs }
+    let bare = CommandLine.arguments.contains("--bare")
     if let stripsOut = argument("--strips-out") {
         // One row per look: the bar item alone, on a light and a dark bar.
         var looks: [(title: String, summary: BarSummary)] = []
@@ -84,27 +86,40 @@ do {
     let tabs = (argument("--tabs") ?? argument("--tab") ?? "").split(separator: ",").map(String.init)
     var panels: [(title: String, image: NSImage)] = []
     // One panel height for every tab, as the live menu uses (--no-fixed draws the old content-sized menu).
-    let heights = PanelSizing.measure(presenter: presenter, prefs: prefs, layout: layout, order: providerOrder, cap: argument("--cap").flatMap { Double($0) }.map { CGFloat($0) } ?? 760)
+    let heights = PanelSizing.measure(presenter: presenter, prefs: prefs, panel: panel, cap: argument("--cap").flatMap { Double($0) }.map { CGFloat($0) } ?? 760)
     if CommandLine.arguments.contains("--heights") {
         print("panel \(Int(heights.panel)) settings \(Int(heights.settings)) tabs " + heights.perTab.sorted { $0.key < $1.key }.map { "\($0.key) \(Int($0.value))" }.joined(separator: " "))
     }
     for tab in tabs.isEmpty ? [""] : tabs {
         let state = MenuState(presenter: presenter, selected: tab.isEmpty ? nil : tab)
         state.prefs = prefs
-        state.layout = layout
-        state.providerOrder = providerOrder
+        state.panel = panel
         state.settingsPage = argument("--settings-page").flatMap { Int($0) } ?? 0
-        if !CommandLine.arguments.contains("--no-fixed") { state.panelHeight = heights.panel }
+        state.settingsTab = argument("--settings-tab") ?? tab
+        if CommandLine.arguments.contains("--fixed") { state.panelHeight = heights.panel }
         state.showsSettings = settings
-        let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale)
-        let screen = Compose.screen(menu: menu, summary: presenter.barSummary(prefs), appearance: appearance, scale: scale)
+        state.addOpen = CommandLine.arguments.contains("--add-open")
+        state.policyOpen = CommandLine.arguments.contains("--policy-open")
+        let confirm = CommandLine.arguments.contains("--confirm")
+        let drag = CommandLine.arguments.contains("--middrag")
+        let menu = Compose.menuImage(state: state, appearance: appearance, scale: scale, showsActions: !bare) { state in
+            if confirm, let key = presenter.providerPage(for: state.current, show: panel.show)?.resets.first(where: \.canUse)?.id {
+                state.resetFlow = ResetFlow(key: key, phase: .confirm)
+            }
+            if drag { state.simulateDrag(tab: state.current, index: Int(argument("--drag-index") ?? "") ?? 0, dx: 0, dy: CGFloat(Double(argument("--drag-dy") ?? "") ?? 70)) }
+        }
         let name = state.current == Presenter.overviewID ? "Overview" : (presenter.tabs.first { $0.id == state.current }?.title ?? "menu")
-        panels.append((settings ? "Crossfeed, settings, \(state.settingsPage == 1 ? "Tabs" : "Menu bar") page" : "Crossfeed, \(name) tab, fixture glance JSON", screen))
+        if bare {
+            panels.append(("Build, \(name)", menu))
+        } else {
+            let screen = Compose.screen(menu: menu, summary: presenter.barSummary(prefs), appearance: appearance, scale: scale)
+            panels.append((settings ? "Crossfeed, settings, page \(state.settingsPage)" : "Crossfeed, \(name) tab, fixture glance JSON", screen))
+        }
     }
     var all: [(title: String, image: NSImage)] = []
     if let reference = argument("--side-by-side") {
         guard let other = NSImage(contentsOfFile: reference) else { throw GlanceError.malformed }
-        all.append((argument("--reference-title") ?? "CodexBar 0.67.0 (MIT), README screenshot", other))
+        all.append((argument("--reference-title") ?? "Mockup (B+ Tiles)", other))
     }
     all += panels
     let final = all.count == 1 ? all[0].image : Compose.row(all, scale: scale)

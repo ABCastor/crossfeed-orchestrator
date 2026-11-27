@@ -8,6 +8,31 @@ swift test                                     # in this directory: decoding and
 build-dir/Crossfeed.app/Contents/MacOS/Crossfeed -python /usr/bin/python3 -fleetctl /absolute/path/fleetctl.py
 ```
 
+## Round 11: B+ Tiles
+
+The menu is a strip of tabs over a sunk panel; every tab is a header and rounded tiles (design: `design-r11` B+ Tiles, the tokens copied from its `theme.js`). Colour, size and motion are not tuned per app.
+
+| Part | What it does |
+|---|---|
+| Overview | The alert line (what runs out first, or "Nothing runs out before it refills"), one tile per provider with its tightest window and the deficit or surplus word, a held-resets count (🎟️ 2), the subscriptions with ½ for a split plan and "You pay a month ≈ $X" from `subscription_spend.usd.operator`, tokens today, then the links |
+| Provider tab | Header (name, plan from the overlay plan name: "Claude Ultra" reads "Ultra"), Updated, a status incident line, then **Limits**, **Resets**, **Tokens** + **Spend policy** (half tiles, side by side), **Credits**, **Links** |
+| Pace bar | Teal fill; terracotta diagonal stripes from the pace tick to the fill's end (deficit); green diagonal stripes, same angle and period, from the fill's end to the tick (surplus); flush, full height; a 2 pt tick |
+| Limits | "58% used" (or "42% left"), the window named top right ("Weekly · resets Tue 14:00"), the bar, "▲ 17% deficit" and "Runs out in 2d 1h". A 5-hour row exists only when the provider reports one |
+| Resets | Titled "Resets"; each row 🎟️ name · Next · until 10 Dec · **Use**. Use asks ("Use the weekly reset? This can't be undone." and what it clears), Use runs `fleetctl use-reset claude --key KEY --yes --json` once, no retry, and the row says "Used. Left: n" or the plain failure. Only Claude's resets can be used |
+| Tokens | Today's number and a 14-day sparkline from the pool's `tokens` |
+| Links | "Usage and cost ↗", "Status ↗" (provider tabs), "Console ↗": last on every tab |
+| Plugin tiles | `plugins` in the glance, drawn with the same parts (bar = the pace bar, value, sparkline, text, https link). Shown only where you add them (Settings, Tiles, Add tile). No plugin code runs in the menu |
+
+**Drag**: press a tile and move past 7 pt; it lifts (opaque, scale 1.02, a shadow), every legal order is a state, the others blend between the states nearest the pointer, release settles on the nearest in 200 ms (150 ms under Reduce Motion), Escape puts it back. Two half tiles side by side move as a pair; a half tile alone spans the row. Overview's provider tiles reorder among themselves (that is the tab order); the other tiles move around the group. Tabs drag in the strip. The keyboard and VoiceOver path is "Move up" and "Move down" (context menu and accessibility actions).
+
+**Settings** (the sliders icon): *Tiles* (Show Used or Left; per tab, the tiles that are on with a grip and a switch; Add tile lists what is off and every plugin tile), *Tabs* (show, hide, order), *Menu bar* (the item in the bar, unchanged).
+
+**panel.json** is the one preferences store for Show, the tab order, hidden tabs, and every tab's tiles: `~/.config/orchestrator/panel.json` (`XDG_CONFIG_HOME`, or `FLEET_PANEL_PREFS`), mode 600, atomic replace, unknown keys kept. The first run moves the old UserDefaults tab order, hidden tabs and the Claude block order into it and reads only the file after that. The Menu bar page's choices stay in app preferences.
+
+Review images: `CrossfeedSnapshot --fixture Fixtures/glance-round11.json --now 2026-11-27T10:02:00Z --zone Europe/Rome --fonts Resources/Fonts --tab claude --bare --out claude.png` (also `--appearance dark`, `--mode left`, `--confirm`, `--middrag --drag-index 2 --drag-dy -80`, `--settings --settings-page 0|1|2 --settings-tab ID [--add-open]`, `--panel panel.json`, `--side-by-side mockup.png`). `Fixtures/glance-round11*.json` are the design's 27 Nov live-reading sample with the round 11 fields (`limit_resets` keys, `tokens`, `usd`, and one plugin tile in the `-plugins` file).
+
+The type is the system face, as the design's `-apple-system`; the bundled Commissioner and Martian Mono files are still registered for the Menu bar page's older rows. Sections below describe the first menu; where they differ (the card layout, the dial, the status link) this section is current.
+
 ## What is on screen
 
 | CodexBar region | Crossfeed |
