@@ -16,6 +16,59 @@ PERIODS = {"monthly": Decimal(1), "yearly": Decimal(12)}
 AGY_POOLS = {"antigravity-gemini", "antigravity-3p", "antigravity-argon"}
 FIELDS = ("amount", "currency", "period", "renewal", "operator_share_percent", "other_payer")
 MAX_BYTES = 256 * 1024
+BILLING = ("amount", "currency", "period")
+SHARE = ("operator_share_percent", "other_payer")
+ASSUMED_SHARE = "50"  # BR-SUBS-002: an assumption until the operator sets the real split
+NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+
+
+def _promo(plan: dict) -> tuple[bool, str | None]:
+    """A promo price is named in the plan or its price_source. The end month is known only when the
+    overlay says it (promo_until) or says how many months from as_of; otherwise it stays unknown."""
+    text = f"{plan.get('name') or ''} {plan.get('price_source') or ''}".casefold()
+    until = plan.get("promo_until")
+    if isinstance(until, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}(-[0-9]{2})?", until):
+        return True, until[:7]
+    if "promo" not in text:
+        return False, None
+    start = re.fullmatch(r"([0-9]{4})-([0-9]{2})", str(plan.get("as_of") or ""))
+    months = re.search(r"\b([0-9]{1,2}|" + "|".join(NUMBER_WORDS) + r")\s+months?\b", text)
+    if not start or not months:
+        return True, None
+    count = months.group(1)
+    count = int(count) if count.isdigit() else NUMBER_WORDS[count]
+    index = int(start.group(1)) * 12 + int(start.group(2)) - 1 + count
+    return True, f"{index // 12:04d}-{index % 12 + 1:02d}"
+
+
+def _price_defaults(plan: dict) -> dict:
+    """What the access overlay already says about this plan's price (BR-SUBS-001)."""
+    price, currency = plan.get("price"), plan.get("currency")
+    out = dict.fromkeys(BILLING)
+    if isinstance(price, bool) or not isinstance(price, (int, float, str)) or not isinstance(currency, str):
+        return out
+    try:
+        amount = _decimal(format(Decimal(str(price)), "f"), 999_999_999)
+    except (InvalidOperation, ValueError):
+        return out
+    if amount is None or not re.fullmatch("[A-Za-z]{3}", currency.strip()):
+        return out
+    if "." in amount:
+        amount = format(Decimal(amount).quantize(Decimal("0.01")), "f")
+    return {"amount": amount, "currency": currency.strip().upper(), "period": "monthly"}
+
+
+def _share_defaults(plan: dict) -> dict:
+    other = plan.get("other_payer")
+    if not isinstance(other, str):
+        found = re.search(r"\bshared with ([A-Z][\w-]{0,30})", str(plan.get("name") or "") + " " + str(plan.get("price_source") or ""))
+        other = found.group(1) if found else None
+    if not other:
+        return dict.fromkeys(SHARE)
+    share = plan.get("operator_share_percent")
+    return {"operator_share_percent": str(share) if isinstance(share, (int, float, str)) and not isinstance(share, bool)
+            else ASSUMED_SHARE, "other_payer": other.strip()}
 
 
 def path_for(overlay: Path) -> Path:
@@ -38,9 +91,21 @@ def defaults(roster: dict) -> dict[str, dict]:
         if key not in plans or pool == "antigravity-gemini":
             members = plans.get(key, {}).get("pools", [])
             plans[key] = {"id": key, "name": str(name), "pools": members,
-                          "source": "Access overlay (plan); operator (billing)", **dict.fromkeys(FIELDS)}
+                          "defaults": {**_price_defaults(plan), **_share_defaults(plan)},
+                          "promo": _promo(plan)[0], "promo_until": _promo(plan)[1],
+                          "free": _price_defaults(plan)["amount"] == "0.00", **dict.fromkeys(FIELDS)}
         plans[key]["pools"].append(pool)
     return plans
+
+
+def free_plans(roster: dict) -> list[dict]:
+    """Plans the overlay marks free: shown as Free, never a bill and never a dial."""
+    out = []
+    for pool, config in sorted((roster.get("quota_pools") or {}).items()):
+        plan = (config or {}).get("plan") if isinstance(config, dict) else None
+        if isinstance(plan, dict) and plan.get("billing") == "free" and plan.get("price") in (0, "0", 0.0):
+            out.append({"id": pool, "name": str(plan.get("name") or pool)})
+    return out
 
 
 def _decimal(text: str | None, maximum: int) -> str | None:
@@ -102,7 +167,23 @@ def _read(path: Path) -> dict[str, dict]:
 
 
 def _active(plans: dict[str, dict], saved: dict[str, dict]) -> list[dict]:
-    return [{**plan, **_billing(saved.get(key, {}))} for key, plan in plans.items()]
+    """The operator's value wins field by field; a field the operator never set takes the plan's default."""
+    rows = []
+    for key, plan in plans.items():
+        mine, base = _billing(saved.get(key, {})), plan.get("defaults") or {}
+        row = {**plan, **mine}
+        priced = mine["amount"] is not None
+        if not priced:
+            row.update({name: base.get(name) for name in BILLING})
+        for name in SHARE + ("renewal",):
+            if row.get(name) is None and name in base:
+                row[name] = base[name]
+        row["source"] = "operator" if priced else "default" if row["amount"] is not None else None
+        row["share_source"] = ("operator" if mine["operator_share_percent"] is not None else
+                               "default" if row["operator_share_percent"] is not None else None)
+        row["promo_until"] = plan.get("promo_until")
+        rows.append(row)
+    return rows
 
 
 def save(path: Path, roster: dict, key: str, fields: dict) -> None:
@@ -110,13 +191,22 @@ def save(path: Path, roster: dict, key: str, fields: dict) -> None:
     if key not in plans:
         raise ValueError("Unknown subscription.")
     billing = _billing(fields)
+    base = plans[key].get("defaults") or {}
+    # A value equal to the plan's default stays a default, so a later change in the overlay still shows.
+    if billing["amount"] == base.get("amount") and (billing["currency"], billing["period"]) == (base.get("currency"), base.get("period")):
+        billing.update({name: None for name in BILLING})
+    for name in SHARE:
+        if billing[name] == base.get(name):
+            billing[name] = None
     # Per-directory write lock serializes updates without opening a second file.
     with_directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         fcntl.flock(with_directory, fcntl.LOCK_EX)
         saved = _read(path)
         saved[key] = billing
-        rows = _active(plans, saved)
+        # Only what the operator set is stored; defaults are read from the overlay each time.
+        rows = [{"id": k, "name": plan["name"], "pools": plan["pools"], **_billing(saved.get(k, {}))}
+                for k, plan in plans.items()]
         # Keep entries for plans removed from the current roster, but do not count them.
         rows.extend(item for item_key, item in saved.items() if item_key not in plans)
         raw = (json.dumps({"schema": SCHEMA, "subscriptions": rows}, indent=2, ensure_ascii=False) + "\n").encode()
@@ -197,7 +287,7 @@ def view(path: Path, roster: dict, overview: dict) -> dict:
             entry["operator_monthly"] = _money(contribution)
             if totals[currency][1] is not None:
                 totals[currency][1] += contribution
-    return {"subscriptions": entries, "monthly": [
+    return {"subscriptions": entries, "free": free_plans(roster), "monthly": [
         {"currency": currency, "total": _money(total), "operator": _money(own) if own is not None else None}
         for currency, (total, own) in sorted(totals.items())
     ], "unpriced": unpriced, "unsplit": unsplit, "unavailable": False}

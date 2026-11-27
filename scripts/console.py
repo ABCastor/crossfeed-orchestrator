@@ -24,6 +24,7 @@ import fcntl
 import hashlib
 import hmac
 import html
+from decimal import Decimal
 import http.server
 import importlib.util
 import json
@@ -598,6 +599,31 @@ def _settings_content(overview: dict[str, Any], token: str, *, panel: bool = Fal
                  '<div class="setting-row"><a href="/phone">Phone view</a></div></section>')
 
 
+MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+SYMBOLS = {'EUR': '€', 'USD': '$', 'GBP': '£'}
+
+
+def plan_summary(row: dict, split: bool = True) -> str:
+    """One short line per plan: price, promo end, and who pays the rest, saying what is still an assumption."""
+    if row.get('amount') is None:
+        return 'No price set'
+    if row.get('free') or Decimal(row['amount']) == 0:
+        return 'Free'
+    code = row['currency']
+    price = f'{SYMBOLS.get(code, code + " ")}{row["amount"]} a {"year" if row["period"] == "yearly" else "month"}'
+    parts = [price]
+    if row.get('promo'):
+        until = row.get('promo_until')
+        parts.append(f'promo until {MONTHS[int(until[5:7]) - 1]} {until[:4]}' if until else 'promo')
+    if split and row.get('other_payer') and row.get('operator_share_percent') is not None:
+        share = Decimal(row['operator_share_percent']).normalize()
+        other = Decimal(100) - share
+        split = (f'{share:f}/{other:f}' if row.get('share_source') != 'default' else f'assumed {share:f}/{other:f}')
+        parts.append(f'shared with {row["other_payer"]} · {split}'
+                     + (' · change' if row.get('share_source') == 'default' else ''))
+    return ' · '.join(parts)
+
+
 def _subscription_settings(overview: dict, token: str) -> str:
     ledger = overview.get('subscription_spend') or {}
     out = ['<section class="setting-row" id="subscriptions"><h2>Subscriptions</h2>']
@@ -610,13 +636,17 @@ def _subscription_settings(overview: dict, token: str) -> str:
     if ledger.get('unpriced'):
         out.append(f'<p class="quiet">{ledger["unpriced"]} without a price. No price is assumed.</p>')
     labels = {p['pool']: p['label'] for p in overview.get('pools', [])}
+    for free in ledger.get('free', []):
+        out.append(f'<p class="setting-row plan-row"><span>{html.escape(free["name"])}</span>'
+                   '<span class="plan-meta">Free</span></p>')
 
     def input_field(row, name, label, kind='text', attrs=''):
         value = html.escape(row[name] or '', quote=True)
         return f'<label>{label}<input name="{name}" type="{kind}" value="{value}" {attrs}></label>'
 
     for row in ledger.get('subscriptions', []):
-        out.append(f'<details class="setting-row"><summary>{html.escape(row["name"])}</summary>'
+        out.append(f'<details class="setting-row"><summary><span>{html.escape(row["name"])}</span>'
+                   f'<span class="plan-meta">{html.escape(plan_summary(row))}</span></summary>'
                    '<form method="post" action="/settings/subscriptions">'
                    f'<input type="hidden" name="t" value="{html.escape(token, quote=True)}">'
                    f'<input type="hidden" name="id" value="{html.escape(row["id"], quote=True)}">')
@@ -637,7 +667,7 @@ def _subscription_settings(overview: dict, token: str) -> str:
             value = row['pool_value'].get(pool)
             equivalent = (f'USD {value["used_usd_equivalent"]} of {value["capacity_usd_equivalent"]} equivalent'
                           if value else 'Value not measured')
-            paid = f'{row["currency"]} {row["monthly"]} / month for the plan' if row['monthly'] is not None else 'Price not set'
+            paid = f'{row["currency"]} {row["monthly"]} / month for the plan' + (' (from plan)' if row.get('source') == 'default' else '') if row['monthly'] is not None else 'Price not set'
             out.append(f'<p class="quiet">{html.escape(labels.get(pool, pool))}: {html.escape(equivalent)}'
                        f' · {html.escape(paid)}</p>')
         out.append('</details>')
@@ -1377,7 +1407,8 @@ def snapshot_payload(overview: dict[str, Any]) -> dict[str, Any]:
                       **{key: p[key] for key in ('credits', 'spend_credits', 'status_url', 'usage_cost', 'per_model', 'per_model_error',
                                                  'incident', 'billing', 'billing_error', 'model_quota') if key in p},
                       'wallet_extras': _plan_extras(p, show_status=p['pool'] not in AGY_ALLOWANCES,
-                                                   empty=p['pool'] not in AGY_ALLOWANCES),
+                                                   empty=p['pool'] not in AGY_ALLOWANCES,
+                                                   lead=_split_notes(overview).get(p['pool'], '')),
                       "means": _level_meaning(p["level"]),
                       "control_actor": _control_text(p.get("control")),
                       "wallet_control_actor": attribution, "control_actor_kind": actor,
@@ -2105,7 +2136,7 @@ def render_share_page(overview, now, settings_content='', person=None, printing=
                  settings_content=settings_content)
 
 
-def _wallet_plan(pool):
+def _wallet_plan(pool, price=''):
     name = pool['plan'].get('name') or ''
     name = name.removeprefix('Owner ')
     name = {'Claude Max 20x': 'Max 20×',
@@ -2115,8 +2146,37 @@ def _wallet_plan(pool):
     about = pool['plan'].get('allowance')
     if about:
         about = re.sub(r'^(≈\s*|about\s+|around\s+|roughly\s+)', '', str(about).strip(), flags=re.I)
-    return (f'<small class="wb-plan">{html.escape(name)}</small>' if name else '') + (
+    line = ' · '.join(filter(None, [name, price]))
+    return (f'<small class="wb-plan">{html.escape(line)}</small>' if line else '') + (
         f'<p class="allow">About {html.escape(about)}</p>' if about else '')
+
+
+def _plan_prices(overview):
+    """pool -> the plan's price line for its card: what the operator set, else what the overlay says, else Free."""
+    ledger = overview.get('subscription_spend') or {}
+    lines = {}
+    for row in ledger.get('subscriptions', []):
+        if row.get('amount') is not None:
+            for pool in row['pools']:
+                lines[pool] = plan_summary(row, split=False)
+    for free in ledger.get('free', []):
+        lines[free['id']] = 'Free'
+    return lines
+
+
+def _split_notes(overview):
+    return {pool: _split_note(row) for row in (overview.get('subscription_spend') or {}).get('subscriptions', [])
+            for pool in row['pools']}
+
+
+def _split_note(row):
+    """Who pays the rest of a shared plan, with its assumption named."""
+    if not (row.get('other_payer') and row.get('operator_share_percent') is not None):
+        return ''
+    share = Decimal(row['operator_share_percent']).normalize()
+    assumed = row.get('share_source') == 'default'
+    text = f'Shared with {html.escape(row["other_payer"])} · {"assumed " if assumed else ""}{share:f}/{Decimal(100) - share:f}'
+    return f'<p class="wb-meta">{text}' + (' · <a href="/settings#subscriptions">change</a>' if assumed else '') + '</p>'
 
 
 def _refresh_form(form_token, return_fields=''):
@@ -2170,7 +2230,7 @@ def date_day(value):
     return f'{day.day} {day:%b}'
 
 
-def _plan_extras(pool, *, show_status=True, empty=False):
+def _plan_extras(pool, *, show_status=True, empty=False, lead=''):
     esc = html.escape
     status = _benchmark_url(pool.get('status_url') or STATUS_PAGES.get(pool['pool'])) if show_status else None
     usage = pool.get('usage_cost') or {}
@@ -2191,7 +2251,7 @@ def _plan_extras(pool, *, show_status=True, empty=False):
             return '—'
         return '<span class="wb-number">' + (f'${value:,.2f}' if not 0 < value < .01 else f'${value:.4f}') + '</span>'
 
-    pieces, folds = [], []   # folds (the <details> lists) go after the plain facts they expand
+    pieces, folds = [lead] if lead else [], []   # folds (the <details> lists) go after the plain facts they expand
     incident = pool.get('incident') or {}
 
     def short(value):
@@ -2298,6 +2358,9 @@ def _wallet(overview, token, workbench, order):
                                                  ('count', str(workbench['count'])),
                                                  *[('compare', key) for key in workbench['keys']]])
 
+    prices = _plan_prices(overview)
+    splits = _split_notes(overview)
+
     def controls(pool):
         key = esc(pool['pool'])
         current = pool['level']
@@ -2328,7 +2391,8 @@ def _wallet(overview, token, workbench, order):
         included = [_compact_name(by_key.get(o['model'], o), o['model'], key)
                     for o in options if o['current'] and o['run_as']][:3]
         pool_switch, policy = controls(pool) if card and separate_dial else ('', '')
-        plan = _wallet_plan(pool) if card else ''
+        plan = _wallet_plan(pool, prices.get(key)) if card else ''
+        split = splits.get(key, '') if card else ''
         flag = ('<div class="wb-explicit">Explicit only '
                 + _work_switch('explicit-only', explicit, f'{title} explicit-only pool flag',
                                disabled='Set in roster.', hint_id=pool_id) + '</div>')
@@ -2341,7 +2405,7 @@ def _wallet(overview, token, workbench, order):
                 + f'<div class="wb-head"><{tag}>{esc(title)}</{tag}>{pool_switch}</div>{plan}' +
                 '<p class="wb-error" role="status"></p>'
                 f'<div class="gauge" aria-label="{esc(title)} allowance">{_work_gauge(pool) + _pro_usage(pool)}</div>'
-                f'<div class="wallet-extras">{_plan_extras(pool, show_status=card)}</div>'
+                f'<div class="wallet-extras">{_plan_extras(pool, show_status=card, lead=split)}</div>'
                 f'{includes if card else ""}{policy}{inventory}</{container}>')
 
     def antigravity(group):
@@ -2352,7 +2416,8 @@ def _wallet(overview, token, workbench, order):
         return (
             f'<article class="pool provider-group wb-ticket wb-pool-control lvl-{dial["level"]}" id="provider-antigravity" '
             f'data-pool="antigravity" data-pool-members="{members}" data-search-label="Antigravity Google AI Pro" tabindex="-1">'
-            '<div class="wb-head"><h2>Google AI Pro</h2></div><small class="wb-plan">Antigravity</small>'
+            '<div class="wb-head"><h2>Google AI Pro</h2></div>'
+            f'<small class="wb-plan">{esc(" · ".join(filter(None, ["Antigravity", prices.get("antigravity-gemini")])))}</small>'
             '<p class="wb-error" role="status"></p>' + policy +
             f'<div class="wallet-extras agy-extras">{_plan_extras(_group_extras(group))}</div>'
             '<div class="wb-allowances" id="antigravity-allowances">'

@@ -248,3 +248,18 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - implemented-by: `scripts/vault_guard.py:check`, `brief_targets`, `jail_status`; `scripts/run-identity.sh:crossfeed_vault_guard` called by `codex-agent.sh`, `claude-agent.sh`, `agy-agent.sh`, `opencode-agent.sh`, `copilot-agent.sh`, `openrouter-agent.sh`; `scripts/pi_runner.py:vault_guard`; `scripts/chatgpt_runner.py:main`; `scripts/fleetctl.py:dispatch_selection`.
 - tested-by: `tests/test_vault_guard.py` (`EveryWrapperRefuses` for all eight wrappers and dispatch, `WorkersThatStartCannotWrite` for claude, agy, copilot, Codex without its sandbox and Pi, `GuardRules`, `EveryLaunchCarriesTheJail`).
 - Review when: the operator wants a worker to write a vault note directly (needs an operator-only approval the lead cannot forge), a vendor CLI adopts its own Seatbelt sandbox (nesting fails), or the vault moves.
+
+## BR-SUBS-001 — A plan's price comes from the access overlay unless the operator set one [OPERATOR-DIRECTED 2026-11-27]
+
+- RULE: When the private subscriptions file holds no price for a plan, the console and glance take amount, currency and monthly period from the plan in the access overlay and mark them `source: default`. A value the operator saves wins and is stored alone; a saved value equal to the default stays a default. A plan with no price in the overlay stays unpriced and no price is invented. Plans the overlay marks free read "Free". A promo plan reads "promo until <month>" when the overlay gives the end (`promo_until`, or a count of months from `as_of`), else "promo".
+- Authority: Operator, 27 Nov: "why does it say subscription no prices yet? You know it for everything. I've already told you."
+- implemented-by: `scripts/subscriptions.py:defaults`, `_price_defaults`, `_promo`, `_active`, `save`, `free_plans` · `scripts/console.py:plan_summary`.
+- tested-by: `tests/test_business_round10_subscriptions.py::PlanPrices::test_prices_come_from_the_plan_when_the_operator_set_none`, `test_an_operator_edit_wins_and_is_saved_alone` (control: an operator value reads `operator`), `test_promo_shows_its_end_when_known_and_plain_promo_otherwise`, `test_free_plan_reads_free`.
+- Review when: the operator sets the promo end date, or a plan's price changes in the overlay.
+
+## BR-SUBS-002 — ChatGPT Pro is assumed split 50/50 with a co-payer until the operator sets it [PROPOSED 2026-11-27]
+
+- RULE (assumed): ChatGPT Pro, "shared with" another person, is split 50% operator and 50% co-payer, shown as "assumed 50/50 · change" and on the co-payer's share card as assumed, until the operator saves a split.
+- Authority: Operator, 27 Nov: "what about the shared system?" The overlay records the plan as shared; the 50/50 figure is a default the operator has not confirmed.
+- implemented-by: `scripts/subscriptions.py:_share_defaults` · `scripts/sharing.py:build`, `_plan_lines`.
+- tested-by: `tests/test_business_round10_subscriptions.py::PlanPrices::test_chatgpt_pro_is_assumed_half_with_a_co_payer_until_the_operator_sets_it`, `test_cosharer_card_shows_his_share_and_names_the_assumption`.
