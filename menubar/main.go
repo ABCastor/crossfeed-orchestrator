@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,13 +12,16 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -60,6 +64,7 @@ type spend struct {
 
 type snapshot struct {
 	Schema int    `json:"schema"`
+	Title  string `json:"title"`
 	Pools  []pool `json:"pools"`
 	Spend  *spend `json:"subscription_spend"`
 }
@@ -98,7 +103,8 @@ func quota(used *int, reset string, p pace, compact bool) string {
 	return label
 }
 
-func rows(data snapshot) []row {
+// providerRows is the provider part of rows(): one line per pool, with its limits under it.
+func providerRows(data snapshot) []row {
 	var out []row
 	for _, p := range data.Pools {
 		label := quota(p.Used, p.Reset, p.Pace, true)
@@ -117,6 +123,11 @@ func rows(data snapshot) []row {
 	if len(out) == 0 {
 		out = append(out, row{title: "No pools configured"})
 	}
+	return out
+}
+
+func rows(data snapshot) []row {
+	out := providerRows(data)
 	s := data.Spend
 	switch {
 	case s == nil || s.Unavailable:
@@ -140,6 +151,16 @@ func rows(data snapshot) []row {
 			}
 			out = append(out, row{title: title})
 		}
+	}
+	return out
+}
+
+// menuRows is what the tray's menu shows: one line per provider with its tightest window.
+// The per-limit lines stay in the panel, where there is room to read them.
+func menuRows(data snapshot) []row {
+	out := providerRows(data)
+	for i := range out {
+		out[i].children = nil
 	}
 	return out
 }
@@ -171,20 +192,144 @@ func (c config) load(ctx context.Context) (snapshot, error) {
 	return data, nil
 }
 
-func openConsole(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	const consoleURL = "http://127.0.0.1:8768/"
+// The console's own startup line, and nothing else: a loopback sign-in link this tray can trust.
+const signInPrefix = "Sign-in link for this launch: "
+
+// signedLink accepts only http://127.0.0.1:PORT/login?key=... — the line fleetctl's console prints.
+func signedLink(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, signInPrefix) {
+		return "", false
+	}
+	u, err := url.Parse(strings.TrimPrefix(line, signInPrefix))
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() == "" || u.Path != "/login" ||
+		u.User != nil || u.Fragment != "" {
+		return "", false
+	}
+	query := u.Query()
+	if len(query) != 1 || query.Get("key") == "" {
+		return "", false
+	}
+	return u.String(), true
+}
+
+// pageURL aims a signed-in link at one local page. The console's 303 has no fragment, so the page
+// named in `next` is where the browser lands; a fixed path, never something taken from a reading.
+func pageURL(link, page string) string {
+	u, err := url.Parse(link)
+	if err != nil || page == "" {
+		return link
+	}
+	query := u.Query()
+	query.Set("next", page)
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// browserCommand prefers an app-style window, which is the closest a Linux desktop gets to a menu
+// bar panel: no tabs, no address bar. Without one of those browsers it is xdg-open's problem.
+func browserCommand(target string) *exec.Cmd {
+	for _, name := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return exec.Command(path, "--app="+target, "--class=Crossfeed")
+		}
+	}
+	return exec.Command("xdg-open", target)
+}
+
+func openTarget(ctx context.Context, target string) error {
 	if runtime.GOOS == "darwin" {
-		if home, err := os.UserHomeDir(); err == nil {
-			launcher := filepath.Join(home, "Applications", "Crossfeed Orchestrator.app")
-			if info, err := os.Stat(launcher); err == nil && info.IsDir() {
-				return exec.CommandContext(ctx, "/usr/bin/open", launcher).Run()
+		return exec.CommandContext(ctx, "/usr/bin/open", target).Run()
+	}
+	cmd := browserCommand(target)
+	// The browser outlives this call on purpose; its output is not ours to collect.
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Start()
+}
+
+// consoleSession is the console the tray itself starts, so "Open panel" is signed in without the
+// operator copying a link. One console per tray; it stops when the tray does.
+type consoleSession struct {
+	cmd  *exec.Cmd
+	link chan string
+	mu   sync.Mutex
+	url  string
+}
+
+func startConsole(c config) (*consoleSession, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	args := []string{c.fleetctl}
+	if c.overlay != "" {
+		args = append(args, "--overlay", c.overlay)
+	}
+	if c.state != "" {
+		args = append(args, "--state-dir", c.state)
+	}
+	args = append(args, "console", "--no-open")
+	cmd := exec.CommandContext(ctx, c.python, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	// The command context ends with this function; the process keeps its own lifetime.
+	cmd.Cancel = nil
+	cmd.WaitDelay = 0
+	session := &consoleSession{cmd: cmd, link: make(chan string, 1)}
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if link, ok := signedLink(scanner.Text()); ok {
+				select {
+				case session.link <- link:
+				default:
+				}
 			}
 		}
-		return exec.CommandContext(ctx, "/usr/bin/open", consoleURL).Run()
+	}()
+	return session, nil
+}
+
+// signed answers with the console's sign-in link, waiting a moment for a cold start.
+func (s *consoleSession) signed() (string, error) {
+	s.mu.Lock()
+	cached := s.url
+	s.mu.Unlock()
+	if cached != "" {
+		return cached, nil
 	}
-	return exec.CommandContext(ctx, "xdg-open", consoleURL).Run()
+	select {
+	case link := <-s.link:
+		s.mu.Lock()
+		s.url = link
+		s.mu.Unlock()
+		return link, nil
+	case <-time.After(15 * time.Second):
+		return "", errors.New("the console printed no sign-in link")
+	}
+}
+
+// open shows one page signed in, the way the Mac app's deep links do.
+func (s *consoleSession) open(ctx context.Context, page string) error {
+	link, err := s.signed()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return openTarget(ctx, pageURL(link, page))
+}
+
+func (s *consoleSession) stop() {
+	if s == nil || s.cmd == nil || s.cmd.Process == nil {
+		return
+	}
+	_ = s.cmd.Process.Kill()
+	_, _ = s.cmd.Process.Wait()
 }
 
 // Draw a tiny three-level gauge. A template image adapts to the macOS menu-bar color.
@@ -203,53 +348,38 @@ func icon(c color.Color) []byte {
 }
 
 type menuRow struct {
-	item     *systray.MenuItem
-	children []*systray.MenuItem
+	item *systray.MenuItem
 }
 
 type menu struct {
-	rows               []menuRow
-	spendRows          int
-	open, reload, quit *systray.MenuItem
+	rows                []menuRow
+	panel, usage, setup *systray.MenuItem
+	quit                *systray.MenuItem
+	session             *consoleSession
 }
 
-func (m *menu) paint(lines []row, spendRows int) {
-	shape := len(lines) == len(m.rows) && m.spendRows == spendRows && m.open != nil
-	if shape {
-		for i := range lines {
-			shape = shape && len(m.rows[i].children) == len(lines[i].children)
-		}
-	}
+// paint shows one line per provider and the four things the tray can do. The menu is rebuilt only
+// when its shape changes: a title update is what the minute's refresh needs.
+func (m *menu) paint(lines []row) {
+	shape := len(lines) == len(m.rows) && m.panel != nil
 	if !shape {
 		systray.ResetMenu()
-		m.rows, m.spendRows = nil, spendRows
-		for i, line := range lines {
-			if i > 0 && i == len(lines)-spendRows {
-				systray.AddSeparator()
-			}
+		m.rows = nil
+		for _, line := range lines {
 			item := systray.AddMenuItem(line.title, "")
-			entry := menuRow{item: item}
-			if len(line.children) == 0 {
-				item.Disable()
-			}
-			for _, text := range line.children {
-				child := item.AddSubMenuItem(text, "")
-				child.Disable()
-				entry.children = append(entry.children, child)
-			}
-			m.rows = append(m.rows, entry)
+			item.Disable()
+			m.rows = append(m.rows, menuRow{item: item})
 		}
 		systray.AddSeparator()
-		m.open = systray.AddMenuItem("Open console", "")
-		m.reload = systray.AddMenuItem("Reload view", "Read the saved readings again")
-		m.quit = systray.AddMenuItem("Quit Crossfeed", "")
+		m.panel = systray.AddMenuItem("Open panel", "The tiles, signed in")
+		m.usage = systray.AddMenuItem("Usage and cost", "What each provider cost and how it was used")
+		m.setup = systray.AddMenuItem("Settings", "Plans, shares and spend policy")
+		systray.AddSeparator()
+		m.quit = systray.AddMenuItem("Quit", "")
 		return
 	}
 	for i, line := range lines {
 		m.rows[i].item.SetTitle(line.title)
-		for j, title := range line.children {
-			m.rows[i].children[j].SetTitle(title)
-		}
 	}
 }
 
@@ -257,8 +387,13 @@ func start(ctx context.Context, c config) {
 	systray.SetTemplateIcon(icon(color.Black), icon(color.NRGBA{R: 94, G: 135, B: 255, A: 255}))
 	systray.SetTitle("Crossfeed")
 	systray.SetTooltip("Crossfeed · quotas and subscriptions")
+	session, err := startConsole(c)
+	if err != nil {
+		log.Printf("Cannot start the Crossfeed console: %v", err)
+	}
 	var m menu
-	m.paint([]row{{title: "Reading quotas…"}}, 0)
+	m.session = session
+	m.paint([]row{{title: "Reading quotas…"}})
 	// D-Bus GetLayout waits for this ready callback to return. Poll separately.
 	go m.run(ctx, c)
 }
@@ -279,34 +414,47 @@ func (menu *menu) run(ctx context.Context, c config) {
 			}()
 		}
 	}
+	open := func(page string) {
+		go func() {
+			if menu.session == nil || menu.session.open(ctx, page) != nil {
+				log.Printf("Cannot open the Crossfeed %s page", page)
+			}
+		}()
+	}
 	refresh()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			menu.session.stop()
 			systray.Quit()
 			return
 		case <-menu.quit.ClickedCh:
+			menu.session.stop()
 			systray.Quit()
 			return
-		case <-menu.open.ClickedCh:
-			go func() {
-				if openConsole(ctx) != nil {
-					log.Print("Cannot open the Crossfeed console")
-				}
-			}()
-		case <-menu.reload.ClickedCh:
-			refresh()
+		case <-menu.panel.ClickedCh:
+			open("/panel")
+		case <-menu.usage.ClickedCh:
+			open("/usage")
+		case <-menu.setup.ClickedCh:
+			open("/settings")
 		case <-ticker.C:
 			refresh()
 		case u := <-updates:
 			loading = false
 			if u.err != nil {
-				menu.paint([]row{{title: "Quotas unavailable"}}, 0)
+				systray.SetTitle("Crossfeed")
+				menu.paint([]row{{title: "Quotas unavailable"}})
 				continue
 			}
-			menu.paint(rows(u.data), max(1, len(u.data.Spend.Monthly)))
+			title := u.data.Title
+			if title == "" {
+				title = "Crossfeed"
+			}
+			systray.SetTitle(short(title, 60)) // the same short text the Mac menu bar shows
+			menu.paint(menuRows(u.data))
 		}
 	}
 }

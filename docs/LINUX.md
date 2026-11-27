@@ -58,6 +58,55 @@ or `{"available": false, "reason": "not logged in"}` when there is nothing to re
 
 **CodexBar, if you accept a third-party reader.** [CodexBar](https://github.com/steipete/CodexBar) publishes its own platform-specific installation instructions. It reads quota through existing sessions or browser cookies; it is not a vendor tool. Crossfeed only reads its output. Pools that declare `"oracle": "codexbar"` show as MISSING in `doctor` until it is on PATH. This optional reader has not been run with Crossfeed on Linux for this export.
 
+## The tray and the panel
+
+Linux gets the same menu the Mac app draws, in two pieces: a tray icon that carries the one-line
+title and the way in, and the tiles as a web page the console serves at `/panel`.
+
+**The tray** (Go, AppIndicator through `fyne.io/systray`):
+
+```bash
+bash menubar/build.sh ~/crossfeed-build          # prints the built binary's path
+~/crossfeed-build/Crossfeed -fleetctl "$PWD/scripts/fleetctl.py"
+```
+
+It needs a desktop session: a D-Bus session bus and a panel that speaks StatusNotifierItem (GNOME
+needs the AppIndicator extension, KDE and XFCE have it). Add the command to the session's autostart
+to keep it there. Building needs Go 1.23 or newer and the C headers `fyne.io/systray` uses:
+`sudo apt install golang-go libgtk-3-dev libayatana-appindicator3-dev` on Debian and Ubuntu.
+
+The tray starts its own console (`fleetctl.py console --no-open`), reads the sign-in link that
+console prints, and keeps it in memory: never on disk, never in the menu. Its title is the same
+short line the Mac menu bar shows (`Claude 12% · Codex 40%`), its menu has one line per provider
+with the tightest window, and then:
+
+| Item | Opens |
+|---|---|
+| Open panel | `<console>/login?key=…&next=/panel` in a `--app=` window of chromium or google-chrome when one is on PATH, else `xdg-open` |
+| Usage and cost | `/usage`, signed in the same way |
+| Settings | `/settings` |
+| Quit | stops the tray and the console it started |
+
+**The panel** is the console's own page, so it needs nothing extra: `fleetctl.py console` prints a
+sign-in link, and `/panel` (or the link with `next=/panel`) draws the tiles. It is 310 px wide and
+fine on a phone, follows `prefers-color-scheme`, loads no font or script from anywhere but the
+console itself, and writes its tile order and choices to `~/.config/orchestrator/panel.json`, the
+same file the Mac app reads. `fleetctl.py panel get` prints that file with defaults filled;
+`fleetctl.py panel set --json '<doc>'` validates and writes it.
+
+Tiles can come from plugins: see [PLUGINS.md](PLUGINS.md).
+
+## What was run on Linux
+
+On a headless Linux server (Debian 12, Python 3.12, Node 24, no desktop session) this round ran
+`python3 -m unittest` over the panel, plugin, console-panel and business suites, and
+`node --test tests/panel.test.cjs`; the panel's Overview, Claude, reset confirm, Settings and a
+mid-drag were rendered with headless Chromium at 310 px in light and dark from a real
+`/panel.json`, and compared side by side with the design's `Bplus-*` panels. The tray was **not**
+built or started there: no Go toolchain and no D-Bus session. Its Go code and tests are in
+`menubar/` and have not been compiled on this machine; `menubar/build.sh` and `go test ./...`
+are the first things to run on a Linux desktop.
+
 ## The daily market refresh
 
 `scripts/market-refresh.py` fetches public model data (prices, context sizes, benchmark priors) that routing uses as a prior. Run it once a day with the examples in `examples/linux/`:

@@ -93,6 +93,20 @@ except ImportError:
     _readings_spec.loader.exec_module(mac_readings)
 
 try:
+    import panel_prefs
+except ImportError:
+    _prefs_spec = importlib.util.spec_from_file_location("fleet_panel_prefs", Path(__file__).with_name("panel_prefs.py"))
+    panel_prefs = importlib.util.module_from_spec(_prefs_spec)
+    _prefs_spec.loader.exec_module(panel_prefs)
+
+try:
+    import plugins as plugin_tiles
+except ImportError:
+    _plugins_spec = importlib.util.spec_from_file_location("fleet_plugins", Path(__file__).with_name("plugins.py"))
+    plugin_tiles = importlib.util.module_from_spec(_plugins_spec)
+    _plugins_spec.loader.exec_module(plugin_tiles)
+
+try:
     from run_identity import canonical_model, evidence_index
 except ImportError:
     _identity_spec = importlib.util.spec_from_file_location("fleet_run_identity", Path(__file__).with_name("run_identity.py"))
@@ -6656,6 +6670,34 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--port", type=int, default=8768, help="preferred port; the next free one is used if taken")
     console.add_argument("--no-open", action="store_true", help="print the sign-in link instead of opening a browser")
 
+    panel = sub.add_parser("panel", help="the menu panel's tabs and tiles: read them, or write a whole document")
+    panel.add_argument("action", nargs="?", choices=("get", "set"), default="get")
+    panel.add_argument("--json", dest="document", help="for set: the whole preferences document as JSON")
+
+    plugin = sub.add_parser("plugin", help="plugin tiles: install, list, enable, update, remove or run one")
+    plugin_actions = plugin.add_subparsers(dest="plugin_action", required=True)
+    plugin_add = plugin_actions.add_parser("add", help="show what a plugin would run; install and enable it only with --yes")
+    plugin_add.add_argument("source", help="an https:// git URL or a folder")
+    plugin_add.add_argument("--ref", help="a commit or tag to pin")
+    plugin_add.add_argument("--yes", action="store_true", help="install and enable it (without this nothing changes)")
+    plugin_add.add_argument("--json", action="store_true")
+    plugin_list = plugin_actions.add_parser("list", help="installed plugins and their tiles")
+    plugin_list.add_argument("--json", action="store_true")
+    for name, word in (("enable", "enable"), ("disable", "disable")):
+        extra = plugin_actions.add_parser(name, help=f"{word} a plugin's tiles in the glance")
+        extra.add_argument("id")
+        extra.add_argument("--json", action="store_true")
+    plugin_update = plugin_actions.add_parser("update", help="show a plugin's new commit and command diff; apply it with --yes")
+    plugin_update.add_argument("id")
+    plugin_update.add_argument("--yes", action="store_true", help="check out the new commit (without this nothing changes)")
+    plugin_update.add_argument("--json", action="store_true")
+    plugin_remove = plugin_actions.add_parser("remove", help="move a plugin's folder to the state dir's trash")
+    plugin_remove.add_argument("id")
+    plugin_remove.add_argument("--json", action="store_true")
+    plugin_run = plugin_actions.add_parser("run", help="run one plugin tile now and print what it prints")
+    plugin_run.add_argument("target", metavar="ID/TILE")
+    plugin_run.add_argument("--json", action="store_true")
+
     sub.add_parser("dashboard", help="print the authenticated Go console URL")
     sub.add_parser("model-cards", help="print private live model/level evidence as compact JSON, offline")
     bench_import = sub.add_parser("import-bench", help="import checked fit-only benchmark results and rebuild evidence offline")
@@ -6746,11 +6788,126 @@ def use_reset_command(args, state_dir: Path) -> int:
                 label=grant["label"], left=left, sent=True)
 
 
+def panel_command(args) -> int:
+    """The panel preferences a menu or the web panel draws from: read them, or validate and write them."""
+    if args.action == "set":
+        if not args.document:
+            raise FleetError("panel set needs --json with the whole preferences document")
+        try:
+            document = json.loads(args.document)
+        except json.JSONDecodeError as exc:
+            raise FleetError(f"--json is not readable JSON: {exc}") from None
+        try:
+            written = panel_prefs.save(document)
+        except panel_prefs.PrefsError as exc:
+            raise FleetError(str(exc)) from None
+        print(json.dumps(written, indent=2, sort_keys=True))
+        return 0
+    print(json.dumps(panel_prefs.load(), indent=2, sort_keys=True))
+    return 0
+
+
+def _tile_row_words(row: dict) -> str:
+    """One plugin tile row as a line a person reads, for `plugin run`."""
+    kind = row.get("kind")
+    if kind == "bar":
+        used = "unknown" if row.get("used") is None else f"{row['used']:g}% used"
+        pace = "" if row.get("pace") is None else f", pace {row['pace']:g}%"
+        tail = " ".join(str(row.get(key)) for key in ("window", "resets_at") if row.get(key))
+        return f"{row.get('label')}: {used}{pace}" + (f" ({tail})" if tail else "")
+    if kind == "value":
+        return f"{row.get('label')}: {row.get('value')}" + ("" if row.get("tone", "ok") == "ok" else f" [{row['tone']}]")
+    if kind == "sparkline":
+        values = ", ".join(f"{value:g}" for value in row.get("values") or [])
+        return f"{row.get('label')}: {values}" + (f" (today {row['today']})" if row.get("today") else "")
+    if kind == "link":
+        return f"{row.get('label')}: {row.get('url')}"
+    return str(row.get("text") or "")
+
+
+def plugin_command(args, state_dir: Path) -> int:
+    """Plugins: nothing installs, updates or enables itself; every change is this command, by the operator."""
+    action = args.plugin_action
+    try:
+        if action == "add":
+            plan = plugin_tiles.install(args.source, ref=args.ref, apply=args.yes)
+            if args.json:
+                print(json.dumps(plan, indent=2, sort_keys=True))
+            else:
+                print(plugin_tiles.describe_plan(plan, verb="Installed" if plan["installed"] else "Would install"))
+                if not plan["installed"]:
+                    print("Nothing was installed or enabled. Run the same command with --yes to install and enable it.")
+            return 0
+        if action == "list":
+            rows = plugin_tiles.listing()
+            if args.json:
+                print(json.dumps(rows, indent=2, sort_keys=True))
+            elif not rows:
+                print("No plugins installed. Add one with: fleetctl plugin add <https-git-url|path>")
+            else:
+                for row in rows:
+                    state = "enabled" if row["enabled"] else "disabled"
+                    commit = (row.get("commit") or "")[:12] or "-"
+                    tiles = ", ".join(f"{tile['tile']} ({tile['tab']})" for tile in row.get("tiles") or []) or "no readable manifest"
+                    print(f"{row['id']} · {row.get('name') or row['id']} {row.get('version') or ''}".rstrip()
+                          + f" · {state} · {commit} · {tiles}")
+            return 0
+        if action in {"enable", "disable"}:
+            result = plugin_tiles.set_enabled(args.id, action == "enable")
+            print(json.dumps(result, sort_keys=True) if args.json else
+                  f"{result['id']}: " + ("enabled" if result["enabled"] else "disabled"))
+            return 0
+        if action == "update":
+            report = plugin_tiles.update(args.id, apply=args.yes)
+            if args.json:
+                print(json.dumps(report, indent=2, sort_keys=True))
+            else:
+                print(f"{report['id']} {report['version']}: {report['from'][:12]} -> {report['to'][:12]}"
+                      + (" (already at that commit)" if report["unchanged"] else ""))
+                if report["command_changes"]:
+                    print("command changes:")
+                    for change in report["command_changes"]:
+                        print("  " + change["tile"] + ": " + str(change["before"]) + " -> " + str(change["after"]))
+                else:
+                    print("no command changes")
+                if not report["updated"] and not report["unchanged"]:
+                    print("Nothing was updated. Run the same command with --yes to check out the new commit.")
+            return 0
+        if action == "remove":
+            result = plugin_tiles.remove(args.id, state_dir=state_dir)
+            print(json.dumps(result, sort_keys=True) if args.json else
+                  f"{result['id']}: removed" + (f" (moved to {result['moved_to']})" if result.get("moved_to") else ""))
+            return 0
+        # run
+        plugin_id, _, tile_id = args.target.partition("/")
+        if not plugin_id or not tile_id:
+            raise FleetError("name a tile as ID/TILE, as fleetctl plugin list shows it")
+        folder = plugin_tiles.plugin_dir(plugin_id)
+        manifest = plugin_tiles.read_manifest(folder)
+        tile = next((row for row in manifest["tiles"] if row["id"] == tile_id), None)
+        if tile is None:
+            raise FleetError(f"{plugin_id} declares no tile {tile_id}")
+        result = plugin_tiles.run_tile(plugin_id, folder, tile, state_dir, use_cache=False)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            doc = result["doc"]
+            print(f"{doc.get('title') or tile['title']} · {doc.get('status', 'ok')}" + (f" · {result['error']}" if result.get("error") else ""))
+            for row in doc.get("rows") or []:
+                print("  " + _tile_row_words(row))
+        return 0 if not result.get("error") else 1
+    except plugin_tiles.PluginError as exc:
+        raise FleetError(str(exc)) from None
+
+
 def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None,
                    state_dir: Path | None = None) -> dict:
     ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview, state_dir=state_dir)
     payload = menubar_renderer().as_json(overview, lead, subscriptions.tray_summary(ledger))
     payload["subscriptions"] = overview.get("subscriptions", [])
+    # Enabled plugin tiles ride with the glance, cached per their own refresh_seconds. A broken plugin is
+    # one error tile, never a failed reading.
+    payload["plugins"] = plugin_tiles.glance(state_dir) if state_dir else []
     pools = {pool["pool"]: pool for pool in overview["pools"]}
     payload["reading_origin"] = ("mac" if any(pool.get("reading_origin") == "mac" for pool in pools.values())
                                  else "local")
@@ -6759,7 +6916,7 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
     for row in payload["pools"]:
         pool = pools[row["pool"]]
         row.update({key: pool[key] for key in ("credits", "spend_credits", "status_url", "per_model",
-                                               "per_model_error", "account_usage", "reading_age_s", "reading_source",
+                                               "per_model_error", "account_usage", "reading_age_s", "reading_source", "plan",
                                                "reading_observed_at", "reading_stale", "reading_origin", "reading_origin_fetched_at",
                                                "last_observed_windows", "tokens",
                                                "incident", "billing", "billing_error", "model_quota")
@@ -6909,6 +7066,10 @@ def main() -> int:
             return 0
         if args.command == "use-reset":
             return use_reset_command(args, state_dir)
+        if args.command == "panel":
+            return panel_command(args)
+        if args.command == "plugin":
+            return plugin_command(args, state_dir)
         if args.command == "snapshot":
             for value in (args.rolling_used, args.weekly_used, args.monthly_used):
                 if value < 0 or value > 100:

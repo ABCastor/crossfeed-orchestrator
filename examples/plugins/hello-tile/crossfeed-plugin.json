@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "hello-tile",
+  "name": "Hello tile",
+  "version": "0.1.0",
+  "homepage": "https://github.com/ABCastor/crossfeed-orchestrator/tree/main/examples/plugins/hello-tile",
+  "tiles": [
+    {
+      "id": "hello",
+      "title": "Hello",
+      "command": ["python3", "hello.py"],
+      "refresh_seconds": 60,
+      "timeout_seconds": 5,
+      "tab": "overview"
+    },
+    {
+      "id": "bar",
+      "title": "A pace bar",
+      "command": ["python3", "hello.py", "--bar"],
+      "refresh_seconds": 60,
+      "timeout_seconds": 5,
+      "tab": "claude"
+    }
+  ]
+}

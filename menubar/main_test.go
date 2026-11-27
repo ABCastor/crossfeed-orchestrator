@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,5 +64,59 @@ func TestRowsUseRemainingAndDoNotConfuseMissingWithZero(t *testing.T) {
 	if len(got[0].children) != 2 || got[0].children[0] != "Weekly  65% left · reset unknown" ||
 		got[0].children[1] != "5-hour  Not read" {
 		t.Errorf("window rows: %v", got[0].children)
+	}
+}
+
+func TestSignedLinkAcceptsOnlyTheConsolesOwnStartupLine(t *testing.T) {
+	good := "Sign-in link for this launch: http://127.0.0.1:8768/login?key=abc-_123"
+	if got, ok := signedLink(good); !ok || got != "http://127.0.0.1:8768/login?key=abc-_123" {
+		t.Fatalf("signed link: %q %v", got, ok)
+	}
+	for _, line := range []string{
+		"Sign-in link for this launch: https://127.0.0.1:8768/login?key=abc",     // not https
+		"Sign-in link for this launch: http://evil.example:8768/login?key=abc",    // another host
+		"Sign-in link for this launch: http://127.0.0.1/login?key=abc",           // no port
+		"Sign-in link for this launch: http://127.0.0.1:8768/settings?key=abc",    // not the login
+		"Sign-in link for this launch: http://127.0.0.1:8768/login?key=",         // empty key
+		"Sign-in link for this launch: http://127.0.0.1:8768/login?key=a&b=c",     // extra parameter
+		"Sign-in link for this launch: http://user:pw@127.0.0.1:8768/login?key=a", // credentials in the URL
+		"http://127.0.0.1:8768/login?key=abc",                                    // not the console's line
+	} {
+		if got, ok := signedLink(line); ok {
+			t.Errorf("accepted %q as %q", line, got)
+		}
+	}
+}
+
+func TestPageURLPointsTheSignedLinkAtOneLocalPage(t *testing.T) {
+	link := "http://127.0.0.1:8768/login?key=abc"
+	if got := pageURL(link, "/panel"); got != "http://127.0.0.1:8768/login?key=abc&next=%2Fpanel" {
+		t.Fatalf("panel url: %q", got)
+	}
+	for _, page := range []string{"/usage", "/settings"} {
+		if got := pageURL(link, page); !strings.HasSuffix(got, "next="+url.QueryEscape(page)) {
+			t.Errorf("%s: %q", page, got)
+		}
+	}
+}
+
+func TestMenuRowsNameEachProviderOnceWithItsTightestWindow(t *testing.T) {
+	used := 58
+	data := snapshot{Title: "Claude 42% left", Pools: []pool{
+		{Name: "Claude", Measured: true, Used: &used, Reset: "Sat 28 Nov 11:36", Pace: pace{Words: "2% in deficit, runs out in 2d 2h"},
+			Limits: []limit{{Title: "Weekly", Used: &used}}},
+		{Name: "Codex"},
+	}}
+	got := menuRows(data)
+	if len(got) != 2 {
+		t.Fatalf("one line per provider: %v", got)
+	}
+	if got[0].title != "Claude  42% left · Sat 28 Nov 11:36 · 2% in deficit" {
+		t.Errorf("tightest window: %q", got[0].title)
+	}
+	for i, line := range got {
+		if len(line.children) != 0 {
+			t.Errorf("line %d has submenus; the tray shows one line per provider", i)
+		}
 	}
 }
