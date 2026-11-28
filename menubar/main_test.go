@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadOnlyUsesCachedFleetctlJSON(t *testing.T) {
@@ -73,14 +74,14 @@ func TestSignedLinkAcceptsOnlyTheConsolesOwnStartupLine(t *testing.T) {
 		t.Fatalf("signed link: %q %v", got, ok)
 	}
 	for _, line := range []string{
-		"Sign-in link for this launch: https://127.0.0.1:8768/login?key=abc",     // not https
+		"Sign-in link for this launch: https://127.0.0.1:8768/login?key=abc",      // not https
 		"Sign-in link for this launch: http://evil.example:8768/login?key=abc",    // another host
-		"Sign-in link for this launch: http://127.0.0.1/login?key=abc",           // no port
+		"Sign-in link for this launch: http://127.0.0.1/login?key=abc",            // no port
 		"Sign-in link for this launch: http://127.0.0.1:8768/settings?key=abc",    // not the login
-		"Sign-in link for this launch: http://127.0.0.1:8768/login?key=",         // empty key
+		"Sign-in link for this launch: http://127.0.0.1:8768/login?key=",          // empty key
 		"Sign-in link for this launch: http://127.0.0.1:8768/login?key=a&b=c",     // extra parameter
 		"Sign-in link for this launch: http://user:pw@127.0.0.1:8768/login?key=a", // credentials in the URL
-		"http://127.0.0.1:8768/login?key=abc",                                    // not the console's line
+		"http://127.0.0.1:8768/login?key=abc",                                     // not the console's line
 	} {
 		if got, ok := signedLink(line); ok {
 			t.Errorf("accepted %q as %q", line, got)
@@ -118,5 +119,51 @@ func TestMenuRowsNameEachProviderOnceWithItsTightestWindow(t *testing.T) {
 		if len(line.children) != 0 {
 			t.Errorf("line %d has submenus; the tray shows one line per provider", i)
 		}
+	}
+}
+
+func TestPageURLAtKeepsTheTabOnTheBrowserSideOfTheSignIn(t *testing.T) {
+	link := "http://127.0.0.1:8768/login?key=abc"
+	if got := pageURLAt(link, "/panel", "tab=codex"); got != "http://127.0.0.1:8768/login?key=abc&next=%2Fpanel#tab=codex" {
+		t.Fatalf("panel on a named tab: %s", got)
+	}
+	if got := pageURLAt(link, "/panel", ""); got != pageURL(link, "/panel") {
+		t.Fatalf("no fragment, no change: %s", got)
+	}
+}
+
+func TestLoadAlsoCarriesTheBarView(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleetctl.py")
+	fixture := `printf '%s' '{"schema":1,"pools":[{"pool":"claude","measured":true,"used_percent":42,"limits":[{"kind":"window","title":"Weekly","minutes":10080,"used_percent":42}]}],"subscription_spend":{"monthly":[]}}'`
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := config{python: "/bin/sh", fleetctl: path}
+	data, err := c.load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := barTitle(data.Bar, barPrefs{Text: "number"}, time.Now()); got.Text != "42%" {
+		t.Fatalf("the document is read a second time for the title: %+v", got)
+	}
+}
+
+func TestPrefsReadsPanelGetAndFallsBackToTheDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleetctl.py")
+	fixture := `
+[ "$*" = '--state-dir /s panel get' ] || exit 3
+printf '%s' '{"open_on":"codex","refresh":{"on_open":true,"every_minutes":15},"menubar":{"icon":"none","text":"number"}}'
+`
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := config{python: "/bin/sh", fleetctl: path, state: "/s"}
+	p := c.prefs(context.Background())
+	if p.OpenOn != "codex" || p.everyMinutes() != 15 || p.Menubar.Icon != "none" {
+		t.Fatalf("prefs: %+v", p)
+	}
+	broken := config{python: "/bin/sh", fleetctl: filepath.Join(t.TempDir(), "missing.py")}
+	if got := broken.prefs(context.Background()); got.everyMinutes() != 5 || got.Menubar.normalized().Icon != "provider" {
+		t.Fatalf("unreadable preferences are the defaults: %+v", got)
 	}
 }

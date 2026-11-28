@@ -100,6 +100,13 @@ except ImportError:
     _prefs_spec.loader.exec_module(panel_prefs)
 
 try:
+    import api_usage
+except ImportError:
+    _api_spec = importlib.util.spec_from_file_location("fleet_api_usage", Path(__file__).with_name("api_usage.py"))
+    api_usage = importlib.util.module_from_spec(_api_spec)
+    _api_spec.loader.exec_module(api_usage)
+
+try:
     import plugins as plugin_tiles
 except ImportError:
     _plugins_spec = importlib.util.spec_from_file_location("fleet_plugins", Path(__file__).with_name("plugins.py"))
@@ -6900,6 +6907,19 @@ def plugin_command(args, state_dir: Path) -> int:
         raise FleetError(str(exc)) from None
 
 
+def refresh_api_usage(state_dir: Path, roster: dict[str, Any], *, force: bool = False) -> None:
+    """Read the API pools' spend sources into their cache, beside the quota readers and never in a render.
+
+    A failure here is a missing figure on the tab, never a failed quota refresh.
+    """
+    if auto_refresh_disabled() and not force:
+        return
+    try:
+        api_usage.refresh(state_dir, roster, force=force)
+    except (OSError, ValueError, TypeError, KeyError, FleetError):
+        pass
+
+
 def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None,
                    state_dir: Path | None = None) -> dict:
     ledger = subscriptions.view(subscriptions.path_for(overlay), roster, overview, state_dir=state_dir)
@@ -6945,6 +6965,8 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
                              "family": option.get("family"), "typical_cost_usd": option.get("typical_cost_usd"),
                              "archived": True, "retired_on": option["retired_on"]}
                             for option in pool.get("options", []) if option.get("retired_on") and not option.get("current")]
+    # The API pools' spend blocks come from the cache the refresh path wrote; the operator's budgets are shown, never enforced.
+    api_usage.attach(payload["pools"], state_dir, panel_prefs.load().get("budgets"))
     return payload
 
 
@@ -7253,6 +7275,8 @@ def main() -> int:
                 refresh_stale_pools(state_dir, quota_sources(roster), roster=roster, force=True)
             else:
                 refresh(quota_sources(roster), roster)
+            if not args.no_refresh:
+                refresh_api_usage(state_dir, roster, force=args.force)
             # The scheduled poll discards its output. Do not scan ledgers or
             # build an overview only to render it to /dev/null.
             try:

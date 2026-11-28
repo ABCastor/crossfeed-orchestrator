@@ -1707,9 +1707,11 @@ def observe_openrouter(config: dict[str, Any], timeout: int = 5,
         try:
             status, body = _http_get(OPENROUTER_BASE + "activity", activity_headers, per_request, opener)
             if status == 200:
-                rows = parse_openrouter_activity(_json(body), _now().date())
+                payload = _json(body)
+                rows = parse_openrouter_activity(payload, _now().date())
                 if rows is not None:
                     result["per_model"] = rows
+                    result["per_day"] = parse_openrouter_activity_days(payload, _now().date()) or []
                 else:
                     return unavailable(OPENROUTER_SOURCE, "malformed", "OpenRouter activity response was unreadable")
             elif status in (401, 403):
@@ -1751,6 +1753,30 @@ def parse_openrouter_activity(payload: Any, today: dt.date) -> list[dict[str, An
         if not math.isfinite(total["usd_30d"]):
             return None
     return sorted(grouped.values(), key=lambda row: (-row["usd_30d"], row["model"]))
+
+
+def parse_openrouter_activity_days(payload: Any, today: dt.date) -> list[dict[str, Any]] | None:
+    """The same Activity rows summed per UTC day, oldest first: date, usd and requests."""
+    rows = _mapping(payload).get("data")
+    if not isinstance(rows, list):
+        return None
+    start = today - dt.timedelta(days=30)
+    days: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        row = _mapping(raw)
+        try:
+            day = dt.date.fromisoformat(str(row.get("date"))[:10])
+        except ValueError:
+            return None
+        amount, requests = _finite_amount(row.get("usage")), row.get("requests")
+        if not start <= day < today + dt.timedelta(days=1):
+            continue
+        if amount is None or amount < 0 or type(requests) is not int or requests < 0:
+            return None
+        total = days.setdefault(day.isoformat(), {"date": day.isoformat(), "usd": 0.0, "requests": 0})
+        total["usd"] = round(total["usd"] + amount, 6)
+        total["requests"] += requests
+    return [days[key] for key in sorted(days)]
 
 
 STATUS_URLS = {

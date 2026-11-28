@@ -67,6 +67,8 @@ type snapshot struct {
 	Title  string `json:"title"`
 	Pools  []pool `json:"pools"`
 	Spend  *spend `json:"subscription_spend"`
+	// Bar is the same document read again for the menu bar title, which needs the numbers as fractions.
+	Bar barView `json:"-"`
 }
 
 type row struct {
@@ -189,7 +191,41 @@ func (c config) load(ctx context.Context) (snapshot, error) {
 	if json.Unmarshal(out, &data) != nil || data.Schema != 1 || data.Pools == nil || data.Spend == nil {
 		return snapshot{}, errors.New("unsupported fleetctl glance format")
 	}
+	data.Bar = decodeBar(out)
 	return data, nil
+}
+
+// args is the fleetctl command line for one subcommand, with the overlay and state directory this tray was given.
+func (c config) args(sub ...string) []string {
+	args := []string{c.fleetctl}
+	if c.overlay != "" {
+		args = append(args, "--overlay", c.overlay)
+	}
+	if c.state != "" {
+		args = append(args, "--state-dir", c.state)
+	}
+	return append(args, sub...)
+}
+
+// prefs reads panel.json through fleetctl, which fills every default, so the tray and the panel agree.
+// An unreadable answer is the defaults: the tray still draws.
+func (c config) prefs(ctx context.Context) panelPrefs {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var prefs panelPrefs
+	out, err := exec.CommandContext(ctx, c.python, c.args("panel", "get")...).Output()
+	if err != nil || len(out) > 1<<20 || json.Unmarshal(out, &prefs) != nil {
+		return panelPrefs{}
+	}
+	return prefs
+}
+
+// poll asks fleetctl to read the sources whose reading is due, the same way the scheduled poll does: its output is
+// discarded and it stops after the reading. The next load picks the new numbers up from the cache.
+func (c config) poll(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, c.python, c.args("glance")...).Run()
 }
 
 // The console's own startup line, and nothing else: a loopback sign-in link this tray can trust.
@@ -224,6 +260,16 @@ func pageURL(link, page string) string {
 	query.Set("next", page)
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+// pageURLAt is pageURL plus a fragment (the panel's `#tab=<id>`); the fragment stays on the browser side
+// of the console's sign-in redirect, so the page opens on that tab.
+func pageURLAt(link, page, fragment string) string {
+	target := pageURL(link, page)
+	if fragment == "" {
+		return target
+	}
+	return target + "#" + fragment
 }
 
 // browserCommand prefers an app-style window, which is the closest a Linux desktop gets to a menu
@@ -314,14 +360,14 @@ func (s *consoleSession) signed() (string, error) {
 }
 
 // open shows one page signed in, the way the Mac app's deep links do.
-func (s *consoleSession) open(ctx context.Context, page string) error {
+func (s *consoleSession) open(ctx context.Context, page, fragment string) error {
 	link, err := s.signed()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return openTarget(ctx, pageURL(link, page))
+	return openTarget(ctx, pageURLAt(link, page, fragment))
 }
 
 func (s *consoleSession) stop() {
@@ -354,7 +400,7 @@ type menuRow struct {
 type menu struct {
 	rows                []menuRow
 	panel, usage, setup *systray.MenuItem
-	quit                *systray.MenuItem
+	refresh, quit       *systray.MenuItem
 	session             *consoleSession
 }
 
@@ -374,6 +420,7 @@ func (m *menu) paint(lines []row) {
 		m.panel = systray.AddMenuItem("Open panel", "The tiles, signed in")
 		m.usage = systray.AddMenuItem("Usage and cost", "What each provider cost and how it was used")
 		m.setup = systray.AddMenuItem("Settings", "Plans, shares and spend policy")
+		m.refresh = systray.AddMenuItem("Refresh now", "Read every provider again")
 		systray.AddSeparator()
 		m.quit = systray.AddMenuItem("Quit", "")
 		return
@@ -398,32 +445,75 @@ func start(ctx context.Context, c config) {
 	go m.run(ctx, c)
 }
 
+// setTitle draws the title the operator chose in Settings > Menu bar: the icon (the Crossfeed mark, the
+// provider's logo, or nothing) and the text. AppIndicator hosts differ: some draw only the icon.
+func setTitle(result barTitleResult) {
+	switch result.Icon {
+	case "none":
+		systray.SetIcon(blankIcon())
+	case "provider":
+		if data := logoPNG(result.Logo); data != nil {
+			systray.SetIcon(data)
+		} else {
+			systray.SetTemplateIcon(icon(color.Black), icon(color.NRGBA{R: 94, G: 135, B: 255, A: 255}))
+		}
+	default:
+		systray.SetTemplateIcon(icon(color.Black), icon(color.NRGBA{R: 94, G: 135, B: 255, A: 255}))
+	}
+	systray.SetTitle(short(result.Text, 60))
+	systray.SetTooltip(result.Tooltip)
+}
+
+// blankIcon is a transparent icon: AppIndicator wants one even when the operator turned the icon off.
+func blankIcon() []byte {
+	var out bytes.Buffer
+	_ = png.Encode(&out, image.NewNRGBA(image.Rect(0, 0, 22, 22)))
+	return out.Bytes()
+}
+
 func (menu *menu) run(ctx context.Context, c config) {
 	type update struct {
-		data snapshot
-		err  error
+		data  snapshot
+		prefs panelPrefs
+		err   error
 	}
 	updates := make(chan update, 1)
-	loading := false
+	loading, polling := false, false
+	polled := make(chan struct{}, 1)
 	refresh := func() {
 		if !loading {
 			loading = true
 			go func() {
+				prefs := c.prefs(ctx)
 				data, err := c.load(ctx)
-				updates <- update{data, err}
+				updates <- update{data, prefs, err}
 			}()
 		}
 	}
-	open := func(page string) {
+	// poll reads the due sources, then the cache again; one at a time, and never on the menu's own thread.
+	poll := func() {
+		if polling {
+			return
+		}
+		polling = true
 		go func() {
-			if menu.session == nil || menu.session.open(ctx, page) != nil {
+			_ = c.poll(ctx)
+			polled <- struct{}{}
+		}()
+	}
+	var prefs panelPrefs
+	open := func(page, fragment string) {
+		go func() {
+			if menu.session == nil || menu.session.open(ctx, page, fragment) != nil {
 				log.Printf("Cannot open the Crossfeed %s page", page)
 			}
 		}()
 	}
 	refresh()
+	poll() // the first reading on start-up: a fresh install has nothing cached yet
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	sinceRead := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -435,25 +525,34 @@ func (menu *menu) run(ctx context.Context, c config) {
 			systray.Quit()
 			return
 		case <-menu.panel.ClickedCh:
-			open("/panel")
+			open("/panel", prefs.barFragment())
 		case <-menu.usage.ClickedCh:
-			open("/usage")
+			open("/usage", "")
 		case <-menu.setup.ClickedCh:
-			open("/settings")
+			open("/settings", "")
+		case <-menu.refresh.ClickedCh:
+			poll()
+		case <-polled:
+			polling = false
+			refresh()
 		case <-ticker.C:
+			// The cache is re-read every minute (cheap, and it carries a change made in the panel's
+			// Settings); the sources are read again every N minutes, the operator's Refresh interval.
+			sinceRead++
+			if every := prefs.everyMinutes(); every > 0 && sinceRead >= every {
+				sinceRead = 0
+				poll()
+			}
 			refresh()
 		case u := <-updates:
 			loading = false
+			prefs = u.prefs
 			if u.err != nil {
 				systray.SetTitle("Crossfeed")
 				menu.paint([]row{{title: "Quotas unavailable"}})
 				continue
 			}
-			title := u.data.Title
-			if title == "" {
-				title = "Crossfeed"
-			}
-			systray.SetTitle(short(title, 60)) // the same short text the Mac menu bar shows
+			setTitle(barTitle(u.data.Bar, prefs.Menubar, time.Now()))
 			menu.paint(menuRows(u.data))
 		}
 	}

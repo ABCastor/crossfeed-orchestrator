@@ -9,12 +9,28 @@ The file is mode 600 and replaced atomically: a reader never sees half a documen
 are preserved, so a newer writer's field survives a round trip through an older reader. Every
 read fills the defaults the operator has not set; nothing is invented beyond the shape below.
 
-    {"schema": 1, "show": "used",
-     "tabs": ["overview", "claude", "codex", "copilot", "antigravity", "opencode", "other"],
+    {"schema": 1, "show": "used", "appearance": "system",
+     "tabs": ["overview", "claude", "codex", "copilot", "antigravity", "opencode",
+              "openrouter-free", "gemini-metered", "chatgpt-work", "other"],
      "hidden_tabs": [],
      "tiles": {"overview": ["alert", "providers", "subscriptions", "tokens", "links"],
-               "claude": ["limits", "resets", "credits", "tokens", "policy", "links"]},
-     "hidden_tiles": {"claude": ["credits"]}}
+               "claude": ["limits", "resets", "credits", "tokens", "policy", "status", "links"]},
+     "hidden_tiles": {"claude": ["credits"]},
+     "menubar": {"icon": "provider", "show": "pressed", "window": "tightest", "count": "used",
+                 "text": "window", "extra": "none", "reset": "countdown",
+                 "notify_low": false, "notify_reset": false},
+     "refresh": {"on_open": true, "every_minutes": 5},
+     "open_on": "last", "last_tab": "overview",
+     "budgets": {"openrouter-free": 20},
+     "tile_options": {"claude/tokens": {"metric": "tokens", "days": 14}}}
+
+`appearance` is system, light or dark. `menubar` is what the menu bar item draws: its icon (the
+Crossfeed mark, the logo of the provider the title is about, or none) and its text. `refresh` says
+whether opening the menu reads again when the data is older than a minute, and how often a background
+reading runs in minutes (0 is off, at most 1440). `open_on` is `last` (the tab used last, kept in `last_tab`) or a tab id.
+`budgets` are the operator's monthly USD figure per API pool that reports money (not Crossfeed Chat):
+shown against spend, never enforced.
+`tile_options` is the sparkline's metric (tokens, cost, requests) and range (7, 14 or 30 days) per tile.
 """
 from __future__ import annotations
 
@@ -29,11 +45,35 @@ SCHEMA = 1
 SHOWS = ("used", "left")
 DEFAULT_SHOW = "used"
 # The provider order the menu ships with; a tab id is any pool or group id the glance knows.
-DEFAULT_TABS = ["overview", "claude", "codex", "copilot", "antigravity", "opencode", "other"]
+# Pools billed per token, by prepaid credit or through a relay are first-class tabs, named by pool key.
+API_TABS = ["openrouter-free", "gemini-metered", "chatgpt-work"]
+DEFAULT_TABS = ["overview", "claude", "codex", "copilot", "antigravity", "opencode", *API_TABS, "other"]
+# Overview's Status tile is not in the default list: it appears by itself while an incident exists, and is
+# pinned (shown with none) only when the operator adds it to the list.
 DEFAULT_OVERVIEW_TILES = ["alert", "providers", "subscriptions", "tokens", "links"]
-DEFAULT_PROVIDER_TILES = ["limits", "resets", "credits", "tokens", "policy", "links"]
-BUILTIN_TILES = ("alert", "providers", "subscriptions", "tokens", "links",
-                 "limits", "resets", "credits", "policy", "other")
+DEFAULT_PROVIDER_TILES = ["limits", "resets", "credits", "tokens", "policy", "status", "links"]
+DEFAULT_API_TILES = ["limits", "spend", "balance", "models", "activity", "status", "links"]
+# Crossfeed Chat is a relay that reports no money: no spend, no balance, no budget.
+RELAY_TABS = ("chatgpt-work",)
+DEFAULT_RELAY_TILES = ["limits", "activity", "models", "status", "links"]
+BUILTIN_TILES = ("alert", "providers", "subscriptions", "tokens", "links", "status",
+                 "limits", "resets", "credits", "policy", "other",
+                 "spend", "balance", "models", "activity")
+APPEARANCES = ("system", "light", "dark")
+DEFAULT_APPEARANCE = "system"
+MENUBAR_ICONS = ("crossfeed", "provider", "none")
+MENUBAR_TEXTS = ("full", "window", "number", "none")
+MENUBAR_EXTRAS = ("none", "reset", "pace", "cost")
+MENUBAR_RESETS = ("countdown", "clock")
+MENUBAR_WINDOWS = ("tightest", "5h", "Week", "Month")
+DEFAULT_MENUBAR = {"icon": "provider", "show": "pressed", "window": "tightest", "count": "used",
+                   "text": "window", "extra": "none", "reset": "countdown",
+                   "notify_low": False, "notify_reset": False}
+MAX_REFRESH_MINUTES = 1440
+DEFAULT_REFRESH = {"on_open": True, "every_minutes": 5}
+METRICS = ("tokens", "cost", "requests")
+RANGES = (7, 14, 30)
+MAX_BUDGET_USD = 1_000_000
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 PLUGIN_TILE = re.compile(r"^plugin:[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9-]{0,39}$")
 
@@ -56,6 +96,10 @@ def default_tiles(tab: str) -> list[str]:
         return list(DEFAULT_OVERVIEW_TILES)
     if tab == "other":
         return ["other"]
+    if tab in RELAY_TABS:
+        return list(DEFAULT_RELAY_TILES)
+    if tab in API_TABS:
+        return list(DEFAULT_API_TILES)
     return list(DEFAULT_PROVIDER_TILES)
 
 
@@ -87,6 +131,62 @@ def _tab_list(value: Any) -> list[str]:
             tab = _tab(item)
             if tab and tab not in out:
                 out.append(tab)
+    return out
+
+
+def _menubar(value: Any) -> dict[str, Any]:
+    """The menu bar item's choices: known keys checked, unknown keys kept, missing ones defaulted."""
+    given = value if isinstance(value, dict) else {}
+    out: dict[str, Any] = dict(given)
+    choices = {"icon": MENUBAR_ICONS, "text": MENUBAR_TEXTS, "extra": MENUBAR_EXTRAS,
+               "reset": MENUBAR_RESETS, "window": MENUBAR_WINDOWS, "count": SHOWS}
+    for key, allowed in choices.items():
+        out[key] = given.get(key) if given.get(key) in allowed else DEFAULT_MENUBAR[key]
+    shown = given.get("show")
+    out["show"] = shown if shown == "pressed" or _tab(shown) else DEFAULT_MENUBAR["show"]
+    for key in ("notify_low", "notify_reset"):
+        out[key] = given.get(key) if isinstance(given.get(key), bool) else DEFAULT_MENUBAR[key]
+    return out
+
+
+def _refresh(value: Any) -> dict[str, Any]:
+    """How the menu reads again; unknown keys are kept, as in `menubar`."""
+    given = value if isinstance(value, dict) else {}
+    every = given.get("every_minutes")
+    return {**given,
+            "on_open": given["on_open"] if isinstance(given.get("on_open"), bool) else DEFAULT_REFRESH["on_open"],
+            "every_minutes": every if type(every) is int and 0 <= every <= MAX_REFRESH_MINUTES else DEFAULT_REFRESH["every_minutes"]}
+
+
+def _budgets(value: Any) -> dict[str, float]:
+    """A monthly USD figure per pool; anything that is not a positive finite number is no budget."""
+    out: dict[str, float] = {}
+    if isinstance(value, dict):
+        for pool, amount in value.items():
+            key = _tab(pool)
+            if (key and key not in RELAY_TABS and type(amount) in (int, float) and amount == amount and 0 < amount <= MAX_BUDGET_USD
+                    and key not in out):
+                out[key] = round(float(amount), 2) if float(amount) != int(amount) else int(amount)
+    return out
+
+
+def _tile_options(value: Any) -> dict[str, dict[str, Any]]:
+    """`<tab>/<tile>` -> sparkline metric and range; an option that is not one of the choices is dropped."""
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(value, dict):
+        for key, option in value.items():
+            if not (isinstance(key, str) and isinstance(option, dict)):
+                continue
+            tab, _, tile = key.partition("/")
+            if not (_tab(tab) and (tile in BUILTIN_TILES or PLUGIN_TILE.fullmatch(tile))):
+                continue
+            kept: dict[str, Any] = {}
+            if option.get("metric") in METRICS:
+                kept["metric"] = option["metric"]
+            if type(option.get("days")) is int and option["days"] in RANGES:
+                kept["days"] = option["days"]
+            if kept:
+                out[key] = kept
     return out
 
 
@@ -127,6 +227,10 @@ def normalize(doc: Any, *, keep_unknown: bool = True) -> dict[str, Any]:
             tiles[key] = _tile_list(value)
     for tab in tabs:  # every tab in the order has a list, so a client never has to invent one
         tiles.setdefault(tab, default_tiles(tab))
+        # A list saved before the Status tile existed has none: it goes last before Links, where new lists put it.
+        if tab not in ("other", "overview") and "status" not in tiles[tab] and tab in raw_tiles:
+            at = tiles[tab].index("links") if "links" in tiles[tab] else len(tiles[tab])
+            tiles[tab].insert(at, "status")
     out["tiles"] = tiles
 
     hidden_tiles: dict[str, list[str]] = {}
@@ -136,6 +240,16 @@ def normalize(doc: Any, *, keep_unknown: bool = True) -> dict[str, Any]:
         if key and key not in hidden_tiles:
             hidden_tiles[key] = _tile_list(value)
     out["hidden_tiles"] = hidden_tiles
+
+    out["appearance"] = doc.get("appearance") if doc.get("appearance") in APPEARANCES else DEFAULT_APPEARANCE
+    out["menubar"] = _menubar(doc.get("menubar"))
+    out["refresh"] = _refresh(doc.get("refresh"))
+    open_on = doc.get("open_on")
+    out["open_on"] = open_on if open_on == "last" or (_tab(open_on) and open_on in tabs) else "last"
+    last = doc.get("last_tab")
+    out["last_tab"] = last if _tab(last) and last in tabs and last not in hidden else "overview"
+    out["budgets"] = _budgets(doc.get("budgets"))
+    out["tile_options"] = _tile_options(doc.get("tile_options"))
     return out
 
 
@@ -188,14 +302,14 @@ def apply_change(doc: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
     wants to move one thing (a reorder, a toggle) and cannot race another writer's edit.
     """
     merged = dict(doc)
-    for key in ("show", "tabs", "hidden_tabs", "tiles", "hidden_tiles"):
+    for key in ("show", "tabs", "hidden_tabs", "tiles", "hidden_tiles", "appearance", "menubar", "refresh",
+                "open_on", "last_tab", "budgets", "tile_options"):
         if key not in change:
             continue
         value = change[key]
-        if key == "tiles" and isinstance(value, dict) and isinstance(merged.get("tiles"), dict):
-            merged["tiles"] = {**merged["tiles"], **value}
-        elif key == "hidden_tiles" and isinstance(value, dict) and isinstance(merged.get("hidden_tiles"), dict):
-            merged["hidden_tiles"] = {**merged["hidden_tiles"], **value}
+        if key in ("tiles", "hidden_tiles", "menubar", "refresh", "budgets", "tile_options") \
+                and isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
         else:
             merged[key] = value
     return normalize(merged)

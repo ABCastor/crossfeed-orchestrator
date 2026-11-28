@@ -58,7 +58,7 @@ window.TOKENS = {
 // own bars, so a <style> element is available without widening anything else.
 (function () {
   const css = Object.entries(TOKENS.palette)
-    .map(([theme, palette]) => `.panel.${theme}{${Object.entries(palette).map(([key, value]) => `--${key}:${value}`).join(";")}}`)
+    .map(([theme, palette]) => `.panel.${theme},body.panelpage.${theme},.sheet.${theme}{${Object.entries(palette).map(([key, value]) => `--${key}:${value}`).join(";")}}`)
     .join("\n");
   const style = document.createElement("style");
   style.textContent = css;
