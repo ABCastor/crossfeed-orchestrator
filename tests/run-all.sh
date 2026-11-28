@@ -38,7 +38,8 @@ for f in "$HERE"/*.sh; do
 done
 for f in "$HERE"/*.py; do
   [ -f "$f" ] || continue
-  [ "$(basename "$f")" = "__init__.py" ] && continue
+  # Python suites are test_*.py; other modules here are helpers the suites start (panel_flow_server.py).
+  case "$(basename "$f")" in test_*.py) ;; *) continue ;; esac
   SUITES+=( "$f" )
 done
 # The console page's script is tested with node (no browser); skipped where node is not installed.
