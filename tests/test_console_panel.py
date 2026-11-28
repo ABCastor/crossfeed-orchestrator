@@ -136,7 +136,7 @@ class PanelServerTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         written = json.loads(body)["prefs"]
         self.assertEqual(written["show"], "left")
-        self.assertEqual(written["tiles"]["claude"], ["limits", "plugin:hello-tile/bar", "links"])
+        self.assertEqual(written["tiles"]["claude"], ["limits", "plugin:hello-tile/bar", "status", "links"])
         path = Path(os.environ["FLEET_PANEL_PREFS"])
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(json.loads(path.read_text())["future"], 1)
@@ -153,6 +153,70 @@ class PanelServerTests(unittest.TestCase):
         self.assertEqual(self.post_json("/panel/prefs", good)[0], 200)
         big = {"t": self.app.form_token, "prefs": {"note": "x" * 100000}}
         self.assertEqual(self.post_json("/panel/prefs", big)[0], 413)
+
+    def test_one_change_is_applied_to_the_file_as_it_is_now_and_validated(self):
+        fleetctl.panel_prefs.save({"show": "left", "budgets": {"openrouter-free": 20}})
+        status, body, _headers = self.post_json("/panel/prefs", {"t": self.app.form_token, "change": {"last_tab": "codex"}})
+        self.assertEqual(status, 200, body)
+        saved = fleetctl.panel_prefs.load()
+        self.assertEqual((saved["last_tab"], saved["show"], saved["budgets"]), ("codex", "left", {"openrouter-free": 20}))
+        status, body, _headers = self.post_json("/panel/prefs", {"t": self.app.form_token, "change": {"appearance": "sepia", "last_tab": "ghost"}})
+        self.assertEqual(status, 200)
+        written = json.loads(body)["prefs"]
+        self.assertEqual((written["appearance"], written["last_tab"]), ("system", "overview"), "a value outside its choices is the default")
+        self.assertEqual(self.post_json("/panel/prefs", {"t": "wrong", "change": {"last_tab": "codex"}})[0], 400)
+        fleetctl.panel_prefs.save({"show": "used"})
+
+    def test_the_new_keys_round_trip_through_the_post(self):
+        document = {"appearance": "dark", "refresh": {"on_open": False, "every_minutes": 15}, "open_on": "codex",
+                    "budgets": {"gemini-metered": 12.5}, "tile_options": {"claude/tokens": {"metric": "cost", "days": 30}},
+                    "menubar": {"icon": "none", "text": "number", "show": "claude"}}
+        status, body, _headers = self.post_json("/panel/prefs", {"t": self.app.form_token, "prefs": document})
+        self.assertEqual(status, 200, body)
+        written = json.loads(body)["prefs"]
+        for key in ("appearance", "refresh", "open_on", "budgets", "tile_options"):
+            self.assertEqual(written[key], document[key], key)
+        self.assertEqual(written["menubar"]["icon"], "none")
+        self.assertEqual(fleetctl.panel_prefs.load()["menubar"]["show"], "claude")
+        fleetctl.panel_prefs.save({"show": "used"})
+
+    # ---- reading the sources again --------------------------------------------------------------------
+    def test_the_refresh_button_reads_every_source_through_the_forced_path_and_the_document_says_when(self):
+        called = []
+        original = self.app.refresh_now
+        self.app.refresh_now = lambda: called.append("forced") or {}
+        try:
+            self.assertEqual(self.post_form("/panel/refresh", {"t": "wrong"})[0], 403)
+            self.assertEqual(called, [])
+            status, body, _headers = self.post_form("/panel/refresh", {"t": self.app.form_token})
+            self.assertEqual((status, json.loads(body)), (200, {"ok": True}))
+            self.assertEqual(called, ["forced"])
+            self.assertEqual(self.request("POST", "/panel/refresh", self.origin(), "t=x")[0], 401, "signed in only")
+        finally:
+            self.app.refresh_now = original
+        self.app._refreshed_at = 1_800_000_000
+        document = json.loads(self.request("GET", "/panel.json", self.signed)[1])
+        self.assertEqual(document["refreshed_at"], "2027-01-15T08:00:00Z")
+        self.app._refreshed_at = None
+        self.assertIsNone(json.loads(self.request("GET", "/panel.json", self.signed)[1])["refreshed_at"])
+
+    # ---- API pools ------------------------------------------------------------------------------------
+    def test_panel_json_carries_an_api_block_from_the_cache_with_the_operators_budget_and_reads_no_source(self):
+        fleetctl.panel_prefs.save({"budgets": {"gemini-metered": 10}})
+        pool = next(p for p in self.app.overview()["pools"] if p["pool"] == "gemini-metered") if any(
+            p["pool"] == "gemini-metered" for p in self.app.overview()["pools"]) else None
+        if pool is None:
+            self.skipTest("the synthetic fleet has no gemini-metered pool")
+        fleetctl.api_usage._write_cache(self.state, {"schema": 1, "generated_at": "2026-11-28T10:00:00Z", "admin": {},
+                                                     "pools": {"gemini-metered": {"spend": {"month_usd": 3.35}, "source": "local-meter",
+                                                                                  "source_label": "Measured by Crossfeed"}}})
+        with patch.object(fleetctl.api_usage, "local_meter", side_effect=AssertionError("a render read a source")):
+            document = json.loads(self.request("GET", "/panel.json", self.signed)[1])
+        row = next(p for p in document["pools"] if p["pool"] == "gemini-metered")
+        self.assertEqual(row["api"]["spend"]["month_usd"], 3.35)
+        self.assertEqual(row["api"]["budget"], {"monthly_usd": 10, "source": "operator"})
+        self.assertEqual(row["api"]["source_label"], "Measured by Crossfeed")
+        fleetctl.panel_prefs.save({"show": "used"})
 
     # ---- the one reset claim ---------------------------------------------------------------------
     def test_use_reset_calls_the_same_function_as_fleetctl_and_answers_plainly(self):

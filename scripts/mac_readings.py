@@ -39,7 +39,7 @@ GRACE_S = 900  # an adopted reading this young needs no local read: the Mac keep
 # them the other machine's glance showed neither the reset grants nor the token sparkline.
 KEYS = ("available", "observed_at", "source", "plan", "windows", "idle_windows", "precision_percentage_points",
         "provider_used_percent", "provider", "credits", "spend_credits", "account_usage", "billing",
-        "per_model", "per_model_error", "model_quota", "resets", "tokens")
+        "per_model", "per_model_error", "per_day", "model_quota", "resets", "tokens")
 SECRETISH = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+|sk-[\w-]{12,}|Bearer\s+\S+|eyJ[\w-]{20,}")
 
 

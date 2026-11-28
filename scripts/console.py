@@ -133,6 +133,7 @@ class Console:
         self.form_token = hmac.digest(secret, b'crossfeed console form v1', 'sha256').hex()
         self._refresh_lock = threading.Lock()
         self._last_refresh = float("-inf")
+        self._refreshed_at: float | None = None  # wall clock of the last finished read of every source
 
     def refresh_in_background(self, roster: dict[str, Any]) -> None:
         if not self._refresh_lock.acquire(blocking=False):
@@ -145,6 +146,8 @@ class Console:
         def refresh():
             try:
                 fleetctl.refresh_stale_pools(self.state_dir, fleetctl.quota_sources(roster), roster=roster)
+                fleetctl.refresh_api_usage(self.state_dir, roster)
+                self._refreshed_at = time.time()
                 # BR-SUBS-004: the day's reference rates, never on a page render's path.
                 if not fleetctl.auto_refresh_disabled():
                     fleetctl.subscriptions.refresh_fx(self.state_dir)
@@ -249,6 +252,7 @@ class Console:
                      if ((roster['quota_pools'].get(pool) or {}).get('quota_refresh') or {}).get('oracle') == 'openrouter']
             with self._refresh_lock:
                 fleetctl.refresh_stale_pools(self.state_dir, pools, roster=roster, force=True)
+                fleetctl.refresh_api_usage(self.state_dir, roster, force=True)
         except (OSError, fleetctl.FleetError):
             pass
         return {'keychain': 'the macOS Keychain', 'secret-service': 'the system keyring',
@@ -259,7 +263,9 @@ class Console:
         with self._refresh_lock:
             outcomes = fleetctl.refresh_stale_pools(
                 self.state_dir, fleetctl.quota_sources(roster), roster=roster, force=True)
+            fleetctl.refresh_api_usage(self.state_dir, roster, force=True)
             self._last_refresh = time.monotonic()
+            self._refreshed_at = time.time()
         return outcomes
 
     # BR-SWITCH-001
@@ -332,6 +338,9 @@ class Console:
         lead = fleetctl.resolve_lead_pool(roster, None)
         payload = fleetctl.glance_payload(self.overlay_path, roster, overview, lead, self.state_dir)
         payload["panel"] = panel_prefs.load()
+        # When every source was last read, so a page can tell "older than a minute" without guessing.
+        payload["refreshed_at"] = (dt.datetime.fromtimestamp(self._refreshed_at, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                                   if self._refreshed_at else None)
         return payload
 
     def save_panel_prefs(self, document: Any) -> dict[str, Any]:
@@ -2954,7 +2963,7 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             path = urllib.parse.urlsplit(self.path).path
             if path not in {'/settings/pro', '/settings/subscriptions', '/level', '/preference', '/refresh',
                             '/model', '/model-archive', '/benchmark-link', '/order', '/provider/probe', '/provider/add', '/provider/remove',
-                            '/secret', '/panel/prefs', '/use-reset'}:
+                            '/secret', '/panel/prefs', '/panel/refresh', '/use-reset'}:
                 self._refuse(404, "Nothing here", "This console has one page.")
                 return
             try:
@@ -2970,7 +2979,12 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
                     data = json.loads(self.rfile.read(length).decode('utf-8'))
                     if not isinstance(data, dict) or not console.form_ok(str(data.get('t') or '')):
                         raise ValueError('Refused')
-                    written = console.save_panel_prefs(data.get('prefs'))
+                    # A whole document (Settings, a drag) or one change (a tab switch): a change is applied to the
+                    # file as it is now, so a quick edit never rewrites what another writer saved a moment ago.
+                    if isinstance(data.get('change'), dict):
+                        written = console.save_panel_prefs(panel_prefs.apply_change(panel_prefs.load(), data['change']))
+                    else:
+                        written = console.save_panel_prefs(data.get('prefs'))
                 except (ValueError, OSError, UnicodeDecodeError, panel_prefs.PrefsError):
                     self._send(400, json.dumps({'error': 'That is not a panel document'}).encode(),
                                'application/json; charset=utf-8')
@@ -2981,6 +2995,11 @@ def make_handler(console: Console) -> type[http.server.BaseHTTPRequestHandler]:
             fields = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
             if not console.form_ok(fields.get("t", [""])[0]):
                 self._refuse(403, "Refused", "That form came from an older console. Reload the page and try again.")
+                return
+            if path == '/panel/refresh':
+                # The refresh button: read every source now (the forced path), then the panel asks for the document.
+                console.refresh_now()
+                self._send(200, b'{"ok":true}', 'application/json; charset=utf-8')
                 return
             if path == '/use-reset':
                 # Claude only, one attempt, and the plain outcome back: the panel shows it, then reads again.

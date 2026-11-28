@@ -32,6 +32,16 @@ KNOWN = {
         "label": "OpenRouter management key",
         "hint": "Create it at openrouter.ai/settings/management-keys with Activity read access.",
     },
+    "openai-admin": {
+        "env": "OPENAI_ADMIN_KEY",
+        "label": "OpenAI organisation admin key",
+        "hint": "Create it at platform.openai.com/settings/organization/admin-keys; it reads the organisation's costs.",
+    },
+    "anthropic-admin": {
+        "env": "ANTHROPIC_ADMIN_KEY",
+        "label": "Anthropic organisation admin key",
+        "hint": "Create it in the Anthropic Console under Settings, Admin keys; it reads the organisation's costs.",
+    },
 }
 VALUE = re.compile(r"[A-Za-z0-9._~+/=:-]{8,512}\Z")
 OP_REF = re.compile(r"op://[A-Za-z0-9_.-]{1,64}/[^/\r\n\0\"'\\]{1,200}/[^/\r\n\0\"'\\]{1,200}\Z")
