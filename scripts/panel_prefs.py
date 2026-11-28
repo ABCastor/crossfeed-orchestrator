@@ -20,11 +20,14 @@ read fills the defaults the operator has not set; nothing is invented beyond the
                  "text": "window", "extra": "none", "reset": "countdown",
                  "notify_low": false, "notify_reset": false},
      "refresh": {"on_open": true, "every_minutes": 5},
+     "auto_use_resets": "off",
      "open_on": "last", "last_tab": "overview",
      "budgets": {"openrouter-free": 20},
      "tile_options": {"claude/tokens": {"metric": "tokens", "days": 14}}}
 
-`appearance` is system, light or dark. `menubar` is what the menu bar item draws: its icon (the
+`appearance` is system, light or dark; the header's theme switch and the Appearance row in Settings write the same value.
+`auto_use_resets` is `off` (ask first, the default) or `when_used_up` (BR-QUOTA-006: a held Claude limit reset is
+used on its own when its window is used up and its natural reset is far away); only the operator turns it on. `menubar` is what the menu bar item draws: its icon (the
 Crossfeed mark, the logo of the provider the title is about, or none) and its text. `refresh` says
 whether opening the menu reads again when the data is older than a minute, and how often a background
 reading runs in minutes (0 is off, at most 1440). `open_on` is `last` (the tab used last, kept in `last_tab`) or a tab id.
@@ -61,6 +64,8 @@ BUILTIN_TILES = ("alert", "providers", "subscriptions", "tokens", "links", "stat
                  "spend", "balance", "models", "activity")
 APPEARANCES = ("system", "light", "dark")
 DEFAULT_APPEARANCE = "system"
+AUTO_USE_RESETS = ("off", "when_used_up")
+DEFAULT_AUTO_USE_RESETS = "off"
 MENUBAR_ICONS = ("crossfeed", "provider", "none")
 MENUBAR_TEXTS = ("full", "window", "number", "none")
 MENUBAR_EXTRAS = ("none", "reset", "pace", "cost")
@@ -242,6 +247,7 @@ def normalize(doc: Any, *, keep_unknown: bool = True) -> dict[str, Any]:
     out["hidden_tiles"] = hidden_tiles
 
     out["appearance"] = doc.get("appearance") if doc.get("appearance") in APPEARANCES else DEFAULT_APPEARANCE
+    out["auto_use_resets"] = doc.get("auto_use_resets") if doc.get("auto_use_resets") in AUTO_USE_RESETS else DEFAULT_AUTO_USE_RESETS
     out["menubar"] = _menubar(doc.get("menubar"))
     out["refresh"] = _refresh(doc.get("refresh"))
     open_on = doc.get("open_on")
@@ -303,7 +309,7 @@ def apply_change(doc: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
     """
     merged = dict(doc)
     for key in ("show", "tabs", "hidden_tabs", "tiles", "hidden_tiles", "appearance", "menubar", "refresh",
-                "open_on", "last_tab", "budgets", "tile_options"):
+                "auto_use_resets", "open_on", "last_tab", "budgets", "tile_options"):
         if key not in change:
             continue
         value = change[key]

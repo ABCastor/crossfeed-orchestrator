@@ -30,6 +30,7 @@ window.buildModel = function (glance, preferences) {
   const SYM = { USD: "$", GBP: "£", EUR: "€" };
   const money = (amount, currency) => amount == null ? "" : (SYM[currency] || (currency ? currency + " " : "")) + amount;
 
+  const TICKET = "🎟\uFE0F";
   const num = (v) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
   const dollars = (n) => n == null ? "" : "$" + (Math.abs(n) >= 100 ? Math.round(n).toLocaleString("en-US") : n.toFixed(2));
   // The calendar month so far, in the browser's own time zone: the budget bar's pace tick.
@@ -57,8 +58,11 @@ window.buildModel = function (glance, preferences) {
     r.state = r.full ? "full" : r.delta == null ? "none" : r.delta > 0 ? "deficit" : "surplus";
     r.runsOutS = runOut ? parseSpan(runOut[1])
       : (p && p.status === "deficit" && p.runs_out_in_s ? Number(p.runs_out_in_s) : null);
+    // A reset held for this window is capacity: nothing about it "runs out" (BR-QUOTA-005).
+    r.held = Number(l.resets_held) || 0;
+    if (r.held) r.runsOutS = null;
     r.runsOut = r.runsOutS ? "Runs out in " + span(r.runsOutS) : null;
-    r.hot = r.full || !!r.runsOut || r.used >= 90;
+    r.hot = r.full || !!r.runsOut || (r.used >= 90 && !r.held);
     return r;
   }
   // "2d 18h" -> seconds, so the tightest provider is still the one that runs out first.
@@ -303,6 +307,7 @@ window.buildModel = function (glance, preferences) {
           name,
           until: date(g.expires_at),
           next: g.next === true,
+          windows: clears.map(limitFor),
           ask: `Use the ${name === "Weekly" ? "weekly" : name === "5-hour" ? "5-hour" : name.toLowerCase()} reset? This can't be undone.`,
           effect: clears.map((k) => { const name = limitFor(k); return used[name] == null ? "" : `${titleOf(k)} ${used[name]}% → 0%`; })
             .filter(Boolean).join(" · ") || null,
@@ -375,7 +380,25 @@ window.buildModel = function (glance, preferences) {
                      resets: t.resets ? t.resets.length : 0, badge: t.badge };
   }
   const soon = Object.values(overview).filter((o) => o.row.runsOutS).sort((a, b) => a.row.runsOutS - b.row.runsOutS)[0];
+  // A window that is used up or nearly so, with a reset held for it: said as such, with the reset to use (BR-QUOTA-005).
+  function heldAlert() {
+    let best = null;
+    for (const id of order) {
+      const t = tabs[id];
+      for (const s of t.sections || []) for (const r of s.rows || []) {
+        if (!r.held || !(r.full || r.used >= 90)) continue;
+        const score = r.full ? 1000 : r.used;
+        if (best && best.score >= score) continue;
+        const grants = t.resets || [];
+        const grant = grants.find((g) => g.next && (g.windows || []).includes(r.key)) || grants.find((g) => (g.windows || []).includes(r.key));
+        best = { score, tab: id, grant, words: `${t.title}${s.title && s.title !== "Claude and GPT" ? " " + s.title : ""} ${r.full ? "used up" : Math.round(r.used) + "%"} · ${TICKET} ${r.held} held` };
+      }
+    }
+    return best;
+  }
+  const held = soon ? null : heldAlert();
   const verdict = soon ? { tone: "hot", words: `${soon.row.section || soon.title} runs out in ${span(soon.row.runsOutS)}` }
+    : held ? { tone: "hot", words: held.words, use: held.grant ? { key: held.grant.key, tab: held.tab } : null }
     : Object.keys(overview).length ? { tone: "good", words: "Nothing runs out before it refills" }
     : { tone: "good", words: "No provider has a limit to show yet" };
 
@@ -482,7 +505,7 @@ window.buildModel = function (glance, preferences) {
   }
 
   window.VM = {
-    now: NOW, tabs, overview, verdict, subs, total, allTokens, other, span, big, order,
+    now: NOW, tabs, overview, verdict, notices: Array.isArray(G.notices) ? G.notices.filter((n) => n && typeof n.text === "string") : [], subs, total, allTokens, other, span, big, order,
     pluginTiles, prefs: P, hiddenTabs, seriesLength, incidents, allSeries, sparkFor, tileOptions, dollars, isApi, barTitle,
     tabIds: requested.filter((id) => id === "overview" || id === "other" || (tabs[id] && !hiddenTabs.has(id))),
     tabTitle: (id) => id === "overview" ? "Overview" : id === "other" ? "Other" : (tabs[id] ? (API_NAME[id] || tabs[id].title) : TITLES[id] || id),

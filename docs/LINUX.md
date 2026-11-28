@@ -102,7 +102,15 @@ loads no font or script from anywhere but the console itself, and writes every c
 to `~/.config/orchestrator/panel.json`, the same file the Mac app reads. `fleetctl.py panel get`
 prints that file with defaults filled; `fleetctl.py panel set --json '<doc>'` validates and writes it.
 
+The header's theme switch (the Castor toggle, beside refresh and Settings) cycles System, Light, Dark and
+shows the current choice; it writes the same `appearance` value as Settings > General > Appearance.
+Limit resets the account holds show as `🎟️ n held` on their window, and the Overview alert line says
+`Claude 96% · 🎟️ 1 held` with a Use button instead of a run-out. Settings > General > Resets is Ask first
+(the default) or Use when used up, which spends one held reset by itself when a limit is used up and its own
+reset is more than 12 hours away (`auto_use_resets`, off unless the operator turns it on).
+
 What `panel.json` holds, besides the tabs and tiles: `appearance` (`system`, `light`, `dark`),
+`auto_use_resets` (`off` or `when_used_up`),
 `menubar` (`icon`: `crossfeed`, `provider`, `none`; `text`, `show`, `window`, `count`, `extra`, `reset`),
 `refresh` (`on_open`: read again when the page opens and its data is older than a minute;
 `every_minutes`: 0, 1, 5 or 15), `open_on` (`last` or a tab id) with `last_tab`, `budgets` (a monthly

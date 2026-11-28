@@ -78,6 +78,9 @@
 .pace i.up { width: 0; height: 0; border-left: 3.5px solid transparent; border-right: 3.5px solid transparent; border-bottom: 6px solid var(--terra); }
 .pace i.dn { width: 6px; height: 6px; border-radius: 3px; background: var(--olive); }
 .pace.deficit, .pace.full { color: var(--terraText); }
+.pace.held { color: var(--tealText); }
+.alertblk .notice { margin-top: 4px; }
+.ibtn.theme svg { width: 15px; height: 15px; }
 
 .lrow { font-size: 12px; }
 .lrow .t { font-size: 13px; font-weight: 500; white-space: nowrap; }

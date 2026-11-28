@@ -58,6 +58,14 @@ def is_full(pool: dict[str, Any], limit: dict[str, Any] | None) -> bool:
     return pool.get("state") == "EXHAUSTED" or bool(limit and int(limit.get("used_percent") or 0) >= 100)
 
 
+TICKET = "\U0001F39F\uFE0F"
+
+
+def held_words(held: Any) -> str:
+    """'🎟️ 1 held' for a window with a limit reset in hand; empty for none (BR-QUOTA-005)."""
+    return f"{TICKET} {int(held)} held" if isinstance(held, int) and held > 0 else ""
+
+
 def _percent_words(pool: dict[str, Any], limit: dict[str, Any] | None) -> str:
     if is_full(pool, limit):
         return "full"
@@ -79,7 +87,9 @@ def _limit_words(limit: dict[str, Any]) -> str:
     used = "full" if int(limit.get("used_percent") or 0) >= 100 else f"{int(limit.get('used_percent') or 0)}%"
     resets = limit.get("resets")
     pace = pace_words(limit.get("pace"))
-    return f"{title} {used}" + (f" · resets {resets}" if resets else "") + (f" · {pace}" if pace else "")
+    held = held_words(limit.get("resets_held"))
+    return (f"{title} {used}" + (f" · {held}" if held else "") + (f" · resets {resets}" if resets else "")
+            + (f" · {pace}" if pace else ""))
 
 
 def _ago(seconds: Any) -> str:
@@ -113,6 +123,9 @@ def rows(overview: dict[str, Any], lead: str | None = None, *, include_unmeasure
             "full": is_full(pool, limit), "used_percent": int(limit["used_percent"]) if limit else None,
             "resets": (limit or {}).get("resets") or "", "reset_at": (limit or {}).get("reset_at"),
             "pace": (limit or {}).get("pace"),
+            # BR-QUOTA-005: the resets in hand for the tightest window, and what they add to it.
+            "resets_held": int((limit or {}).get("resets_held") or 0),
+            "reset_capacity_percent": 100 * int((limit or {}).get("resets_held") or 0),
             "limits": limits, "gauge_error": pool.get("gauge_error"), "stale_age_s": pool.get("stale_age_s"),
         })
     out.sort(key=lambda row: row["pool"] != lead)
@@ -124,10 +137,15 @@ def title(overview: dict[str, Any], lead: str | None) -> str:
     then the full ones by name ('Claude 26% · Go 85% · Codex, Argon used up')."""
     parts, full = [], []
     for row in rows(overview, lead):
+        held = held_words(row["resets_held"])
         if row["full"]:
-            (parts.append(f"{row['name']} used up") if row["pool"] == lead else full.append(row["name"]))
+            if held:
+                parts.append(f"{row['name']} used up · {held}")
+            else:
+                (parts.append(f"{row['name']} used up") if row["pool"] == lead else full.append(row["name"]))
         elif row["pool"] == lead or (row["used_percent"] or 0) >= HOT_PERCENT:
-            parts.append(f"{row['name']} {row['used_percent']}%" if row["used_percent"] is not None else f"{row['name']} ?")
+            parts.append((f"{row['name']} {row['used_percent']}%" if row["used_percent"] is not None else f"{row['name']} ?")
+                         + (f" · {held}" if held else ""))
     if full:
         parts.append(", ".join(full) + " used up")
     return " · ".join(parts) or "Limits OK"
@@ -154,6 +172,8 @@ def swiftbar(overview: dict[str, Any], lead: str | None, plugin: str | None = No
         head = f"{row['label']}  {'full' if row['full'] else (str(row['used_percent']) + '%' if row['used_percent'] is not None else 'not read')}"
         if row["resets"]:
             head += f" · resets {row['resets']}"
+        if row["resets_held"]:
+            head += f" · {held_words(row['resets_held'])}"
         if row["pace"] and not row["full"]:
             head += f" · {pace_words(row['pace'])}"
         if row["level"] and row["level"] not in {"normal"}:
@@ -183,7 +203,8 @@ def text(overview: dict[str, Any], lead: str | None) -> str:
     for row in rows(overview, lead):
         used = "full" if row["full"] else ("not read" if row["used_percent"] is None else f"{row['used_percent']}%")
         pace = pace_words(row["pace"]) if not row["full"] else ""
-        lines.append(f"{row['label']}: {used}" + (f", resets {row['resets']}" if row["resets"] else "")
+        lines.append(f"{row['label']}: {used}" + (f", {held_words(row['resets_held'])}" if row["resets_held"] else "")
+                     + (f", resets {row['resets']}" if row["resets"] else "")
                      + (f", {pace}" if pace else ""))
         for limit in row["limits"]:
             lines.append("  " + _limit_words(limit))

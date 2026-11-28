@@ -47,6 +47,7 @@
       order: S.order && S.orderTab === S.tab ? S.order : order,
       tabOrder: S.tabOrder.length ? S.tabOrder : window.VM.order,
       confirm: S.confirm, used: S.used, confirmError: S.confirmError, mode: S.mode,
+      appearance: prefs().appearance || "system",
     });
     const panel = host.querySelector(".panel");
     if (S.refreshing) panel.querySelectorAll('[data-act="refresh"]').forEach((b) => b.classList.add("spin"));
@@ -118,11 +119,20 @@
       const act = el.dataset.act, key = el.dataset.key;
       if (act === "refresh") { event.preventDefault(); await refreshAndReload(); return; }
       if (act === "settings") { event.preventDefault(); openSettings(); return; }
+      if (act === "theme") {
+        // System, Light, Dark, in turn: the same value Settings > Appearance writes, saved and applied at once.
+        event.preventDefault();
+        applySetting("appearance", { system: "light", light: "dark", dark: "system" }[prefs().appearance || "system"] || "light");
+        const again = host.querySelector('[data-act="theme"]');
+        if (again) again.focus();
+        return;
+      }
       if (act === "budget") { event.preventDefault(); openSettings("budgets"); return; }
       if (act === "sparkmenu") { event.preventDefault(); event.stopPropagation(); openSparkMenu(key, el); return; }
       if (act === "policy") { event.preventDefault(); event.stopPropagation(); openPolicyMenu(el); return; }
       if (act === "ask") { S.confirm = key; S.used = null; S.confirmError = null; }
       else if (act === "cancel") { S.confirm = null; S.confirmError = null; }
+      else if (act === "askgo") { selectTab(el.dataset.tab); S.confirm = key; S.used = null; S.confirmError = null; }
       else if (act === "use") { await useReset(key); return; }
       else return;
       render();
@@ -284,6 +294,8 @@
     const opens = [["last", "Last used"], ["overview", "Overview"], ...tabIds().filter((id) => id !== "overview").map((id) => [id, window.VM.tabTitle(id)])];
     return field("Appearance", seg("appearance", p.appearance || "system", [["system", "System"], ["light", "Light"], ["dark", "Dark"]], "Appearance"))
       + field("Show", seg("show", S.mode, [["used", "Used"], ["left", "Left"]], "Show used or left"))
+      + field("Resets", seg("auto_use_resets", p.auto_use_resets === "when_used_up" ? "when_used_up" : "off", [["off", "Ask first"], ["when_used_up", "Use when used up"]], "Resets"),
+        "Use when used up spends one held reset by itself when a limit is used up and its own reset is more than 12 hours away. Off asks you first.")
       + field("Refresh", `<div class="trow"><span class="tn">When opened<span class="q"> · if older than 1 min</span></span><button type="button" data-toggle-refresh="on_open" class="${r.on_open === false ? "" : "on"}" aria-pressed="${r.on_open !== false}">${r.on_open === false ? "Off" : "On"}</button></div>
         <div class="trow"><span class="tn">Every</span>${seg("every", r.every_minutes == null ? 5 : r.every_minutes, everyChoices(r.every_minutes), "Refresh every")}</div>`)
       + field("Open on", `<select data-set-select="open_on" aria-label="Open on">${opens.map(([id, text]) => `<option value="${escAttr(id)}"${open === id ? " selected" : ""}>${esc(text)}</option>`).join("")}</select>`,
@@ -427,6 +439,7 @@
       // The console's own pages keep their theme in this browser under the same three words: follow the choice.
       try { window.localStorage.setItem("crossfeed-theme", value); } catch (error) { /* a browser that keeps nothing */ }
     }
+    else if (name === "auto_use_resets") p.auto_use_resets = value === "when_used_up" ? "when_used_up" : "off";
     else if (name === "show") { p.show = value; S.mode = value; window.setMode(value); }
     else if (name === "every") p.refresh = { on_open: true, ...(p.refresh || {}), every_minutes: Number(value) };
     else if (name === "open_on") p.open_on = value;
