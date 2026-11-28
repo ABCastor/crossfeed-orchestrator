@@ -99,9 +99,11 @@ class SubscriptionTests(unittest.TestCase):
         self.assertNotIn('fixture-person', raw)
         body = json.loads(raw)
         # Round 11b adds `plugins`: one validated tile document per enabled plugin tile.
+        # Round 12c adds `notices`: the line an automatic reset use leaves (BR-QUOTA-006), empty by default.
         self.assertEqual(set(body), {'schema', 'title', 'pools', 'readings', 'reading_origin',
-                                     'subscription_spend', 'subscriptions', 'plugins'})
+                                     'subscription_spend', 'subscriptions', 'plugins', 'notices'})
         self.assertEqual(body['plugins'], [])
+        self.assertEqual(body['notices'], [])
         self.assertNotIn('fixture-person', json.dumps(body['subscriptions']))
         self.assertEqual(body['schema'], 1)
         self.assertIn('openrouter-free', {p['pool'] for p in body['pools']})

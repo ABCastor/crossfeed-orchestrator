@@ -266,7 +266,8 @@ class AutoUseTests(unittest.TestCase):
                     "windows": self.reading()["claude"]["windows"], "resets": [grant(("weekly",))]}
         adapters = {"claude": lambda cfg, timeout=None: dict(observed),
                     "codex": lambda cfg, timeout=None: dict(observed)}
-        with mock.patch.dict(fleetctl.ORACLE_REGISTRY, adapters), \
+        with mock.patch.dict(os.environ, {"FLEET_NO_AUTO_REFRESH": ""}), \
+                mock.patch.dict(fleetctl.ORACLE_REGISTRY, adapters), \
                 mock.patch.object(fleetctl, "auto_use_resets") as spend, \
                 mock.patch.object(fleetctl, "adopt_remote_readings"):
             fleetctl.refresh_stale_pools(self.state, ["claude", "codex"], sources=sources, force=True)
