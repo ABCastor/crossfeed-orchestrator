@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 
 THREAD_ID = re.compile(r'[a-f0-9-]{36}\Z')
 
@@ -98,19 +99,33 @@ def codex_cleanup(home: Path, events: Path, run_id: str) -> None:
     errors = []
     database = home / 'state_5.sqlite'
     if database.exists():
-        try:
-            with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
-                for tid, source, first in db.execute('SELECT id, source, first_user_message FROM threads'):
-                    if run_id and worker_notice(first, run_id):
-                        verified.add(tid)
-                    try:
-                        parent = json.loads(source).get('subagent', {}).get('thread_spawn', {}).get('parent_thread_id')
-                    except (ValueError, TypeError, AttributeError):
-                        continue
-                    if isinstance(tid, str) and THREAD_ID.fullmatch(tid) and isinstance(parent, str):
-                        children.setdefault(parent, []).append(tid)
-        except sqlite3.Error:
-            errors.append('cannot read Codex sub-agent thread database')
+        # Cleanup runs right as Codex exits, when its close-time checkpoint can briefly lock the
+        # index; the same read passes moments later.
+        # Retry a bounded number of times; a persistent error still fails closed.
+        failure = None
+        for attempt in range(6):
+            children, verified = {}, set()
+            try:
+                with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)) as db:
+                    for tid, source, first in db.execute('SELECT id, source, first_user_message FROM threads'):
+                        if run_id and worker_notice(first, run_id):
+                            verified.add(tid)
+                        try:
+                            parent = json.loads(source).get('subagent', {}).get('thread_spawn', {}).get('parent_thread_id')
+                        except (ValueError, TypeError, AttributeError):
+                            continue
+                        if isinstance(tid, str) and THREAD_ID.fullmatch(tid) and isinstance(parent, str):
+                            children.setdefault(parent, []).append(tid)
+                failure = None
+                break
+            except sqlite3.Error as exc:
+                failure = exc
+                children, verified = {}, set()
+                if attempt < 5:
+                    time.sleep(min(2 ** attempt, 10))
+        if failure is not None:
+            # Class name only: the message may quote database contents.
+            errors.append(f'cannot read Codex sub-agent thread database ({type(failure).__name__})')
     for root in roots:
         if root not in verified:
             print('codex-agent: SESSION CLEANUP SKIPPED: unverified thread', file=sys.stderr)

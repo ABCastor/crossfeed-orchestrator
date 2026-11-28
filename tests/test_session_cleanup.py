@@ -178,6 +178,36 @@ class CleanupTests(unittest.TestCase):
             self.cleanup.codex_cleanup(self.root, events, 'mine')
         command.assert_not_called()
 
+    def test_codex_transient_database_error_is_retried_then_names_its_class(self):
+        tid = '00000000-0000-0000-0000-000000000001'
+        events = self.root / 'events'
+        events.write_text(json.dumps({'type': 'thread.started', 'thread_id': tid}))
+        with contextlib.closing(sqlite3.connect(self.root / 'state_5.sqlite')) as db, db:
+            db.execute('CREATE TABLE threads (id TEXT, source TEXT, first_user_message TEXT)')
+            db.execute('INSERT INTO threads VALUES (?, ?, ?)', (tid, '{}',
+                       'Crossfeed selected model: fixture\nCrossfeed run mine.\n=== CROSSFEED TASK ==='))
+        real_connect = sqlite3.connect
+        attempts = []
+        def flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise sqlite3.OperationalError('database is locked')
+            return real_connect(*args, **kwargs)
+        with mock.patch.object(self.cleanup.sqlite3, 'connect', side_effect=flaky), \
+             mock.patch.object(self.cleanup.time, 'sleep'), \
+             mock.patch.object(self.cleanup.subprocess, 'run', return_value=mock.Mock(returncode=0)) as delete:
+            self.cleanup.codex_cleanup(self.root, events, 'mine')
+        delete.assert_called_once_with(['codex', 'delete', '--force', tid], stdout=mock.ANY, stderr=mock.ANY, timeout=60)
+        # A persistent failure still fails closed, deletes nothing and names the error class only.
+        with mock.patch.object(self.cleanup.sqlite3, 'connect', side_effect=sqlite3.OperationalError('secret row text')), \
+             mock.patch.object(self.cleanup.time, 'sleep'), \
+             mock.patch.object(self.cleanup.subprocess, 'run') as delete, \
+             contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, r'thread database \(OperationalError\)') as caught:
+                self.cleanup.codex_cleanup(self.root, events, 'mine')
+        self.assertNotIn('secret row text', str(caught.exception))
+        delete.assert_not_called()
+
     def test_delete_failure_attempts_other_threads_and_reports_failure(self):
         events = self.root / 'events'
         events.write_text(json.dumps({'type': 'thread.started', 'thread_id': '00000000-0000-0000-0000-000000000001'}))
