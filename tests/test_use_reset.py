@@ -66,7 +66,9 @@ class UseResetTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def run_command(self, fake, *extra, key="weekly"):
-        argv = ["fleetctl.py", "--state-dir", str(self.root), "use-reset", "claude", "--key", key, *extra]
+        # A missing overlay keeps the run off the machine's own roster; the save-after-claim test patches it in.
+        argv = ["fleetctl.py", "--state-dir", str(self.root), "--overlay", str(self.root / "no-overlay.json"),
+                "use-reset", "claude", "--key", key, *extra]
         out, err = io.StringIO(), io.StringIO()
         with patch.object(native.urllib.request, "build_opener") as build:
             build.return_value.open = fake
@@ -104,6 +106,23 @@ class UseResetTests(unittest.TestCase):
         self.assertEqual(json.loads(request.data),
                          {"program": "cedar_ember", "grant_id": GRANT_ID, "request_id": REQUEST_ID})
         self.assertEqual(out.strip(), "Used: One full limit reset (November 2026). Left: 0")
+
+    # BR-QUOTA-004
+    def test_a_sent_claim_saves_a_fresh_reading_of_every_claude_pool_at_once(self):
+        """The menu showed 100% after a used reset: the claim's re-read was printed, never saved."""
+        sources = {"claude": {"oracle": "claude"}, "claude-fable": {"oracle": "claude"}, "codex": {"oracle": "codex"}}
+        with patch.object(fleetctl, "read_overlay", return_value={"lanes": []}), \
+                patch.object(fleetctl, "quota_sources", return_value=sources), \
+                patch.object(fleetctl, "refresh_stale_pools", return_value={}) as reread:
+            code, _out, err = self.run_command(FakeAnthropic(), "--yes")
+            self.assertEqual(code, 0, err)
+            reread.assert_called_once()
+            self.assertEqual(sorted(reread.call_args.args[1]), ["claude", "claude-fable"])
+            self.assertIs(reread.call_args.kwargs["force"], True)
+            reread.reset_mock()
+            self.run_command(FakeAnthropic())                       # no --yes: nothing sent, nothing re-read
+            self.run_command(FakeAnthropic(claim_status=409), "--yes")  # refused: the limits did not change
+            reread.assert_not_called()
 
     # BR-QUOTA-003
     def test_the_printed_outcome_names_no_grant_request_or_organization(self):

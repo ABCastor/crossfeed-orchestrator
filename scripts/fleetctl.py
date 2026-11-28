@@ -6731,6 +6731,19 @@ def _claude_grant_for_key(payload: dict, key: str) -> dict | None:
     return next((row for row in native_usage.claude_claim_grants(payload) if row.get("key") == key), None)
 
 
+def _reread_after_reset(args, state_dir: Path) -> None:
+    """A sent claim changes the limits, so every pool fed by the Claude reader is read again and saved now
+    (BR-QUOTA-004): the menu, the console and routing must not keep the pre-reset reading."""
+    try:
+        roster = read_overlay(Path(getattr(args, "overlay", None) or DEFAULT_OVERLAY).expanduser(), state_dir)
+        sources = {pool: cfg for pool, cfg in quota_sources(roster).items()
+                   if cfg.get("oracle") == "claude" or pool == args.pool}
+        if sources:
+            refresh_stale_pools(state_dir, list(sources), roster=roster, force=True)
+    except Exception:  # noqa: BLE001 - the claim already happened; a failed re-read leaves the next refresh to it
+        pass
+
+
 def use_reset_command(args, state_dir: Path) -> int:
     """One Claude limit-reset grant, chosen by its handle: say which, and only --yes spends it (BR-QUOTA-003)."""
     def say(payload: dict) -> None:
@@ -6781,6 +6794,7 @@ def use_reset_command(args, state_dir: Path) -> int:
         return stop("the reset request could not be sent", label=grant["label"])
     if not 200 <= status < 300:
         return stop(f"Anthropic did not accept the reset (HTTP {status})", label=grant["label"])
+    _reread_after_reset(args, state_dir)
     after, error = native_usage.claude_usage_document()
     left = None
     if after is not None:

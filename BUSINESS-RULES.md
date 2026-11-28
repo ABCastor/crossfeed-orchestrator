@@ -280,6 +280,14 @@ Shared-identity cap regression: `tests/test_shared_models.py:SharedRoutingTests.
 - tested-by: `tests/test_use_reset.py:UseResetTests` (no POST without `--yes`; exact URL, headers and body; ids never printed; 401/404; unreadable answer; unknown key; a claim that leaves the grant untouched), `tests/test_native_usage.py:ClaudeTests::test_the_next_grant_is_marked_and_every_handle_is_unique`, `test_the_claim_helper_keeps_the_own_ids_a_reading_never_does`. Not run live: the operator's first click is the live test.
 - Review when: Anthropic changes the claim endpoint, its required headers or the grant inventory shape, or the response turns out not to mean "sent".
 
+## BR-QUOTA-004 — A used reset is read again and saved at once [OPERATOR-DIRECTED 2026-11-28]
+
+- RULE: After a reset claim is sent and accepted, every pool fed by the Claude reader is read again with a forced refresh and the reading is saved, before the command returns. A refused claim or a dry run reads nothing again.
+- Authority: Operator, 28 Nov: "I have clicked use ... it is actually [0% in Claude] ... But in the orchestrator, it still shows at 100% even after I refresh." The claim's own re-read was printed and never saved, so the menu, the console and routing kept the pre-reset reading.
+- implemented-by: `scripts/fleetctl.py:_reread_after_reset`, `use_reset_command` · `scripts/console.py:use_claude_reset`.
+- tested-by: `tests/test_use_reset.py:UseResetTests::test_a_sent_claim_saves_a_fresh_reading_of_every_claude_pool_at_once`.
+- Review when: another provider's reset or credit claim is added (it needs the same re-read).
+
 ## BR-SELECT-012 — Max runs the pool's smartest model for everything [OPERATOR-DIRECTED 2026-11-27]
 
 - RULE: When a pool's spend level is `forced` (Max in the console and the menu), its candidate routes are limited to that pool's model with the highest estimated success for this role and difficulty. Price never enters that choice, so a cheaper model of the same pool cannot win it; an equal estimate goes to the newer model in the pool's card order. Thinking effort for the chosen model still follows the job's difficulty (BR-SELECT-011). Every hard gate still applies first (`refuse_roles`, data class, archive, switch, retirement), and if it removes the top model the best remaining model of that pool is used. Other pools are unaffected, and exploration may not sample a lesser model of a forced pool.

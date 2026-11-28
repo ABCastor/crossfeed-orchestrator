@@ -351,7 +351,8 @@ class Console:
         """One attempt, through the same function `fleetctl use-reset claude --key K --yes` calls."""
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}", key or ""):
             return False, "That is not a reset key the glance shows."
-        argv = types.SimpleNamespace(command="use-reset", pool="claude", key=key, yes=True, json=True)
+        argv = types.SimpleNamespace(command="use-reset", pool="claude", key=key, yes=True, json=True,
+                                     overlay=self.overlay_path)
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             try:
