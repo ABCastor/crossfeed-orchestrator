@@ -102,6 +102,60 @@ function startServer(work) {
     await dark.context.close();
   });
 
+  await flow("Theme switch in the header: System, Light, Dark in turn, the page follows, panel.json keeps it, a reload keeps it", async () => {
+    resetPrefs();
+    const { page, context } = await open({ scheme: "dark" });
+    const toggle = '.hd [data-act="theme"]';
+    const order = await page.$$eval(".hd .ibtns [data-act]", (els) => els.map((e) => e.dataset.act));
+    assert.deepEqual(order, ["theme", "refresh", "settings"]);
+    assert.match(await page.getAttribute(toggle, "aria-label"), /^Theme: system\. Switch to light$/);
+    assert.ok(await page.locator(".panel.dark").count(), "System follows the dark browser");
+    const drawn = () => page.$$eval(`${toggle} svg circle, ${toggle} svg path`, (els) => els.map((e) => e.getAttribute("r") || (e.getAttribute("d") || "").slice(0, 12)).join(","));
+    const system = await drawn();
+    await page.click(toggle);
+    await page.waitForFunction(() => document.body.classList.contains("light"));
+    assert.match(await page.getAttribute(toggle, "aria-label"), /^Theme: light\. Switch to dark$/);
+    assert.ok(await page.locator(".panel.light").count(), "Light overrides the dark browser");
+    assert.notEqual(await drawn(), system, "the icon follows the choice");
+    await page.waitForTimeout(300);
+    assert.equal(prefsOnDisk().appearance, "light");
+    await page.click(toggle);
+    await page.waitForFunction(() => document.body.classList.contains("dark"));
+    assert.match(await page.getAttribute(toggle, "aria-label"), /^Theme: dark\. Switch to system$/);
+    await page.waitForTimeout(300);
+    assert.equal(prefsOnDisk().appearance, "dark");
+    await page.reload(); await page.waitForFunction(() => window.__ready === true);
+    assert.match(await page.getAttribute(toggle, "aria-label"), /^Theme: dark\./, "the choice survives a reload");
+    await page.click(toggle);
+    await page.waitForTimeout(300);
+    assert.equal(prefsOnDisk().appearance, "system");
+    assert.equal(await page.getAttribute(toggle, "aria-label"), "Theme: system. Switch to light");
+    // The Appearance row in Settings shows the same value.
+    await page.click('[data-act="settings"]');
+    assert.equal(await page.getAttribute('[data-set="appearance"][data-value="system"]', "aria-pressed"), "true");
+    await page.click('[data-set="appearance"][data-value="light"]');
+    assert.match(await page.getAttribute(toggle, "aria-label"), /^Theme: light\./);
+    await shot(page, "theme-switch", "light");
+    await context.close();
+  });
+
+  await flow("Settings > General: Resets is Ask first until the operator picks Use when used up, and it persists", async () => {
+    resetPrefs();
+    const { page, context } = await open();
+    await page.click('[data-act="settings"]');
+    assert.equal(await page.getAttribute('[data-set="auto_use_resets"][data-value="off"]', "aria-pressed"), "true");
+    await page.click('[data-set="auto_use_resets"][data-value="when_used_up"]');
+    await page.waitForTimeout(300);
+    assert.equal(prefsOnDisk().auto_use_resets, "when_used_up");
+    await page.reload(); await page.waitForFunction(() => window.__ready === true);
+    await page.click('[data-act="settings"]');
+    assert.equal(await page.getAttribute('[data-set="auto_use_resets"][data-value="when_used_up"]', "aria-pressed"), "true");
+    await page.click('[data-set="auto_use_resets"][data-value="off"]');
+    await page.waitForTimeout(300);
+    assert.equal(prefsOnDisk().auto_use_resets, "off");
+    await context.close();
+  });
+
   await flow("Menu bar: a live preview changes with icon and text, and each choice persists", async () => {
     resetPrefs();
     const { page, context } = await open();

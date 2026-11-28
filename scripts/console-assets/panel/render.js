@@ -19,6 +19,14 @@
     dots: '<svg viewBox="0 0 18 18" width="17" height="17" fill="currentColor"><circle cx="4" cy="9" r="1.6"/><circle cx="9" cy="9" r="1.6"/><circle cx="14" cy="9" r="1.6"/></svg>',
     grip: '<svg viewBox="0 0 6 10" width="6" height="10" fill="currentColor"><circle cx="1" cy="1" r="1"/><circle cx="5" cy="1" r="1"/><circle cx="1" cy="5" r="1"/><circle cx="5" cy="5" r="1"/><circle cx="1" cy="9" r="1"/><circle cx="5" cy="9" r="1"/></svg>',
   };
+  // The Castor theme toggle (theme-toggle.html): one drawing per choice; the icon shows the choice, never the resolution.
+  const THEME_ICON = {
+    system: '<circle cx="12" cy="12" r="9"/><path class="t-half" d="M12 3a9 9 0 0 0 0 18Z" fill="currentColor" stroke="none"/>',
+    light: '<circle cx="12" cy="12" r="5.25"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.28 5.28l1.41 1.41M17.31 17.31l1.41 1.41M18.72 5.28l-1.41 1.41M6.69 17.31l-1.41 1.41"/>',
+    dark: '<path d="M20.6 14.65A9 9 0 0 1 9.35 3.4 9 9 0 1 0 20.6 14.65Z"/><path class="t-asterisk" transform="translate(15.4 1.4) scale(.3)" d="M11.6743 21.5000Q10.5596 21.5000 10.2049 20.7400Q9.8503 19.9800 10.0529 19.0173L11.1676 13.2920L7.0636 16.8387Q6.4049 17.4973 5.3663 17.6747Q4.3276 17.8520 3.7196 16.7373Q3.0609 15.6227 3.5929 14.9387Q4.1249 14.2547 4.9356 14.0013L10.4583 11.9747L5.4423 10.1507Q4.2263 9.7453 3.7449 8.9600Q3.2636 8.1747 3.8716 7.0600Q4.3783 6.0973 5.2649 6.1733Q6.1516 6.2493 6.8103 6.8067L11.2183 10.7080L10.2556 5.4387Q10.0529 4.2733 10.5343 3.3867Q11.0156 2.5000 12.2823 2.5000Q13.2956 2.5000 13.7009 3.1840Q14.1063 3.8680 13.8529 4.9320L12.6876 10.7587L16.8423 7.2120Q17.7036 6.5027 18.7169 6.4267Q19.7303 6.3507 20.3383 7.4653Q20.8956 8.4280 20.4396 9.0613Q19.9836 9.6947 18.9703 10.0493L13.3969 12.0253L18.4636 13.9507Q19.4769 14.3053 20.0343 15.1667Q20.5916 16.0280 19.9836 17.1427Q19.4769 18.1053 18.6409 18.0040Q17.8049 17.9027 17.0956 17.2440L12.6876 13.3427L13.6503 18.5613Q13.8529 19.5747 13.4223 20.5373Q12.9916 21.5000 11.6743 21.5000Z" fill="currentColor" stroke="none" />',
+  };
+  const THEME_NEXT = { system: "light", light: "dark", dark: "system" };
+  let APPEARANCE = "system";
   const logo = (name, size) => name && L[name] ? `<span class="logo" style="width:${size}px;height:${size}px">${L[name]}</span>` : "";
   const NAMES = { limits: "Limits", resets: "Resets", credits: "Credits", tokens: "Tokens", policy: "Spend policy",
     links: "Links", alert: "Alert", providers: "Providers", subscriptions: "Subscriptions", other: "Other",
@@ -59,7 +67,8 @@
 
   // The one limit row part. Figure where the eye lands, the window named top right, then the bar, then pace.
   function limitRow(r, href) {
-    const l3 = (r.paceWord || r.runsOut) && !r.full ? `<div class="line l3">${paceWord(r)}${r.runsOut ? `<span class="pace deficit">${esc(r.runsOut)}</span>` : ""}</div>` : "";
+    const heldTag = r.held ? `<span class="pace held"><span class="em">${TICKET}</span> ${r.held} held</span>` : "";
+    const l3 = (r.paceWord || r.runsOut || heldTag) && !(r.full && !heldTag) ? `<div class="line l3">${r.full ? "" : paceWord(r)}${r.runsOut ? `<span class="pace deficit">${esc(r.runsOut)}</span>` : ""}${heldTag}</div>` : "";
     return `<div class="lrow${href ? " hit" : ""}" ${href ? hit(href) : ""}><div class="line l1"><span class="fig num ${r.hot ? "hot" : ""}">${fig(r)}</span>${windowLabel(r)}</div>
       ${bar(r, 6)}${l3}</div>`;
   }
@@ -164,7 +173,10 @@
   }
   function alertBlock() {
     const v = VM.verdict;
-    return `<div class="alertblk line l1"><span class="verdict ${v.tone}"><i></i>${esc(v.words)}</span></div>`;
+    // A held reset is offered here: Use opens the reset's own confirmation on its provider's tab, never spends it.
+    const use = v.use ? `<span class="sp"></span><button type="button" class="btn" data-act="askgo" data-key="${esc(v.use.key)}" data-tab="${esc(v.use.tab)}">Use</button>` : "";
+    const notes = (VM.notices || []).map((n) => `<div class="line l3 notice q">${esc(n.text)}</div>`).join("");
+    return `<div class="alertblk line l1"><span class="verdict ${v.tone}"><i></i>${esc(v.words)}</span>${use}</div>${notes}`;
   }
   function providersBlock() {
     if (!VM.order.length) return `<div class="q">No provider has a limit to show yet.</div>`;
@@ -301,7 +313,11 @@
       return `<button type="button" role="tab" aria-selected="${on}" class="tab${on ? " on" : ""}${fixed ? " fixed" : ""}" data-tab-id="${esc(t.id)}"><span class="tlift">${mark}<span class="tl">${esc(t.title)}</span>${tick}</span></button>`;
     }).join("") + `</nav>`;
   }
-  const iconBtns = (tip) => `<span class="ibtns"><button type="button" class="ibtn" title="${esc(tip || "Refresh now")}" data-act="refresh" aria-label="Refresh now">${ICON.refresh}</button><button type="button" class="ibtn" title="Settings" data-act="settings" aria-label="Settings">${ICON.sliders}</button></span>`;
+  const themeBtn = () => {
+    const now = THEME_ICON[APPEARANCE] ? APPEARANCE : "system", next = THEME_NEXT[now];
+    return `<button type="button" class="ibtn theme" title="Theme: ${now}" data-act="theme" data-theme-toggle aria-pressed="${now === "dark"}" aria-label="Theme: ${now}. Switch to ${next}"><svg class="castor-tool-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${THEME_ICON[now]}</svg></button>`;
+  };
+  const iconBtns = (tip) => `<span class="ibtns">${themeBtn()}<button type="button" class="ibtn" title="${esc(tip || "Refresh now")}" data-act="refresh" aria-label="Refresh now">${ICON.refresh}</button><button type="button" class="ibtn" title="Settings" data-act="settings" aria-label="Settings">${ICON.sliders}</button></span>`;
   function header(tabId, key) {
     if (tabId === "overview") {
       return `<header class="hd ov"><div class="line l1"><span class="name">Overview</span><span class="sp"></span>${iconBtns()}</div></header>`;
@@ -316,6 +332,7 @@
   // o: { order: [block ids], tabOrder: [provider ids], confirm: resetKey, used: resetKey, mode }
   window.renderPanel = function (dir, tabId, theme, o = {}) {
     MODE = o.mode || "used";
+    APPEARANCE = o.appearance || "system";
     const tabOrder = o.tabOrder || VM.order;
     const order = o.order || blocksFor(tabId, dir);
     const blocks = order.map((id) => blockHTML(dir, tabId, id, { ...o, tabOrder })).join("");

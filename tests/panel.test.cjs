@@ -389,3 +389,85 @@ test("the panel and the Linux tray title the shared fixture the same way (menuba
     assert.deepEqual([got.text, got.icon, got.logo], [text, icon, logo], JSON.stringify(choice));
   }
 });
+
+// ---- round 12c: held resets, the Castor theme switch, the Resets setting ---------------------------------
+
+function heldGlance(used, held, pace) {
+  const doc = glance();
+  const weekly = doc.pools[0].limits[0];
+  weekly.used_percent = used;
+  weekly.resets_held = held;
+  weekly.pace = pace || { elapsed_percent: 39.7, status: "deficit", words: "56% in deficit" };
+  doc.pools[0].used_percent = used;
+  return doc;
+}
+
+test("a window with a reset held is never said to run out: the alert line says it is held and offers Use", () => {
+  const model = build(heldGlance(96, 1)).window.VM;
+  assert.equal(model.verdict.words, "Claude 96% · 🎟️ 1 held");
+  assert.equal(model.verdict.tone, "hot");
+  assert.deepEqual(JSON.parse(JSON.stringify(model.verdict.use)), { key: "weekly", tab: "claude" });
+  assert.doesNotMatch(model.verdict.words, /runs out/i);
+  const html = render(build(heldGlance(96, 1)), "overview", ["alert"]);
+  assert.match(html, /Claude 96% · 🎟️ 1 held/);
+  assert.match(html, /data-act="askgo" data-key="weekly" data-tab="claude">Use<\/button>/);
+  assert.doesNotMatch(html, /runs out/i);
+  // A used-up window reads the same, with the used-up word.
+  assert.equal(build(heldGlance(100, 2)).window.VM.verdict.words, "Claude used up · 🎟️ 2 held");
+  // The limit row carries the held mark, and a backend run-out in the pace words cannot reach it.
+  const defended = heldGlance(80, 1, { elapsed_percent: 50, status: "deficit", words: "30% in deficit, runs out in 1d 2h", runs_out_in_s: 93600 });
+  const row = build(defended).window.VM.tabs.claude.sections[0].rows.find((r) => r.key === "weekly");
+  assert.equal(row.runsOut, null);
+  assert.equal(row.hot, false);
+  const limits = render(build(defended), "claude", ["limits"]);
+  assert.match(limits, /pace held"><span class="em">🎟️<\/span> 1 held/);
+  assert.doesNotMatch(limits, /Runs out/);
+});
+
+test("without a held reset the alert line still says when the tightest window runs out", () => {
+  const doc = heldGlance(50, 0, { elapsed_percent: 39.7, status: "deficit", words: "10% in deficit, runs out in 2d 18h", runs_out_in_s: 240235 });
+  assert.match(build(doc).window.VM.verdict.words, /runs out in 2d 18h/);
+});
+
+test("Use in the alert line opens the reset's own confirmation and never spends it", () => {
+  const source = fs.readFileSync(path.join(PANEL, "panel.js"), "utf8");
+  const askgo = /act === "askgo"[^\n]*/.exec(source)[0];
+  assert.match(askgo, /selectTab\(el\.dataset\.tab\)/);
+  assert.match(askgo, /S\.confirm = key/);
+  assert.doesNotMatch(askgo, /useReset/);
+});
+
+test("the automatic-use notice shows under the alert line", () => {
+  const doc = heldGlance(10, 0);
+  doc.notices = [{ kind: "auto_reset", text: "Used the weekly reset automatically", at: "2026-11-28T10:00:00Z" }];
+  assert.match(render(build(doc), "overview", ["alert"]), /notice q">Used the weekly reset automatically</);
+});
+
+test("the header has the Castor theme switch next to refresh and settings, showing the current choice", () => {
+  const context = build();
+  const header = (appearance) => vm.runInContext(`window.renderPanel("B", "claude", "light", { order: [], appearance: ${JSON.stringify(appearance)} })`, context)
+    .match(/<span class="ibtns">.*?<\/span><\/div>/s)[0];
+  const order = (html) => [...html.matchAll(/data-act="(theme|refresh|settings)"/g)].map((m) => m[1]);
+  assert.deepEqual(order(header("system")), ["theme", "refresh", "settings"]);
+  const cycle = [["system", "light", "t-system"], ["light", "dark", "t-sun"], ["dark", "system", "t-moon"]];
+  const drawings = { "t-system": /<circle cx="12" cy="12" r="9"\/>/, "t-sun": /<circle cx="12" cy="12" r="5\.25"\/>/, "t-moon": /M20\.6 14\.65A9 9 0 0 1 9\.35 3\.4/ };
+  for (const [now, next, mark] of cycle) {
+    const html = header(now);
+    assert.match(html, new RegExp(`aria-label="Theme: ${now}\\. Switch to ${next}"`));
+    assert.match(html, /data-theme-toggle/);
+    for (const [other, pattern] of Object.entries(drawings)) {
+      assert.equal(pattern.test(html), other === mark, `${now} draws only ${mark}`);
+    }
+  }
+  // The same switch in every header: Overview, a provider, Other.
+  for (const tab of ["overview", "claude", "other"]) assert.match(render(context, tab, []), /data-act="theme"/);
+  const source = fs.readFileSync(path.join(PANEL, "panel.js"), "utf8");
+  assert.match(source, /system: "light", light: "dark", dark: "system"/);   // System -> Light -> Dark -> System
+});
+
+test("Settings > General has Resets: Ask first / Use when used up, kept in panel.json beside Appearance", () => {
+  const source = fs.readFileSync(path.join(PANEL, "panel.js"), "utf8");
+  assert.match(source, /field\("Resets", seg\("auto_use_resets"[^\n]*\["off", "Ask first"\], \["when_used_up", "Use when used up"\]/);
+  assert.match(source, /name === "auto_use_resets"\) p\.auto_use_resets = value === "when_used_up" \? "when_used_up" : "off"/);
+  assert.match(source, /field\("Appearance"/);   // the Appearance row stays
+});
