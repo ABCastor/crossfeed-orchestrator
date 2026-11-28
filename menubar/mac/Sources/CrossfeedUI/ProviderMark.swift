@@ -12,7 +12,7 @@ public enum ProviderAssets {
             guard let image = NSImage(contentsOf: directory.appendingPathComponent(logo.rawValue + ".svg")),
                   image.isValid else { return nil }
             switch logo {
-            case .openai, .copilot, .opencode, .openrouter: image.isTemplate = true
+            case .openai, .copilot, .opencode, .openrouter, .chat: image.isTemplate = true
             case .claude, .gemini, .antigravity: image.isTemplate = false
             }
             return (logo, image)

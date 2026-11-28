@@ -65,9 +65,12 @@ public struct PolicyModel: Equatable {
 public enum ProviderLogo: String, CaseIterable {
     case claude = "claude-color", openai, copilot = "githubcopilot", gemini = "gemini-color"
     case antigravity = "antigravity-color", opencode, openrouter
+    /// Crossfeed Chat's own one-colour mark, so its tab is not a second OpenAI logo beside Codex.
+    case chat
 
     static func forPool(_ id: String) -> Self? {
         if id == "claude" { return .claude }
+        if id == "chatgpt-work" { return .chat }
         if id.hasPrefix("codex") || id.hasPrefix("chatgpt") { return .openai }
         if id.hasPrefix("github-copilot") { return .copilot }
         if id.hasPrefix("antigravity") { return .antigravity }

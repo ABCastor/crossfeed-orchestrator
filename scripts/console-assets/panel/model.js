@@ -273,7 +273,7 @@ window.buildModel = function (glance, preferences) {
 
   const LOGO = {
     claude: "claude-color", codex: "openai", copilot: "githubcopilot", antigravity: "antigravity-color",
-    opencode: "opencode", "openrouter-free": "openrouter", "gemini-metered": "gemini-color", "chatgpt-work": "openai",
+    opencode: "opencode", "openrouter-free": "openrouter", "gemini-metered": "gemini-color", "chatgpt-work": "chat",
   };
   const logoFor = (id, pools) => LOGO[id] || LOGO[pools[0].pool] || (window.LOGOS[String(pools[0].pool).split("-")[0]] ? String(pools[0].pool).split("-")[0] : null);
 

@@ -213,8 +213,9 @@ final class PresentationTests: XCTestCase {
 
     func testMarksFollowProviderIncludingOtherPoolRows() throws {
         let view = try presenter()
-        XCTAssertEqual(view.tabs.map(\.logo), [.claude, .openai, .copilot, .antigravity, .opencode, .openrouter, .gemini, .openai])
-        XCTAssertEqual(["chatgpt-work", "gemini-metered", "openrouter-free"].compactMap { view.card(for: $0)?.sections.first?.logo }, [.openai, .gemini, .openrouter])
+        XCTAssertEqual(view.tabs.map(\.logo), [.claude, .openai, .copilot, .antigravity, .opencode, .openrouter, .gemini, .chat])
+        // Crossfeed Chat has its own mark, so the strip never shows two identical OpenAI logos.
+        XCTAssertEqual(["chatgpt-work", "gemini-metered", "openrouter-free"].compactMap { view.card(for: $0)?.sections.first?.logo }, [.chat, .gemini, .openrouter])
     }
 
     func testPoolsWithoutQuotaWindowsLandInOtherUnlessTheyAreBilledPerToken() throws {
