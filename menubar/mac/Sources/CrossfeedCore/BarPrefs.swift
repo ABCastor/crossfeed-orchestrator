@@ -5,7 +5,20 @@ import Foundation
 
 public struct BarPrefs: Equatable {
     public enum Count: String, CaseIterable { case used, left }
-    public enum Icon: String, CaseIterable { case tanks, logo, none }
+    /// `.tanks` is the Crossfeed mark and `.logo` the provider's logo; panel.json spells them "crossfeed" and "provider".
+    public enum Icon: String, CaseIterable {
+        case tanks, logo, none
+
+        public var fileValue: String { self == .tanks ? "crossfeed" : (self == .logo ? "provider" : "none") }
+        public init?(file: String) {
+            switch file {
+            case "crossfeed": self = .tanks
+            case "provider": self = .logo
+            case "none": self = .none
+            default: return nil
+            }
+        }
+    }
     /// How much of "Gemini 5h 59%" to print. `.none` leaves the icon alone.
     public enum Text: String, CaseIterable { case full, window, number, none }
 
@@ -16,7 +29,6 @@ public struct BarPrefs: Equatable {
     public enum Reset: String, CaseIterable { case countdown, clock }
 
     public static let pressed = "pressed"
-    public static let refreshChoices = [60, 300, 900]
     /// "tightest" (whichever window of the allowance is closest to its limit) or one window by its short name.
     public static let tightest = "tightest"
     public static let windowChoices = [tightest, "5h", "Week", "Month"]
@@ -29,7 +41,6 @@ public struct BarPrefs: Equatable {
     public var text = Text.window
     public var extra = Extra.none
     public var reset = Reset.countdown
-    public var refreshSeconds = 300
     /// Notifications, off until the operator turns one on: an allowance nearly or fully used, and one that resets.
     public var notifyLow = false
     public var notifyReset = false
@@ -63,7 +74,7 @@ public struct BarPrefsStore {
 
     public init(defaults: UserDefaults) { self.defaults = defaults }
 
-    /// Version of the saved choices. 2: the logo with the window is the default, and a reading every 5 minutes.
+    /// Version of the saved choices. 2: the logo with the window is the default. The refresh interval lives in panel.json.
     static let version = 2
 
     public func load() -> BarPrefs {
@@ -71,18 +82,15 @@ public struct BarPrefsStore {
         if let show = defaults.string(forKey: Self.prefix + "show"), !show.isEmpty, show.count <= 40 { prefs.show = show }
         if let window = defaults.string(forKey: Self.prefix + "window"), BarPrefs.windowChoices.contains(window) { prefs.window = window }
         prefs.count = defaults.string(forKey: Self.prefix + "count").flatMap(BarPrefs.Count.init) ?? prefs.count
-        prefs.icon = defaults.string(forKey: Self.prefix + "icon").flatMap(BarPrefs.Icon.init) ?? prefs.icon
+        prefs.icon = defaults.string(forKey: Self.prefix + "icon").flatMap(BarPrefs.Icon.init(rawValue:)) ?? prefs.icon
         prefs.text = defaults.string(forKey: Self.prefix + "text").flatMap(BarPrefs.Text.init) ?? prefs.text
         prefs.extra = defaults.string(forKey: Self.prefix + "extra").flatMap(BarPrefs.Extra.init) ?? prefs.extra
         prefs.reset = defaults.string(forKey: Self.prefix + "reset").flatMap(BarPrefs.Reset.init) ?? prefs.reset
-        let refresh = defaults.integer(forKey: Self.prefix + "refresh")
-        if BarPrefs.refreshChoices.contains(refresh) { prefs.refreshSeconds = refresh }
         prefs.notifyLow = defaults.bool(forKey: Self.prefix + "notifyLow")
         prefs.notifyReset = defaults.bool(forKey: Self.prefix + "notifyReset")
         if defaults.integer(forKey: Self.prefix + "version") < Self.version {
-            // Once: the tanks with the window text (the old pick) become the logo, and a 1-minute reading becomes 5.
+            // Once: the tanks with the window text (the old pick) become the logo.
             if prefs.icon == .tanks && prefs.text == .window { prefs.icon = .logo; defaults.set(prefs.icon.rawValue, forKey: Self.prefix + "icon") }
-            if prefs.refreshSeconds == 60 { prefs.refreshSeconds = 300; defaults.set(300, forKey: Self.prefix + "refresh") }
             migrate()
         }
         return prefs
@@ -98,14 +106,13 @@ public struct BarPrefsStore {
         defaults.set(prefs.text.rawValue, forKey: Self.prefix + "text")
         defaults.set(prefs.extra.rawValue, forKey: Self.prefix + "extra")
         defaults.set(prefs.reset.rawValue, forKey: Self.prefix + "reset")
-        defaults.set(prefs.refreshSeconds, forKey: Self.prefix + "refresh")
         defaults.set(prefs.notifyLow, forKey: Self.prefix + "notifyLow")
         defaults.set(prefs.notifyReset, forKey: Self.prefix + "notifyReset")
         migrate()
     }
 
     public func reset() {
-        for key in ["show", "window", "count", "icon", "text", "extra", "reset", "refresh", "notifyLow", "notifyReset"] { defaults.removeObject(forKey: Self.prefix + key) }
+        for key in ["show", "window", "count", "icon", "text", "extra", "reset", "notifyLow", "notifyReset"] { defaults.removeObject(forKey: Self.prefix + key) }
     }
 }
 

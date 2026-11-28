@@ -1,7 +1,10 @@
 // Crossfeed menu: panel.json, the one preferences file the Mac menu and the web panel share.
 //
 //   ~/.config/orchestrator/panel.json   (XDG_CONFIG_HOME respected; FLEET_PANEL_PREFS overrides)
-//   {"schema":1, "show":"used", "tabs":[...], "hidden_tabs":[...], "tiles":{tab:[ids]}, "hidden_tiles":{tab:[ids]}}
+//   {"schema":1, "show":"used", "tabs":[...], "hidden_tabs":[...], "tiles":{tab:[ids]}, "hidden_tiles":{tab:[ids]},
+//    "appearance":"system|light|dark", "menubar":{"icon":"crossfeed|provider|none"},
+//    "refresh":{"on_open":true,"every_minutes":5}, "open_on":"last|<tab>", "last_tab":"<tab>",
+//    "budgets":{pool:usd}, "tile_options":{"<tab>/<tile>":{"metric":"cost","days":30}}}
 //
 // Mode 600, atomic replace, unknown keys kept as they are. In memory the tabs use the menu's own ids
 // (agy, go); the file uses the contract's (antigravity, opencode). Foundation only.
@@ -58,20 +61,61 @@ public enum PanelIDs {
     public static func menu(_ id: String) -> String { fromFile[id] ?? id }
 }
 
+/// What a tile's chart plots: the pool's tokens, its cost in USD, or its request count.
+public enum ChartMetric: String, CaseIterable {
+    case tokens, cost, requests
+    public var title: String { self == .tokens ? "Tokens" : (self == .cost ? "Cost" : "Requests") }
+}
+
+/// One tile's chart options, as `tile_options` keeps them. A missing field means the tile's own default.
+public struct TileOption: Equatable {
+    public var metric: ChartMetric?
+    public var days: Int?
+    public init(metric: ChartMetric? = nil, days: Int? = nil) { self.metric = metric; self.days = days }
+}
+
 public struct PanelPrefs: Equatable {
     public enum Show: String, CaseIterable { case used, left }
+    /// The look of the menu and Settings: the system's, or fixed light or dark.
+    public enum Appearance: String, CaseIterable {
+        case system, light, dark
+        public var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    }
 
     public static let schema = 1
     public static let fixedFirst = "overview"
     public static let fixedLast = "other"
-    public static let defaultTabs = ["overview", "claude", "codex", "copilot", "agy", "go", "other"]
+    /// The pools billed per token, by prepaid credit or through a relay each have a tab of their own, named by the pool.
+    public static let apiTabs = ["openrouter-free", "gemini-metered", "chatgpt-work"]
+    public static let defaultTabs = ["overview", "claude", "codex", "copilot", "agy", "go"] + apiTabs + ["other"]
     /// What every provider tab can hold, in the default order. Plugin tiles are added by the operator.
-    public static let providerTiles = ["limits", "resets", "tokens", "policy", "credits", "links"]
+    public static let providerTiles = ["limits", "resets", "tokens", "policy", "credits", "status", "links"]
+    /// What an API tab holds: spend against a budget, the balance, the models, the activity chart.
+    public static let apiTiles = ["spend", "balance", "models", "activity", "status", "links"]
+    /// Overview's status tile is not in the default list: it appears by itself while a provider reports an incident,
+    /// and the operator can pin it (then it stays, saying "No incidents").
     public static let overviewTiles = ["alert", "providers", "subscriptions", "tokens", "links"]
     /// Tiles that sit two to a row when next to each other.
-    public static let halfTiles: Set<String> = ["tokens", "policy", "credits"]
+    public static let halfTiles: Set<String> = ["tokens", "policy", "credits", "balance", "activity"]
+    public static let refreshChoices = [0, 1, 5, 15]
+    public static let rangeChoices = [7, 14, 30]
+    /// Budget presets the Settings chips offer, in USD a month.
+    public static let budgetChoices: [Double] = [10, 20, 50, 100, 200]
 
     public var show = Show.used
+    public var appearance = Appearance.system
+    /// The bar item's icon as the file spells it: "crossfeed", "provider" or "none". Nil until the operator chooses.
+    public var menubarIcon: String?
+    /// Read again when the menu opens, if the last reading is older than a minute.
+    public var refreshOnOpen = true
+    /// Minutes between background readings; 0 is off.
+    public var refreshEveryMinutes = 5
+    /// "last" (the tab last used) or a tab id.
+    public var openOn = "last"
+    public var lastTab: String?
+    /// Optional monthly budget per API pool, in USD. The menu only shows it.
+    public var budgets: [String: Double] = [:]
+    public var tileOptions: [String: TileOption] = [:]
     public var tabs: [String] = PanelPrefs.defaultTabs
     public var hiddenTabs: [String] = []
     public var tiles: [String: [String]] = [:]
@@ -82,7 +126,28 @@ public struct PanelPrefs: Equatable {
     public init() {}
 
     public static func defaultTiles(for tab: String) -> [String] {
-        tab == "overview" ? overviewTiles : (tab == "other" ? ["limits"] : providerTiles)
+        tab == "overview" ? overviewTiles : (tab == "other" ? ["limits"] : (apiTabs.contains(tab) ? apiTiles : providerTiles))
+    }
+
+    /// The tile that holds a chart on a tab, if it has one: Activity on an API tab, else Tokens.
+    public static func chartTile(on tab: String, available: [String]) -> String? {
+        ["activity", "tokens"].first { available.contains($0) }
+    }
+
+    public static func optionKey(_ tab: String, _ tile: String) -> String { tab + "/" + tile }
+
+    public func option(_ tab: String, _ tile: String) -> TileOption { tileOptions[Self.optionKey(tab, tile)] ?? TileOption() }
+
+    public mutating func setOption(_ tab: String, _ tile: String, _ change: (inout TileOption) -> Void) {
+        var option = self.option(tab, tile)
+        change(&option)
+        tileOptions[Self.optionKey(tab, tile)] = option == TileOption() ? nil : option
+    }
+
+    /// The tab to open on: the saved choice, else the one last used, if it is still shown; else Overview.
+    public func startTab(shown: [String]) -> String {
+        let wanted = openOn == "last" ? (lastTab ?? PanelPrefs.fixedFirst) : openOn
+        return shown.contains(wanted) ? wanted : PanelPrefs.fixedFirst
     }
 
     // MARK: Tabs
@@ -122,23 +187,35 @@ public struct PanelPrefs: Equatable {
     // MARK: Tiles
 
     /// The tiles of a tab to draw, in order: the saved order first (what is not there now drops out), then built-ins that
-    /// are new to the list. Hidden tiles drop out. A plugin tile shows only where the operator put it.
-    public func tileOrder(_ tab: String, available: [String]) -> [String] {
+    /// are new to the list. Hidden tiles drop out. A plugin tile shows only where the operator put it. `auto` names tiles
+    /// that show by themselves while they have something to say (Overview's status), unless the operator hid them.
+    public func tileOrder(_ tab: String, available: [String], auto: [String] = []) -> [String] {
         let present = Set(available), hidden = Set(hiddenTiles[tab] ?? [])
         var seen = Set<String>()
-        let saved = tiles[tab] ?? PanelPrefs.defaultTiles(for: tab)
-        let newBuiltIns = PanelPrefs.defaultTiles(for: tab).filter { !(tiles[tab] ?? []).contains($0) }
-        return (saved + (tiles[tab] == nil ? [] : newBuiltIns)).filter {
-            present.contains($0) && !hidden.contains($0) && seen.insert($0).inserted
+        let defaults = PanelPrefs.defaultTiles(for: tab)
+        // An unsaved provider tab shows the built-in tiles it has, in the order they are offered (an API tab's differ from a
+        // subscription's); Overview keeps its own order. A built-in tile this version adds sits before Links in a list saved
+        // earlier.
+        let unsaved = tiles[tab] == nil
+        var order = tiles[tab] ?? (tab == PanelPrefs.fixedFirst ? defaults : available.filter { !TileID.isPlugin($0) })
+        let known = Set(order)
+        let extras = unsaved ? (tab == PanelPrefs.fixedFirst ? available.filter { !TileID.isPlugin($0) } : []) : defaults
+        let fresh = (extras + auto).filter { !known.contains($0) }
+        if !fresh.isEmpty {
+            if let at = order.firstIndex(of: TileID.links) { order.insert(contentsOf: fresh, at: at) } else { order += fresh }
         }
+        return order.filter { present.contains($0) && !hidden.contains($0) && seen.insert($0).inserted }
     }
 
     /// Every tile the settings list shows for a tab: what is on, then what is off.
-    public func listed(_ tab: String, builtIns: [String]) -> (on: [String], off: [String]) {
+    public func listed(_ tab: String, builtIns: [String], auto: [String] = []) -> (on: [String], off: [String]) {
         let hidden = Set(hiddenTiles[tab] ?? [])
         var seen = Set<String>()
-        let saved = tiles[tab] ?? PanelPrefs.defaultTiles(for: tab)
-        let order = (saved + PanelPrefs.defaultTiles(for: tab)).filter { id in
+        var saved = tiles[tab] ?? PanelPrefs.defaultTiles(for: tab)
+        let known = Set(saved)
+        let fresh = (PanelPrefs.defaultTiles(for: tab) + auto).filter { !known.contains($0) && !TileID.isPlugin($0) }
+        if let at = saved.firstIndex(of: TileID.links) { saved.insert(contentsOf: fresh, at: at) } else { saved += fresh }
+        let order = saved.filter { id in
             (builtIns.contains(id) || id.hasPrefix("plugin:")) && seen.insert(id).inserted
         }
         return (order.filter { !hidden.contains($0) }, order.filter { hidden.contains($0) })
@@ -199,14 +276,36 @@ public struct PanelPrefs: Equatable {
             return out
         }
         if raw["show"]?.stringValue == "left" { show = .left }
+        appearance = raw["appearance"]?.stringValue.flatMap(Appearance.init) ?? .system
+        if let icon = raw["menubar"]?.objectValue?["icon"]?.stringValue, ["crossfeed", "provider", "none"].contains(icon) { menubarIcon = icon }
+        if let refresh = raw["refresh"]?.objectValue {
+            if case .bool(let on)? = refresh["on_open"] { refreshOnOpen = on }
+            if let every = refresh["every_minutes"]?.numberValue, every == every.rounded(), (0...1440).contains(every) { refreshEveryMinutes = Int(every) }
+        }
+        if let open = raw["open_on"]?.stringValue, open.count <= 80, !open.isEmpty { openOn = open == "last" ? open : PanelIDs.menu(open) }
+        if let last = raw["last_tab"]?.stringValue, last.count <= 80, !last.isEmpty { lastTab = PanelIDs.menu(last) }
+        for (pool, value) in raw["budgets"]?.objectValue ?? [:] where pool.count <= 80 {
+            if let usd = value.numberValue, usd.isFinite, usd > 0, usd <= 1_000_000 { budgets[pool] = usd }
+        }
+        for (key, value) in raw["tile_options"]?.objectValue ?? [:] where key.count <= 170 {
+            guard let object = value.objectValue else { continue }
+            let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            var option = TileOption()
+            option.metric = object["metric"]?.stringValue.flatMap(ChartMetric.init)
+            if let days = object["days"]?.numberValue, PanelPrefs.rangeChoices.contains(Int(days)) { option.days = Int(days) }
+            if option != TileOption() { tileOptions[PanelPrefs.optionKey(PanelIDs.menu(parts[0]), parts[1])] = option }
+        }
         let saved = strings(raw["tabs"]).map(PanelIDs.menu)
         var seen = Set<String>()
         tabs = (saved + PanelPrefs.defaultTabs).filter { seen.insert($0).inserted }
         hiddenTabs = strings(raw["hidden_tabs"]).map(PanelIDs.menu).filter { $0 != PanelPrefs.fixedFirst }
         tiles = lists(raw["tiles"])
         hiddenTiles = lists(raw["hidden_tiles"]).filter { !$0.value.isEmpty }
-        let known: Set<String> = ["schema", "show", "tabs", "hidden_tabs", "tiles", "hidden_tiles"]
+        let known: Set<String> = ["schema", "show", "tabs", "hidden_tabs", "tiles", "hidden_tiles", "appearance", "menubar",
+                                  "refresh", "open_on", "last_tab", "budgets", "tile_options"]
         extra = raw.filter { !known.contains($0.key) }
+
     }
 
     /// The known keys, written over `base` (what the file holds now) so keys another version added survive.
@@ -219,6 +318,28 @@ public struct PanelPrefs: Equatable {
         out["hidden_tabs"] = hiddenTabs.map(PanelIDs.file)
         out["tiles"] = Dictionary(uniqueKeysWithValues: tiles.map { (PanelIDs.file($0.key), $0.value) })
         out["hidden_tiles"] = Dictionary(uniqueKeysWithValues: hiddenTiles.map { (PanelIDs.file($0.key), $0.value) })
+        out["appearance"] = appearance.rawValue
+        var bar = (base["menubar"] as? [String: Any]) ?? [:]
+        bar["icon"] = menubarIcon
+        if bar["icon"] == nil { bar.removeValue(forKey: "icon") }
+        if bar.isEmpty { out.removeValue(forKey: "menubar") } else { out["menubar"] = bar }
+        var refresh = (base["refresh"] as? [String: Any]) ?? [:]
+        refresh["on_open"] = refreshOnOpen
+        refresh["every_minutes"] = refreshEveryMinutes
+        out["refresh"] = refresh
+        out["open_on"] = openOn == "last" ? openOn : PanelIDs.file(openOn)
+        if let lastTab { out["last_tab"] = PanelIDs.file(lastTab) }
+        out["budgets"] = budgets
+        var options: [String: Any] = [:]
+        for (key, option) in tileOptions {
+            let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            var object: [String: Any] = [:]
+            if let metric = option.metric { object["metric"] = metric.rawValue }
+            if let days = option.days { object["days"] = days }
+            options[PanelIDs.file(parts[0]) + "/" + parts[1]] = object
+        }
+        out["tile_options"] = options
         return out
     }
 }
@@ -308,5 +429,34 @@ public enum PanelMigration {
         defaults.set(true, forKey: marker)
         for key in legacyKeys { defaults.removeObject(forKey: key) }
         return hasLegacy
+    }
+}
+
+extension PanelMigration {
+    static let refreshMarker = "crossfeed.panel.migrated.refresh"
+
+    /// The menu bar page's old 1, 5 or 15 minute choice (app preferences) becomes `refresh.every_minutes`, once, unless the
+    /// file already says how often. Returns true when it wrote the file.
+    @discardableResult
+    public static func moveRefresh(store: PanelPrefsStore, defaults: UserDefaults) -> Bool {
+        guard !defaults.bool(forKey: refreshMarker) else { return false }
+        let key = "crossfeed.bar.refresh"
+        let old = defaults.integer(forKey: key)
+        var wrote = false
+        if [60, 300, 900].contains(old) {
+            var raw = true
+            if let data = try? Data(contentsOf: store.url), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                raw = object["refresh"] == nil
+            }
+            if raw {
+                var prefs = store.load()
+                prefs.refreshEveryMinutes = old / 60
+                wrote = store.save(prefs)
+                guard wrote else { return false }
+            }
+        }
+        defaults.removeObject(forKey: key)
+        defaults.set(true, forKey: refreshMarker)
+        return wrote
     }
 }

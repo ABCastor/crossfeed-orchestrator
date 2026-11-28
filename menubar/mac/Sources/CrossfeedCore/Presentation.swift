@@ -81,13 +81,15 @@ public enum ProviderLogo: String, CaseIterable {
 public struct TabModel: Equatable, Identifiable {
     public var id: String
     public var title: String
+    /// The name under the icon when the strip is crowded.
+    public var short: String
     public var logo: ProviderLogo?    // nil for a group without one provider (Other)
     public var used: Double?          // the tab's tightest window, for the mini bar under it
     public var pace: PaceKind
     public var hot: Bool
 
-    public init(id: String, title: String, logo: ProviderLogo?, used: Double?, pace: PaceKind, hot: Bool) {
-        self.id = id; self.title = title; self.logo = logo; self.used = used; self.pace = pace; self.hot = hot
+    public init(id: String, title: String, short: String? = nil, logo: ProviderLogo?, used: Double?, pace: PaceKind, hot: Bool) {
+        self.id = id; self.title = title; self.short = short ?? title; self.logo = logo; self.used = used; self.pace = pace; self.hot = hot
     }
 }
 
@@ -201,6 +203,8 @@ public struct Presenter {
     /// Write a reset as the clock time it happens ("Resets Mon 20:56") instead of a countdown.
     public let resetClock: Bool
     let timeZone: TimeZone
+    /// The operator's budgets and chart options (panel.json). The menu only shows them; nothing here enforces a budget.
+    public var panel = PanelPrefs()
 
     public init(glance: Glance, loadedAt: Date, now: Date, resetClock: Bool = false, timeZone: TimeZone = .current) {
         self.glance = glance
@@ -214,12 +218,21 @@ public struct Presenter {
 
     static let order = ["claude", "codex", "copilot", "agy", "go"]
     static let titles = ["claude": "Claude", "codex": "Codex", "copilot": "Copilot", "agy": "AGY",
-                         "go": "OpenCode", "other": "Other"]
+                         "go": "OpenCode", "other": "Other",
+                         "openrouter-free": "OpenRouter", "gemini-metered": "Gemini API", "chatgpt-work": "Crossfeed Chat"]
+    /// What the tab strip prints when it has no room for the full name.
+    static let shortTitles = ["openrouter-free": "Router", "gemini-metered": "Gemini", "chatgpt-work": "Chat", "go": "OpenCode"]
+
+    /// A pool with no percentage window that is billed per token, by prepaid credit or through a relay: its own tab.
+    static func isAPI(_ pool: Pool) -> Bool {
+        !pool.measured && (pool.api != nil || PanelPrefs.apiTabs.contains(pool.pool))
+    }
     static let cardTitles = ["agy": "Antigravity"]
 
     static func groupID(_ pool: Pool) -> String {
         let id = pool.pool
         if pool.subscription == "antigravity" || ["antigravity-gemini", "antigravity-3p", "antigravity-argon"].contains(id) { return "agy" }
+        if isAPI(pool) { return id }
         if !pool.measured { return "other" }
         if id == "claude" { return "claude" }
         if id == "codex" { return "codex" }
@@ -239,20 +252,25 @@ public struct Presenter {
             byID[id, default: []].append(pool)
         }
         let known = Self.order.filter { byID[$0] != nil }
-        let extra = seen.filter { !Self.order.contains($0) && $0 != "other" }
+        let rank = { (id: String) in PanelPrefs.apiTabs.firstIndex(of: id) ?? PanelPrefs.apiTabs.count }
+        let extra = seen.filter { !Self.order.contains($0) && $0 != "other" }.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
         let tail = byID["other"] != nil ? ["other"] : []
         return (known + extra + tail).map { ($0, byID[$0] ?? []) }
     }
 
     public var tabs: [TabModel] {
         groups.map { group in
-            let bars = group.pools.flatMap(poolBars)
+            var bars = group.pools.flatMap(poolBars)
+            if bars.isEmpty, let pool = group.pools.first, Self.isAPI(pool), let spend = apiSpend(pool) {
+                bars = spend.tabBar.map { [$0] } ?? []
+            }
             let tight = bars.max(by: { $0.used < $1.used })
             let deficit = bars.contains { $0.pace == .deficit }
             let pace: PaceKind = deficit ? .deficit : (tight?.pace ?? .unknown)
+            let title = Self.titles[group.id] ?? String(group.pools.first?.name.prefix(9) ?? Substring(group.id))
             return TabModel(
-                id: group.id,
-                title: Self.titles[group.id] ?? String(group.pools.first?.name.prefix(9) ?? Substring(group.id)),
+                id: group.id, title: title, short: Self.shortTitles[group.id] ?? title,
                 logo: group.id == "other" ? nil : group.pools.first.flatMap { ProviderLogo.forPool($0.pool) },
                 used: tight?.used, pace: pace, hot: bars.contains { $0.hot })
         }

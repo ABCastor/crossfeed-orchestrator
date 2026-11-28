@@ -188,4 +188,32 @@ enum Compose {
             }
         }
     }
+
+    /// Each provider's logo at the bar's 15 pt, in colour and as a one-colour template, on a light and a dark bar.
+    static func logoStrips(scale: CGFloat) -> NSImage {
+        let rowHeight: CGFloat = 28, labelWidth: CGFloat = 110, cell: CGFloat = 96, pad: CGFloat = 12
+        let size = NSSize(width: pad * 2 + labelWidth + cell * 4, height: pad * 2 + 40 + rowHeight * CGFloat(ProviderLogo.allCases.count))
+        return bitmap(points: size, scale: scale) {
+            NSColor(white: 0.97, alpha: 1).setFill()
+            NSRect(origin: .zero, size: size).fill()
+            let head: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.darkGray]
+            for (i, title) in ["Light bar\ncolour", "Light bar\none colour", "Dark bar\ncolour", "Dark bar\none colour"].enumerated() {
+                (title as NSString).draw(in: NSRect(x: pad + labelWidth + cell * CGFloat(i) + 8, y: size.height - pad - 30, width: cell, height: 30), withAttributes: head)
+            }
+            for (row, logo) in ProviderLogo.allCases.enumerated() {
+                let y = size.height - pad - 40 - rowHeight * CGFloat(row + 1)
+                (logo.rawValue as NSString).draw(at: NSPoint(x: pad, y: y + 8), withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.black])
+                for column in 0..<4 {
+                    let dark = column >= 2, mono = column % 2 == 1
+                    let x = pad + labelWidth + cell * CGFloat(column)
+                    (dark ? NSColor(srgbRed: 0.17, green: 0.16, blue: 0.22, alpha: 1) : NSColor(srgbRed: 0.90, green: 0.89, blue: 0.94, alpha: 1)).setFill()
+                    NSRect(x: x, y: y, width: cell, height: rowHeight - 2).fill()
+                    guard let icon = ProviderAssets.menuBarImage(logo, height: 15, monochrome: mono) else { continue }
+                    let ink: NSColor = dark ? .white : .black
+                    let mark = icon.isTemplate ? tinted(icon, ink) : icon
+                    mark.draw(in: NSRect(x: x + 10, y: y + (rowHeight - 2) / 2 - icon.size.height / 2, width: icon.size.width, height: icon.size.height))
+                }
+            }
+        }
+    }
 }

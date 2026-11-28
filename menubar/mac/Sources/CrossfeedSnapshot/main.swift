@@ -3,7 +3,8 @@
 //
 //   CrossfeedSnapshot --fixture glance.json --now <ISO time> --fonts Resources/Fonts \
 //       --out menu.png [--appearance light|dark] [--tab codex] [--side-by-side mockup.png] [--bare]
-//       [--mode used|left] [--panel panel.json] [--confirm] [--middrag] [--settings [--settings-page 0|1|2] [--settings-tab ID]]
+//       [--mode used|left] [--panel panel.json] [--confirm] [--middrag] [--settings [--settings-page 0|1|2|3] [--settings-tab ID]]
+//       (pages: 0 General, 1 Tiles, 2 Tabs, 3 Menu bar; --icon crossfeed|provider|none)
 import AppKit
 import CrossfeedCore
 import CrossfeedUI
@@ -42,7 +43,7 @@ do {
     if let v = argument("--show") { prefs.show = v }
     if let v = argument("--window") { prefs.window = v }
     if let v = argument("--count").flatMap(BarPrefs.Count.init) { prefs.count = v }
-    if let v = argument("--icon").flatMap(BarPrefs.Icon.init) { prefs.icon = v }
+    if let name = argument("--icon"), let v = BarPrefs.Icon(rawValue: name) ?? BarPrefs.Icon(file: name) { prefs.icon = v }
     if let v = argument("--text").flatMap(BarPrefs.Text.init) { prefs.text = v }
     if let v = argument("--extra").flatMap(BarPrefs.Extra.init) { prefs.extra = v }
     if let v = argument("--reset").flatMap(BarPrefs.Reset.init) { prefs.reset = v }
@@ -52,6 +53,14 @@ do {
     for id in (argument("--hide") ?? "").split(separator: ",").map(String.init) where panel.isTabVisible(id) { panel.toggleTab(id) }
     if let order = argument("--order") { panel.tabs = [PanelPrefs.fixedFirst] + order.split(separator: ",").map(String.init) + PanelPrefs.defaultTabs }
     let bare = CommandLine.arguments.contains("--bare")
+    if let logosOut = argument("--logo-strips-out") {
+        let image = Compose.logoStrips(scale: 2)
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+        try png.write(to: URL(fileURLWithPath: logosOut))
+        print(logosOut)
+        exit(0)
+    }
     if let stripsOut = argument("--strips-out") {
         // One row per look: the bar item alone, on a light and a dark bar.
         var looks: [(title: String, summary: BarSummary)] = []

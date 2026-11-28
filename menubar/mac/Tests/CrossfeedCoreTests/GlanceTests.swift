@@ -107,8 +107,9 @@ final class PresentationTests: XCTestCase {
 
     func testTabsFollowCodexBarOrderAndGroupAGY() throws {
         let tabs = try presenter().tabs
-        XCTAssertEqual(tabs.map(\.id), ["claude", "codex", "copilot", "agy", "go", "other"])
-        XCTAssertEqual(tabs.map(\.title), ["Claude", "Codex", "Copilot", "AGY", "OpenCode", "Other"])
+        // The pools billed per token, by credit or through a relay each have a tab of their own; nothing is left for Other.
+        XCTAssertEqual(tabs.map(\.id), ["claude", "codex", "copilot", "agy", "go", "openrouter-free", "gemini-metered", "chatgpt-work"])
+        XCTAssertEqual(tabs.map(\.title), ["Claude", "Codex", "Copilot", "AGY", "OpenCode", "OpenRouter", "Gemini API", "Crossfeed Chat"])
     }
 
     func testOpensOnTheDeficit() throws {
@@ -212,14 +213,18 @@ final class PresentationTests: XCTestCase {
 
     func testMarksFollowProviderIncludingOtherPoolRows() throws {
         let view = try presenter()
-        XCTAssertEqual(view.tabs.map(\.logo), [.claude, .openai, .copilot, .antigravity, .opencode, nil])
-        XCTAssertEqual(view.card(for: "other")?.sections.map(\.logo), [.openai, .gemini, .openrouter])
+        XCTAssertEqual(view.tabs.map(\.logo), [.claude, .openai, .copilot, .antigravity, .opencode, .openrouter, .gemini, .openai])
+        XCTAssertEqual(["chatgpt-work", "gemini-metered", "openrouter-free"].compactMap { view.card(for: $0)?.sections.first?.logo }, [.openai, .gemini, .openrouter])
     }
 
-    func testPoolsWithoutQuotaWindowsLandInOther() throws {
-        let card = try XCTUnwrap(presenter().card(for: "other"))
-        XCTAssertEqual(card.sections.count, 3)
-        XCTAssertEqual(card.sections.filter { $0.rows.isEmpty }.map(\.badge), ["No quota window", "No quota window"])
+    func testPoolsWithoutQuotaWindowsLandInOtherUnlessTheyAreBilledPerToken() throws {
+        // Two pools no tab knows by name: one with a capped reading, one with none. Both sit in Other.
+        let data = json(#"{"schema":1,"pools":[{"pool":"mystery-a","name":"Mystery A","measured":false},{"pool":"mystery-b","name":"Mystery B","measured":false,"used_percent":0},{"pool":"openrouter-free","name":"OpenRouter","measured":false}]}"#)
+        let p = Presenter(glance: try Glance.decode(data), loadedAt: fixtureNow, now: fixtureNow)
+        XCTAssertEqual(p.tabs.map(\.id), ["openrouter-free", "other"])
+        let card = try XCTUnwrap(p.card(for: "other"))
+        XCTAssertEqual(card.sections.count, 2)
+        XCTAssertEqual(card.sections.filter { $0.rows.isEmpty }.map(\.badge), ["No quota window"])
         XCTAssertEqual(card.sections[1].rows.first?.usedText, "0% used", "a capped pool with a reading keeps its bar")
         XCTAssertNil(card.sections[1].badge)
     }

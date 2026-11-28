@@ -20,12 +20,14 @@ public enum ProviderAssets {
         return images.count
     }
 
-    /// The mark for the menu bar: one-colour marks stay templates (the bar tints them to its ink), colour marks keep their colour.
-    public static func menuBarImage(_ logo: ProviderLogo, height: CGFloat) -> NSImage? {
+    /// The mark for the menu bar. `monochrome` draws every logo from its silhouette as a template, so the bar tints it to its
+    /// own ink (light or dark) and a deficit can turn it terracotta; otherwise one-colour marks are templates and colour marks
+    /// keep their colour.
+    public static func menuBarImage(_ logo: ProviderLogo, height: CGFloat, monochrome: Bool = MenuBarIcon.monochromeLogos) -> NSImage? {
         guard let source = images[logo], let image = source.copy() as? NSImage else { return nil }
         let ratio = source.size.height > 0 ? source.size.width / source.size.height : 1
         image.size = NSSize(width: (height * ratio).rounded(), height: height)
-        image.isTemplate = source.isTemplate
+        image.isTemplate = monochrome || source.isTemplate
         return image
     }
 }

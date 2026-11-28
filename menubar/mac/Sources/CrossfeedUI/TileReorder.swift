@@ -226,6 +226,8 @@ struct TileLayout: Layout {
 struct TileItem: Identifiable {
     let id: String
     var half = false
+    /// Where a click on the tile goes (a button inside it takes its own click first).
+    var link: LinkTarget?
     let content: AnyView
 }
 
@@ -261,13 +263,38 @@ struct ReorderableTiles: View {
                     .scaleEffect(lifted && !state.reducedMotion ? 1.02 : 1)
                     .shadow(color: CF.liftShadow.opacity(lifted ? 1 : 0), radius: lifted ? 12 : 0, y: lifted ? 4 : 0)
                     .animation(state.settleAnimation, value: lifted)
+                    .routedIf(tile.link.map { .at("tile:\(tab)/\(tile.id)", $0) })
+                    .accessibilityAction(named: "Open") { if let link = tile.link { state.onControl(link.control) } }
                     .zIndex(carried ? 1 : 0)
                     .contextMenu {
                         Button("Move up") { state.moveBlock(tile.id, by: -1) }.disabled(!state.canMoveBlock(tile.id, by: -1))
                         Button("Move down") { state.moveBlock(tile.id, by: 1) }.disabled(!state.canMoveBlock(tile.id, by: 1))
+                        ChartMenu(tab: tab, tile: tile.id, state: state)
                     }
                     .accessibilityAction(named: "Move up") { state.moveBlock(tile.id, by: -1) }
                     .accessibilityAction(named: "Move down") { state.moveBlock(tile.id, by: 1) }
+            }
+        }
+    }
+}
+
+/// Right-click on a tile that holds a chart: what it plots and over how many days. The same choices are in Settings, Tiles.
+struct ChartMenu: View {
+    let tab: String
+    let tile: String
+    @ObservedObject var state: MenuState
+
+    var body: some View {
+        if let chart = state.chartOptions(tab: tab, tile: tile) {
+            Divider()
+            if chart.metrics.count > 1 {
+                ForEach(chart.metrics, id: \.self) { metric in
+                    Button((metric == chart.metric ? "✓ " : "") + metric.title) { state.onControl(.chartMetric(tab, tile, metric)) }
+                }
+                Divider()
+            }
+            ForEach(PanelPrefs.rangeChoices, id: \.self) { days in
+                Button((days == chart.days ? "✓ " : "") + "\(days) days") { state.onControl(.chartRange(tab, tile, days)) }
             }
         }
     }

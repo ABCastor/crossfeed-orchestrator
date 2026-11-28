@@ -192,7 +192,7 @@ final class BarPrefsStoreTests: XCTestCase {
         let (d, suite) = defaults()
         defer { d.removePersistentDomain(forName: suite) }
         var prefs = BarPrefs()
-        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .none; prefs.text = .full; prefs.extra = .reset; prefs.reset = .clock; prefs.refreshSeconds = 900
+        prefs.show = "codex"; prefs.window = "Week"; prefs.count = .left; prefs.icon = .none; prefs.text = .full; prefs.extra = .reset; prefs.reset = .clock
         prefs.notifyLow = true; prefs.notifyReset = true
         BarPrefsStore(defaults: d).save(prefs)
         XCTAssertEqual(BarPrefsStore(defaults: UserDefaults(suiteName: suite)!).load(), prefs)

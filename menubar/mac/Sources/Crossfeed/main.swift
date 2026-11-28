@@ -50,8 +50,9 @@ func parse(_ args: [String]) -> Config {
 }
 
 enum Reader {
-    /// One fleetctl call off the main thread, 8 s at most, output capped at 2 MB, schema 1 only.
-    static func load(_ c: Config) -> Result<Glance, Error> {
+    /// One fleetctl call off the main thread, output capped at 2 MB, schema 1 only. The stored reading takes 8 s at
+    /// most; `refresh` lets fleetctl read the providers first (a stale snapshot is refreshed) and gets 60 s.
+    static func load(_ c: Config, refresh: Bool = false) -> Result<Glance, Error> {
         if !c.fixture.isEmpty {
             return Result { try Glance.decode(Data(contentsOf: URL(fileURLWithPath: c.fixture))) }
         }
@@ -61,14 +62,14 @@ enum Reader {
         args.append(c.fleetctl)
         if !c.overlay.isEmpty { args += ["--overlay", c.overlay] }
         if !c.state.isEmpty { args += ["--state-dir", c.state] }
-        args += ["glance", "--json", "--no-refresh"]
+        args += ["glance", "--json"] + (refresh ? [] : ["--no-refresh"])
         process.arguments = args
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return .failure(error) }
         let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 8, execute: watchdog)
+        DispatchQueue.global().asyncAfter(deadline: .now() + (refresh ? 60 : 8), execute: watchdog)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         watchdog.cancel()
@@ -186,16 +187,24 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func applicationDidFinishLaunching(_ notification: Notification) {
         state.onSelect = { [weak self] id in self?.select(id) }
         state.prefs = barStore.load()
-        if !config.selftest && config.fixture.isEmpty { PanelMigration.run(store: panelStore, defaults: .standard) }
+        if !config.selftest && config.fixture.isEmpty {
+            PanelMigration.run(store: panelStore, defaults: .standard)
+            PanelMigration.moveRefresh(store: panelStore, defaults: .standard)
+        }
         state.panel = panelStore.load()
-        state.onPanelChange = { [weak self] prefs in self?.panelStore.save(prefs) }
+        panelStamp = stamp()
+        applyPanelChoices()
+        state.onPanelChange = { [weak self] prefs in
+            self?.panelStore.save(prefs)
+            self?.panelStamp = self?.stamp()
+        }
         state.onBlockDragActive = { [weak self] active in self?.listenForEscape(active) }
         state.onControl = { [weak self] control in self?.handle(control) }
         state.canEditPolicy = config.fixture.isEmpty || config.selftest
         state.onPolicyChange = { [weak self] change in self?.changePolicy(change) }
         state.onReorder = { [weak self] source, target in self?.reorder(source, onto: target) }
         state.onOpenConsole = { [weak self] in self?.openConsole() }
-        state.onReload = { [weak self] in self?.reload() }
+        state.onReload = { [weak self] in self?.reload(refresh: true) }
         state.onAbout = { [weak self] in self?.about() }
         state.onQuit = { NSApp.terminate(nil) }
         console.onFailure = { [weak self] failure in
@@ -206,6 +215,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         }
         state.failure = "Reading quotas…"
         if config.selftest, let tab = config.selftestTab { state.selected = tab }
+        applyAppearance()
         menu.delegate = self
         menu.autoenablesItems = false
         if !config.selftest && Bundle.main.bundleIdentifier != nil {
@@ -219,7 +229,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         status.menu = menu
         item = status
         paintStatusItem()
-        reload()
+        reload(refresh: true)
         scheduleReload()
         timers.append(Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.tick() })
         // A display change, a new Space or waking from sleep can leave the item blank or off screen:
@@ -234,10 +244,63 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     /// A reset was just used: the row says so while the menu is open, and the next reading is taken when it closes.
     var readAgainOnClose = false
 
-    /// The reading interval is the operator's choice; the 20 s timer only moves countdowns.
+    /// The reading interval is the operator's choice (Settings, General: Off, 1, 5 or 15 minutes); the 20 s timer only moves countdowns.
     func scheduleReload() {
         reloadTimer?.invalidate()
-        reloadTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(state.prefs.refreshSeconds), repeats: true) { [weak self] _ in self?.reload() }
+        reloadTimer = nil
+        let minutes = state.panel.refreshEveryMinutes
+        guard minutes > 0 else { return }
+        reloadTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: true) { [weak self] _ in self?.reload(refresh: true) }
+    }
+
+    // MARK: panel.json choices the app acts on
+
+    /// The file's modification time and size: the web panel and the Linux tray write the same file.
+    var panelStamp: String?
+
+    func stamp() -> String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: panelStore.url.path) else { return nil }
+        return "\(attrs[.modificationDate] as? Date ?? .distantPast)#\(attrs[.size] as? Int ?? 0)"
+    }
+
+    /// Takes in what another writer saved while the menu was closed.
+    func reloadPanelIfChanged() {
+        guard stamp() != panelStamp, !state.isCarryingBlock else { return }
+        panelStamp = stamp()
+        state.panel = panelStore.load()
+        applyPanelChoices()
+        scheduleReload()
+        remeasureHeights()
+    }
+
+    /// The choices that are not a view of their own: the bar icon, the look, the timer.
+    func applyPanelChoices() {
+        if let icon = state.panel.menubarIcon.flatMap(BarPrefs.Icon.init(file:)), icon != state.prefs.icon {
+            state.prefs.icon = icon
+            barStore.save(state.prefs)
+            gate.forget()
+        }
+        applyAppearance()
+    }
+
+    /// System follows the Mac; Light and Dark pin the menu, its Settings and the native rows under it.
+    func applyAppearance() {
+        let look: NSAppearance? = {
+            switch state.panel.appearance {
+            case .system: return nil
+            case .light: return NSAppearance(named: .aqua)
+            case .dark: return NSAppearance(named: .darkAqua)
+            }
+        }()
+        menu.appearance = look
+        host?.appearance = look
+    }
+
+    /// The tab the menu opens on: Last used, or the one the operator named; Overview when that tab is hidden or gone.
+    func applyStartTab() {
+        let shown = state.shownTabs.map(\.id)
+        guard shown.count > 1 else { return }
+        state.selected = state.panel.startTab(shown: shown)
     }
 
     @objc func restoreStatusItem() {
@@ -253,7 +316,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
     func handle(_ control: MenuControl) {
         var prefs = state.prefs
         switch control {
-        case .refresh: reload(); return
+        case .refresh: reload(refresh: true); return
+        case .at(_, let target): handle(target.control); return
+        case .appearance(let look): state.updatePanel { $0.appearance = look }; applyAppearance(); return
+        case .openOn(let id): state.updatePanel { $0.openOn = id }; return
+        case .refreshOnOpen: state.updatePanel { $0.refreshOnOpen.toggle() }; return
+        case .refreshEvery(let minutes): state.updatePanel { $0.refreshEveryMinutes = minutes }; scheduleReload(); return
+        case .budget(let pool, let usd):
+            state.updatePanel { if let usd { $0.budgets[pool] = usd } else { $0.budgets.removeValue(forKey: pool) } }
+            relayout(); return
+        case .chartMetric(let tab, let tile, let metric): state.updatePanel { $0.setOption(tab, tile) { $0.metric = metric } }; relayout(); return
+        case .chartRange(let tab, let tile, let days): state.updatePanel { $0.setOption(tab, tile) { $0.days = days } }; relayout(); return
         case .openTab(let id): select(id); return
         case .usage(let pool): menu.cancelTracking(); console.open(.usage(pool: pool)); return
         case .console: menu.cancelTracking(); console.open(.providers); return
@@ -292,15 +365,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             // Same panel height on both panes, so the menu does not move.
             withAnimation(MenuState.animation) { state.showsSettings = control == .settings; state.settingsPage = 0; state.addOpen = false }
             return
-        case .reset: barStore.reset(); prefs = BarPrefs()
+        case .reset:
+            barStore.reset(); prefs = BarPrefs()
+            state.updatePanel { $0.menubarIcon = nil }
         case .show(let id): prefs.show = id
         case .window(let name): prefs.window = name
         case .count(let count): prefs.count = count
-        case .icon(let icon): prefs.icon = icon
+        case .icon(let icon): prefs.icon = icon; state.updatePanel { $0.menubarIcon = icon.fileValue }
         case .text(let text): prefs.text = text
         case .extra(let extra): prefs.extra = extra
         case .resets(let reset): prefs.reset = reset
-        case .refreshEvery(let seconds): prefs.refreshSeconds = seconds
         case .notifyLow: prefs.notifyLow.toggle()
         case .notifyReset: prefs.notifyReset.toggle()
         }
@@ -308,7 +382,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         guard prefs != state.prefs else { return }
         state.prefs = prefs
         barStore.save(prefs)
-        if prefs.refreshSeconds != reloadTimer.map({ Int($0.timeInterval) }) { scheduleReload() }
         paintStatusItem()
         remeasureHeights()
         syncMenu()
@@ -356,18 +429,28 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
 
     // MARK: Data
 
-    func reload() {
+    /// Reads in the background and updates the menu in place; opening the menu never waits for it. With `refresh` the
+    /// stored reading is shown first, then fleetctl reads the providers and the fresh numbers replace it.
+    func reload(refresh: Bool = false) {
         guard !loading, state.edits.pending == nil else { return }
         loading = true
         if menuIsOpen { state.isReloading = true }
         let c = config, readingRevision = revision
-        io.async { [weak self] in
-            let result = Reader.load(c)
-            RunLoop.main.perform(inModes: [.common, .eventTracking]) {
+        func publish(_ result: Result<Glance, Error>, last: Bool) {
+            RunLoop.main.perform(inModes: [.common, .eventTracking]) { [weak self] in
                 guard let self else { return }
-                self.loading = false
-                self.state.isReloading = false
+                if last { self.loading = false; self.state.isReloading = false }
                 if self.revision == readingRevision { self.acceptReading(result); self.tick() }
+            }
+        }
+        io.async {
+            let fixture = !c.fixture.isEmpty
+            if refresh && !fixture {
+                let stored = Reader.load(c)
+                if case .success = stored { publish(stored, last: false) }
+                publish(Reader.load(c, refresh: true), last: true)
+            } else {
+                publish(Reader.load(c), last: true)
             }
         }
     }
@@ -412,12 +495,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
 
     /// Rebuilds the presenter against the clock so countdowns and ages move without a new reading.
     func tick() {
+        let first = state.presenter == nil
         if let glance {
             let presenter = Presenter(glance: glance, loadedAt: loadedAt, now: Date(), resetClock: state.prefs.reset == .clock)
             state.presenter = presenter
         } else {
             state.presenter = nil
         }
+        if first && state.presenter != nil && !config.selftest { applyStartTab() }
         paintStatusItem()
         if panelHeight == nil || !menuIsOpen { remeasureHeights() }
         syncMenu()
@@ -485,7 +570,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
                 switch outcome {
                 case .used(let left):
                     self.state.resetFlow = ResetFlow(key: key, phase: .done(left))
-                    if self.menuIsOpen { self.readAgainOnClose = true } else { self.reload() }
+                    if self.menuIsOpen { self.readAgainOnClose = true } else { self.reload(refresh: true) }
                 case .failed(let why): self.state.resetFlow = ResetFlow(key: key, phase: .failed(why))
                 }
             }
@@ -552,8 +637,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
 
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
-        // The cached reading is on screen already; read again only when it is older than 30 s, and update in place.
-        if glance == nil || Date().timeIntervalSince(loadedAt) > 30 { reload() }
+        reloadPanelIfChanged()
+        applyStartTab()
+        // The cached reading is on screen already. With "Refresh when opened" on, a reading over a minute old is read
+        // again in the background and the numbers change in place; nothing here waits for it.
+        if glance == nil || (state.panel.refreshOnOpen && Date().timeIntervalSince(loadedAt) > 60) { reload(refresh: true) }
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -563,9 +651,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         state.addOpen = false
         state.policyOpen = false
         if state.resetFlow?.phase != .running { state.resetFlow = nil }
-        if readAgainOnClose { readAgainOnClose = false; reload() }
-        // The menu opens on Overview every time.
-        state.selected = Presenter.overviewID
+        if readAgainOnClose { readAgainOnClose = false; reload(refresh: true) }
+        // The next opening starts where the operator said: the last tab used, or the one chosen in Settings.
+        applyStartTab()
         state.isReloading = false
         state.cancelPointer()
         paintStatusItem()
@@ -579,6 +667,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         let host = MenuHostingView(model: state)
         host.frame = NSRect(x: 0, y: 0, width: MenuMetrics.width, height: panelHeight ?? ceil(host.fittingSize.height))
         self.host = host
+        applyAppearance()
         let card = NSMenuItem()
         card.view = host
         menu.addItem(card)
@@ -642,7 +731,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         step { settle() }
         step { // Overview: every provider tile opens its tab; the links tile goes to the console
             check("overview tiles", !providers.isEmpty && providers.allSatisfy { click(.openTab($0)) })
-            check("overview links", click(.usage(nil)) && click(.console))
+            check("overview links", click(.at("link:Usage and cost", .usage(nil))))
+            if self.state.live?.overviewPage(order: [], show: .used).tokens != nil {
+                check("overview tokens tile opens usage", self.state.controlFrames[.at("tile:overview/tokens", .usage(nil))] != nil)
+            }
+            check("overview has no Console link", self.state.controlFrames[.console] == nil)
             check("tab strip", self.state.tileFrames.count == ids.count + 1)
             check("provider tiles are draggable", self.state.blockFrames.keys.filter { $0.hasPrefix("provider:") }.count == providers.count)
             self.state.selected = self.config.selftestTab ?? "claude"
@@ -654,12 +747,24 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             let page = self.state.presenter?.providerPage(for: tab, show: .used)
             check("header buttons", click(.refresh) && click(.settings))
             if let page {
+                check("no Console link", !page.links.contains { $0.kind == .console })
                 for link in page.links {
                     switch link.kind {
-                    case .usage(let pool): check("usage link", click(.usage(pool)))
-                    case .status(let url): check("status link", click(.openURL(url)))
+                    case .usage(let pool): check("usage link", click(.at("link:" + link.title, .usage(pool))))
+                    case .status(let url), .billing(let url): check("\(link.title) link", click(.at("link:" + link.title, .url(url))))
                     case .console: check("console link", click(.console))
                     }
+                }
+                if page.isAPI {
+                    // every API tile answers a click: spend and models to the usage page, balance to billing, status to its page
+                    let tile = { (id: String) in self.state.controlFrames.keys.contains { if case .at(let name, _) = $0 { return name == "tile:\(tab)/\(id)" }; return false } }
+                    check("spend tile click", tile(TileID.spend))
+                    if page.balance != nil { check("balance tile click", tile(TileID.balance)) }
+                    if !page.models.isEmpty { check("models tile click", tile(TileID.models)) }
+                    if page.activity != nil { check("activity tile click", tile(TileID.activity)) }
+                    if page.status?.url != nil { check("status tile click", tile(TileID.status)) }
+                } else if let first = page.groups.first?.lines.first {
+                    check("limit row click", self.state.controlFrames.keys.contains { if case .at(let name, .usage) = $0 { return name == "limit:" + first.id }; return false })
                 }
                 if let reset = page.resets.first(where: \.canUse) {
                     check("Use routes", click(.resetAsk(reset.id), real: true))
@@ -714,33 +819,92 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             check("tile drag", self.selftestTileDrag(settle: settle))
         }
         step { settle() }
-        step { // settings: Show, a tile off and on again, the tab list, the menu bar page
+        // What a restart reads: a store opened on the same file, which is what the next launch does.
+        func restarted() -> PanelPrefs { PanelPrefsStore(url: self.panelStore.url).load() }
+        step { // settings, General: every control changes the state and is on disk for the next launch
             self.state.showsSettings = true; self.state.settingsPage = 0; settle()
         }
         step { settle() }
         step {
-            let before = self.state.panel
-            check("settings frames", click(.panelShow(.left), real: true) && self.state.panel.show == .left)
-            check("show saved", self.panelStore.load().show == .left)
+            let shown = self.state.shownTabs.map(\.id).filter { $0 != Presenter.overviewID }
+            var wanted: [MenuControl] = PanelPrefs.Appearance.allCases.map { .appearance($0) } + [.panelShow(.used), .panelShow(.left), .openOn("last"), .openOn("overview"),
+                                                                                                 .refreshOnOpen, .notifyLow, .notifyReset]
+            wanted += shown.map { .openOn($0) } + PanelPrefs.refreshChoices.map { .refreshEvery($0) }
+            let apis = self.state.orderedTabs.filter { self.state.live?.isBudgetable($0.id) == true }.map(\.id)
+            wanted += apis.flatMap { pool in [MenuControl.budget(pool, nil)] + PanelPrefs.budgetChoices.map { .budget(pool, $0) } }
+            let missing = wanted.filter { self.state.controlFrames[$0] == nil }
+            check("general controls \(missing.prefix(3))", missing.isEmpty)
+            check("appearance", click(.appearance(.dark), real: true) && self.state.panel.appearance == .dark && restarted().appearance == .dark
+                  && self.menu.appearance?.name == .darkAqua)
+            _ = click(.appearance(.light), real: true)
+            check("appearance light", self.menu.appearance?.name == .aqua && restarted().appearance == .light)
+            _ = click(.appearance(.system), real: true)
+            check("appearance system", self.menu.appearance == nil && restarted().appearance == .system)
+            check("show", click(.panelShow(.left), real: true) && self.state.panel.show == .left && restarted().show == .left)
             _ = click(.panelShow(.used), real: true)
-            check("tab chips", self.state.shownTabs.allSatisfy { click(.settingsTab($0.id), real: true) })
-            _ = click(.settingsTab("claude"), real: true)
+            if let tab = shown.first {
+                check("open on", click(.openOn(tab), real: true) && restarted().openOn == tab
+                      && restarted().startTab(shown: [Presenter.overviewID] + shown) == tab)
+                self.applyStartTab()
+                check("the menu opens on it", self.state.current == tab)
+                check("open on overview", click(.openOn("overview"), real: true) && restarted().startTab(shown: [Presenter.overviewID] + shown) == Presenter.overviewID)
+                check("open on last", click(.openOn("last"), real: true))
+                self.state.choose(shown.last ?? tab)
+                check("last tab saved", restarted().lastTab == (shown.last ?? tab) && restarted().startTab(shown: [Presenter.overviewID] + shown) == (shown.last ?? tab))
+                self.state.choose(Presenter.overviewID)
+                check("overview is a last tab too", restarted().lastTab == Presenter.overviewID)
+            }
+            check("refresh on open", click(.refreshOnOpen, real: true) && !self.state.panel.refreshOnOpen && !restarted().refreshOnOpen)
+            _ = click(.refreshOnOpen, real: true)
+            check("refresh on open back", self.state.panel.refreshOnOpen && restarted().refreshOnOpen)
+            check("every 15", click(.refreshEvery(15), real: true) && restarted().refreshEveryMinutes == 15 && self.reloadTimer?.timeInterval == 900)
+            check("every off", click(.refreshEvery(0), real: true) && restarted().refreshEveryMinutes == 0 && self.reloadTimer == nil)
+            check("every 5", click(.refreshEvery(5), real: true) && restarted().refreshEveryMinutes == 5 && self.reloadTimer?.timeInterval == 300)
+            check("notify low", click(.notifyLow, real: true) && self.barStore.load().notifyLow)
+            check("notify reset", click(.notifyReset, real: true) && self.barStore.load().notifyReset)
+            _ = click(.notifyLow, real: true); _ = click(.notifyReset, real: true)
+            for pool in apis {
+                check("budget \(pool)", click(.budget(pool, 20), real: true) && restarted().budgets[pool] == 20)
+                settle()
+                check("budget shows", (self.state.live?.providerPage(for: pool, show: .used)?.spend?.detail ?? "").contains("$20"))
+                check("budget clears", click(.budget(pool, nil), real: true) && restarted().budgets[pool] == nil)
+            }
+            check("tiles page", click(.settingsPage(1), real: true))
             settle()
-            let on = self.state.panel.listed("claude", builtIns: PanelPrefs.providerTiles).on
+        }
+        step { settle() }
+        step { // Tiles: a tile off and on again, a chart's range
+            check("tab chips", self.state.shownTabs.allSatisfy { click(.settingsTab($0.id), real: true) })
+            let tab = self.state.shownTabs.first { $0.id == (self.config.selftestTab ?? "claude") }?.id ?? "claude"
+            _ = click(.settingsTab(tab), real: true)
+            settle()
+            let page = self.state.live?.providerPage(for: tab, show: .used)
+            let builtIns = tab == Presenter.overviewID ? [TileID.alert, TileID.providers, TileID.links, TileID.tokens] : (page?.available ?? PanelPrefs.providerTiles)
+            let on = self.state.panel.listed(tab, builtIns: builtIns).on
             if let first = on.first(where: { $0 != "links" }) {
-                check("tile off", click(.toggleTile("claude", first), real: true) && !self.state.panel.listed("claude", builtIns: PanelPrefs.providerTiles).on.contains(first))
-                check("tile off saved", self.panelStore.load().hiddenTiles["claude"]?.contains(first) == true)
+                check("tile off", click(.toggleTile(tab, first), real: true) && !self.state.panel.listed(tab, builtIns: builtIns).on.contains(first))
+                check("tile off saved", restarted().hiddenTiles[tab]?.contains(first) == true)
                 settle()
                 check("add tile list", click(.addOpen, real: true) && self.state.addOpen)
                 settle()
-                check("add tile", click(.addTile("claude", first), real: true) && self.state.panel.listed("claude", builtIns: PanelPrefs.providerTiles).on.contains(first))
-            } else { check("claude tiles listed", false) }
-            _ = before
+                check("add tile", click(.addTile(tab, first), real: true) && self.state.panel.listed(tab, builtIns: builtIns).on.contains(first))
+            } else { check("\(tab) tiles listed", false) }
+            if let chart = PanelPrefs.chartTile(on: tab, available: builtIns), let choice = self.state.chartOptions(tab: tab, tile: chart) {
+                settle()
+                let wanted = PanelPrefs.rangeChoices.map { MenuControl.chartRange(tab, chart, $0) } + (choice.metrics.count > 1 ? choice.metrics.map { .chartMetric(tab, chart, $0) } : [])
+                check("chart controls", wanted.allSatisfy { self.state.controlFrames[$0] != nil })
+                check("chart range", click(.chartRange(tab, chart, 7), real: true) && restarted().option(tab, chart).days == 7)
+                check("chart shows 7 days", (self.state.chartModel(tab: tab, tile: chart)?.days.count ?? 99) <= 7)
+                if let other = choice.metrics.first(where: { $0 != choice.metric }) {
+                    check("chart metric", click(.chartMetric(tab, chart, other), real: true) && restarted().option(tab, chart).metric == other)
+                    check("chart metric changes the figure", self.state.chartModel(tab: tab, tile: chart)?.metric == other)
+                }
+            }
             settle()
         }
         step { settle() }
         step {
-            check("tabs page", click(.settingsPage(1), real: true))
+            check("tabs page", click(.settingsPage(2), real: true))
             settle()
         }
         step { settle() }
@@ -749,31 +913,40 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             check("tab switches", !ids.isEmpty && ids.allSatisfy { self.state.controlFrames[.toggleTab($0)] != nil })
             if let first = ids.first {
                 check("hide a tab", click(.toggleTab(first), real: true) && !self.state.panel.isTabVisible(first))
-                check("hidden saved", self.panelStore.load().hiddenTabs.contains(first))
+                check("hidden saved", restarted().hiddenTabs.contains(first))
                 _ = click(.toggleTab(first), real: true)
             }
-            check("bar page", click(.settingsPage(2), real: true))
+            check("bar page", click(.settingsPage(3), real: true))
             settle()
         }
         step { settle() }
         step {
-            var wanted: [MenuControl] = [.back, .reset, .settingsPage(0), .settingsPage(1)] + BarPrefs.windowChoices.map { .window($0) }
-            wanted += [.notifyLow, .notifyReset, .show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
+            var wanted: [MenuControl] = [.back, .reset, .settingsPage(0), .settingsPage(1), .settingsPage(2)] + BarPrefs.windowChoices.map { .window($0) }
+            wanted += [.show(BarPrefs.pressed)] + (self.state.presenter?.barChoices.map { .show($0.id) } ?? [])
             wanted += BarPrefs.Count.allCases.map { .count($0) } + BarPrefs.Icon.allCases.map { .icon($0) }
-            wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) } + BarPrefs.Reset.allCases.map { .resets($0) } + BarPrefs.refreshChoices.map { .refreshEvery($0) }
+            wanted += BarPrefs.Text.allCases.map { .text($0) } + BarPrefs.Extra.allCases.map { .extra($0) }
             let missing = wanted.filter { self.state.controlFrames[$0] == nil }
             check("bar controls \(missing.prefix(3))", missing.isEmpty)
-            for control in [MenuControl.show("codex"), .window("Week"), .count(.left), .icon(.logo), .text(.window), .notifyLow, .notifyReset, .extra(.reset), .resets(.clock), .refreshEvery(300)] {
-                _ = click(control, real: true)
+            check("no Resets row until Add: Reset", self.state.controlFrames[.resets(.clock)] == nil)
+            for control in [MenuControl.show("codex"), .window("Week"), .count(.left), .text(.window), .extra(.reset)] { _ = click(control, real: true) }
+            for (icon, file) in [(BarPrefs.Icon.tanks, "crossfeed"), (.logo, "provider"), (.none, "none")] {
+                check("icon \(file)", click(.icon(icon), real: true) && self.state.prefs.icon == icon && restarted().menubarIcon == file)
             }
+            _ = click(.icon(.logo), real: true)
+            settle()
+        }
+        step { settle() }
+        step {
+            check("Resets row with Add: Reset", click(.resets(.clock), real: true))
             var expected = BarPrefs()
             expected.show = "codex"; expected.window = "Week"; expected.count = .left; expected.icon = .logo
-            expected.text = .window; expected.notifyLow = true; expected.notifyReset = true; expected.extra = .reset; expected.reset = .clock; expected.refreshSeconds = 300
+            expected.text = .window; expected.extra = .reset; expected.reset = .clock
             check("bar prefs saved", self.state.prefs == expected && self.barStore.load() == expected)
             _ = click(.reset, real: true)
-            check("bar prefs reset", self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs())
+            check("bar prefs reset", self.state.prefs == BarPrefs() && self.barStore.load() == BarPrefs() && restarted().menubarIcon == nil)
             check("back", click(.back, real: true) && !self.state.showsSettings)
             let fonts = NSFont.systemFont(ofSize: 13).isFixedPitch == false
+            let ids = self.state.orderedTabs.map(\.id)
             let ok = !failed && fonts && self.menu.items.count == 6 && providerAssetCount == ProviderLogo.allCases.count
             print("selftest \(ok ? "ok" : "FAILED"): logos \(providerAssetCount), menu items \(self.menu.items.count), tabs \(ids.count), providers \(providers.count), panel file \(self.panelStore.exists)" + (log.isEmpty ? "" : "\n" + log.joined(separator: "\n")))
             try? FileManager.default.removeItem(at: self.panelStore.url)

@@ -7,6 +7,10 @@ import CrossfeedCore
 
 public enum MenuBarIcon {
     public static let size = NSSize(width: 20, height: 16)
+    /// How the provider logo is drawn in the bar. Colour marks (Claude, Gemini, Antigravity) keep their colour: at 15 pt they
+    /// read well on a light and a dark bar, while the one-colour silhouette of Antigravity loses its shape. The marks that are
+    /// one colour already (OpenAI, Copilot, OpenCode, OpenRouter) are templates the bar tints to its own ink.
+    public static let monochromeLogos = false
 
     /// The icon the summary asks for: the two tanks, the focal provider's mark, or nothing.
     public static func image(for summary: BarSummary) -> NSImage? {

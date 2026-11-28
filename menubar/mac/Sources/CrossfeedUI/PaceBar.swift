@@ -68,8 +68,10 @@ struct PaceBar: View {
 /// Tokens per day, oldest first; today's bar is teal, empty days are a hairline.
 struct Sparkline: View {
     let days: [Int64]
-    var width: CGFloat = 52
+    /// Nil fills the width it is given.
+    var width: CGFloat? = 52
     var height: CGFloat = 16
+    var label: String?
 
     var body: some View {
         Canvas { context, size in
@@ -86,6 +88,7 @@ struct Sparkline: View {
             }
         }
         .frame(width: width, height: height)
-        .accessibilityLabel("Tokens per day, last \(days.count) days")
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .accessibilityLabel(label ?? "Per day, last \(days.count) days")
     }
 }
