@@ -21,7 +21,12 @@
   };
   const logo = (name, size) => name && L[name] ? `<span class="logo" style="width:${size}px;height:${size}px">${L[name]}</span>` : "";
   const NAMES = { limits: "Limits", resets: "Resets", credits: "Credits", tokens: "Tokens", policy: "Spend policy",
-    links: "Links", alert: "Alert", providers: "Providers", subscriptions: "Subscriptions", other: "Other" };
+    links: "Links", alert: "Alert", providers: "Providers", subscriptions: "Subscriptions", other: "Other",
+    status: "Status", spend: "Spend", balance: "Balance", models: "Models", activity: "Activity" };
+  // Everything clickable carries its address and is a link to the keyboard: one delegated handler (panel.js) follows it.
+  const hit = (href) => `data-href="${esc(href)}" role="link" tabindex="0"`;
+  const sectionHref = (t) => t.pool === "antigravity-gemini" || (t.pools || []).some((p) => p.startsWith("antigravity")) ? "/#provider-antigravity" : "/#pool-" + encodeURIComponent(t.pool);
+  const usageHref = (t) => "/usage#" + encodeURIComponent(t.pool);
   const tileName = (id) => NAMES[id] || (VM.pluginTiles[id] ? VM.pluginTiles[id].title : id);
 
   // ---------- atoms ----------
@@ -47,23 +52,24 @@
     const label = `${fig(r)}${r.paceWord ? ", " + r.paceWord : ""}`;
     return `<div class="bar" style="height:${h}px" role="img" aria-label="${esc(label)}"><span class="clip">${segs}</span>${tick}</div>`;
   }
-  const fig = (r) => r.full ? "Used up" : MODE === "left" ? `${Math.round(100 - r.used)}% left` : `${Math.round(r.used)}% used`;
+  const fig = (r) => r.full ? (r.fullText || "Used up")
+    : MODE === "left" ? (r.figLeft || `${Math.round(100 - r.used)}% left`) : (r.figText || `${Math.round(r.used)}% used`);
   const paceWord = (r) => !r.paceWord ? "" : `<span class="pace ${r.state}">${r.state === "deficit" ? '<i class="up"></i>' : '<i class="dn"></i>'}${esc(r.paceWord)}</span>`;
   const windowLabel = (r) => `<span class="win"><span class="wn">${esc(r.window)}</span> <span class="q">· ${esc(r.resets)}</span></span>`;
 
   // The one limit row part. Figure where the eye lands, the window named top right, then the bar, then pace.
-  function limitRow(r) {
+  function limitRow(r, href) {
     const l3 = (r.paceWord || r.runsOut) && !r.full ? `<div class="line l3">${paceWord(r)}${r.runsOut ? `<span class="pace deficit">${esc(r.runsOut)}</span>` : ""}</div>` : "";
-    return `<div class="lrow"><div class="line l1"><span class="fig num ${r.hot ? "hot" : ""}">${fig(r)}</span>${windowLabel(r)}</div>
+    return `<div class="lrow${href ? " hit" : ""}" ${href ? hit(href) : ""}><div class="line l1"><span class="fig num ${r.hot ? "hot" : ""}">${fig(r)}</span>${windowLabel(r)}</div>
       ${bar(r, 6)}${l3}</div>`;
   }
-  function spark(days, w, h) {
+  function spark(days, w, h, what) {
     const n = days.length || 1, gap = 1.5, bw = Math.max(1, (w - gap * (n - 1)) / n), max = Math.max(...days, 1);
     const bars = days.map((v, i) => {
       const bh = v > 0 ? Math.max(2, Math.round((v / max) * h * 10) / 10) : 1;
       return `<rect x="${(i * (bw + gap)).toFixed(2)}" y="${(h - bh).toFixed(2)}" width="${bw.toFixed(2)}" height="${bh}" rx="${Math.min(1, bw / 2)}" class="${i === n - 1 ? "today" : v > 0 ? "day" : "zero"}"/>`;
     }).join("");
-    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Tokens per day, last ${n} days">${bars}</svg>`;
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(what || "Tokens")} per day, last ${n} days">${bars}</svg>`;
   }
   const grip = (id) => `<button class="grip" type="button" tabindex="0" aria-label="Move ${esc(tileName(id))}. Arrow keys move it." data-grip="${esc(id)}">${ICON.grip}</button>`;
   const btn = (txt, cls, act, key) => `<button type="button" class="btn ${cls || ""}" data-act="${act}" data-key="${esc(key || "")}">${esc(txt)}</button>`;
@@ -86,23 +92,62 @@
     return `<div class="resets"><div class="rhead">Resets</div>${rows}</div>`;
   }
   function limitsBlock(t) {
-    return t.sections.map((s) => `<section class="lsec">${s.title ? `<div class="sech">${esc(s.title)}${!s.rows.length && s.note ? ` <span class="q">· ${esc(s.note)}</span>` : ""}</div>` : ""}${s.rows.map(limitRow).join("")}</section>`).join("");
+    const href = sectionHref(t);
+    return t.sections.map((s) => `<section class="lsec">${s.title ? `<div class="sech">${esc(s.title)}${!s.rows.length && s.note ? ` <span class="q">· ${esc(s.note)}</span>` : ""}</div>` : ""}${s.rows.map((r) => limitRow(r, href)).join("")}</section>`).join("");
+  }
+  // ---- Status: one provider's incident, or a calm line; Overview lists every current incident ----
+  const incidentLine = (i) => `<div class="incident ${i.severe ? "severe" : ""}"><i></i><span><b>${esc(i.level)}</b> · ${esc(i.text)}</span></div>`;
+  function statusBlock(t) {
+    const body = t.incident ? incidentLine(t.incident) : `<div class="calm"><i></i><span>No incident reported</span></div>`;
+    return `<div class="thead">Status</div><div class="statline${t.status_url ? " hit" : ""}" ${t.status_url ? hit(t.status_url) : ""}>${body}${t.status_url ? `<span class="go">${ICON.ext}</span>` : ""}</div>`;
+  }
+  function overviewStatusBlock() {
+    if (!VM.incidents.length) return `<div class="thead">Status</div><div class="calm"><i></i><span>No incidents</span></div>`;
+    return `<div class="thead">Status</div>` + VM.incidents.map((i) => `<div class="statline${i.url ? " hit" : ""}" ${i.url ? hit(i.url) : ""}><div class="incident ${i.severe ? "severe" : ""}"><i></i><span><b>${esc(i.title)}</b> · ${esc(i.level)}<br><span class="q">${esc(i.text)}</span></span></div></div>`).join("");
+  }
+  // ---- API pools: spend against the operator's budget, balance, models ----
+  function spendBlock(t) {
+    const a = t.api;
+    const figs = a.spend ? `<div class="figs"><span><span class="q">Today</span> <b class="num">${esc(a.spend.today || "$0.00")}</b></span><span><span class="q">Week</span> <b class="num">${esc(a.spend.week || "$0.00")}</b></span><span><span class="q">Month</span> <b class="num">${esc(a.spend.month || "$0.00")}</b></span></div>` : "";
+    const budgetLine = a.budget ? "" : `<div class="q note1">No monthly budget. <button type="button" class="lnkbtn" data-act="budget" data-key="${esc(t.id)}">Set one</button></div>`;
+    const source = a.source ? `<div class="q note1">${esc(a.source)}</div>` : "";
+    const error = a.error ? `<div class="q note1 bad">${esc(a.error)}</div>` : "";
+    return `<div class="thead">Spend</div>${a.bar && a.bar.key === "spend" ? limitRow(a.bar, usageHref(t)) : ""}${figs}${budgetLine}${source}${error}`;
+  }
+  function balanceBlock(t) {
+    const b = t.api.balance, href = t.api.billingUrl;
+    const kv = (label, value) => value ? `<div class="kv"><span class="q">${label}</span><span class="num">${esc(value)}</span></div>` : "";
+    const bar = t.api.bar && t.api.bar.key !== "spend" ? limitRow(t.api.bar) : "";
+    return `<div class="${href ? "hit" : ""}" ${href ? hit(href) : ""}><div class="thead">Balance</div>${bar}${kv("Credit", b.credits)}${kv("Left", b.left)}${kv("Key limit", b.limit)}${kv("Key left", b.remaining)}</div>`;
+  }
+  function modelsBlock(t) {
+    const rows = t.api.models.map((m) => `<div class="kv" title="${esc(m.full)}"><span class="mn">${esc(m.name)}</span><span class="num">${m.text ? esc(m.text) : esc((m.requests == null ? 0 : m.requests).toLocaleString("en-US")) + " runs"}</span></div>`).join("");
+    return `<div class="thead">Models</div>${rows}`;
   }
   function creditsBlock(t) {
     const c = t.credits;
     return `<div class="credits rrow"><span class="em">${COIN}</span><span class="rn num">${esc(c.amount)} credits</span><span class="sp"></span><span class="q num until">until ${esc(c.until)}</span></div>`;
   }
   // Delta 3: the tokens tile keeps only its number and sparkline; the links have their own tile.
-  function tokensBlock(tk) {
-    if (!tk) return `<div class="q">No token log on this machine yet.</div>`;
-    return `<div class="tokline"><span class="tok"><b class="num">${esc(tk.todayText)}</b> <span class="q">tokens today</span></span>${spark(tk.days, 52, 16)}</div>`;
+  // The graph is the operator's to shape: a metric (tokens, cost, requests: what the pool has) and a range of days,
+  // chosen from the tile's menu or Settings. Clicking it opens the usage page for the pool.
+  function sparkTile(series, tabId, tileId, href, empty) {
+    const sp = VM.sparkFor(series, tabId, tileId);
+    if (!sp) return `<div class="q">${esc(empty || "No usage log on this machine yet.")}</div>`;
+    return `<div class="tokline hit" ${hit(href)} data-spark="${esc(tabId + "/" + tileId)}" title="${esc(sp.label)}, last ${sp.days} days. Right-click for options.">
+      <span class="tok"><b class="num">${esc(sp.figure)}</b> <span class="q">${esc(sp.word)}</span></span>${spark(sp.values, 52, 16, sp.label)}
+      <button type="button" class="tmore" data-act="sparkmenu" data-key="${esc(tabId + "/" + tileId)}" aria-label="Graph options">${ICON.dots}</button></div>`;
   }
+  window.sparkInfo = (tabId, tileId) => {
+    const series = tabId === "overview" ? VM.allSeries : (VM.tabs[tabId] || {}).series;
+    return VM.sparkFor(series, tabId, tileId);
+  };
   function linksBlock(links) {
     return `<div class="links${links.length < 2 ? " one" : ""}">` + links.map((link) =>
       `<a class="lnk" href="${esc(link.href)}">${esc(link.label)} ${ICON.ext}</a>`).join("") + `</div>`;
   }
   function policyBlock(p) {
-    return `<div class="plabel q">Spend policy</div><button type="button" class="popup" aria-haspopup="menu" data-act="policy"><span>${esc(p.level)}</span>${ICON.updown}</button>`;
+    return `<div class="plabel q">Spend policy</div><button type="button" class="popup" aria-haspopup="menu" data-act="policy" data-subscription="${esc(p.id || "")}" data-level="${esc(p.raw || "")}"><span>${esc(p.level)}</span>${ICON.updown}</button>`;
   }
   function subsBlock() {
     if (!VM.subs.length) return `<div class="q">No subscription price set in the access overlay yet.</div>`;
@@ -149,34 +194,60 @@
     // A healthy tile says nothing about being healthy; only a warning or an error is worth a word.
     const status = doc.status && doc.status !== "ok"
       ? `<div class="pstatus ${doc.status === "error" ? "error" : ""}">${esc(doc.status)}</div>` : "";
-    return `<div class="ptile"><div class="ptitle">${esc(doc.title || entry.title)}</div>${status}${rows}</div>`;
+    const first = (doc.rows || []).find((row) => row.kind === "link" && row.url);
+    return `<div class="ptile${first ? " hit" : ""}" ${first ? hit(first.url) : ""}><div class="ptitle">${esc(doc.title || entry.title)}</div>${status}${rows}</div>`;
   }
 
   // Which tiles a tab has, in the operator's order (panel preferences), each only when it has something to say.
   function available(tabId, id) {
     if (id.startsWith("plugin:")) return !!VM.pluginTiles[id];
-    if (tabId === "overview") return ["alert", "providers", "subscriptions", "tokens", "links"].includes(id);
+    if (tabId === "overview") {
+      // Status shows itself while a provider has an incident, and always when the operator has added it to the tab.
+      if (id === "status") return VM.incidents.length > 0 || ((VM.prefs.tiles || {}).overview || []).includes("status");
+      return ["alert", "providers", "subscriptions", "tokens", "links"].includes(id);
+    }
     if (tabId === "other") return id === "other";
     const t = VM.tabs[tabId];
     if (!t) return false;
     if (id === "limits") return t.sections.some((s) => s.rows.length || s.note);
     if (id === "resets") return !!t.resets;
     if (id === "credits") return !!t.credits;
-    if (id === "tokens") return !!t.tokens;
+    if (id === "tokens") return !!(t.tokens || t.series);
     if (id === "policy") return !!t.policy;
     if (id === "links") return true;
+    if (id === "status") return !!(t.incident || t.status_url);
+    if (id === "spend") return !!(t.api && ((t.api.bar && t.api.bar.key === "spend") || (t.api.spend && t.api.hasMoney)));
+    if (id === "balance") return !!(t.api && t.api.balance);
+    if (id === "models") return !!(t.api && t.api.models.length);
+    if (id === "activity") return !!(t.series && VM.sparkFor(t.series, tabId, "activity"));
     return false;
   }
+  // Crossfeed Chat is a relay that reports no money, so it has no spend or balance tile.
+  const RELAY = ["chatgpt-work"];
+  window.defaultTiles = (tabId) => tabId === "overview" ? ["alert", "providers", "subscriptions", "tokens", "links"]
+    : tabId === "other" ? ["other"]
+    : RELAY.includes(tabId) ? ["limits", "activity", "models", "status", "links"]
+    : ["openrouter-free", "gemini-metered"].includes(tabId) || (VM.tabs[tabId] && VM.tabs[tabId].isApi)
+      ? ["limits", "spend", "balance", "models", "activity", "status", "links"]
+      : ["limits", "resets", "credits", "tokens", "policy", "status", "links"];
+  // The tiles a tab lists: the operator's list, or the default; Overview adds Status before Links while an incident exists.
+  window.tileList = (tabId) => {
+    const listed = (((VM.prefs || {}).tiles || {})[tabId] || window.defaultTiles(tabId)).slice();
+    if (tabId === "overview" && VM.incidents.length && !listed.includes("status")) {
+      const at = listed.indexOf("links");
+      listed.splice(at < 0 ? listed.length : at, 0, "status");
+    }
+    return listed;
+  };
   window.blocksFor = function (tabId, dir) {
     if (tabId === "other") return ["other"];
     const prefs = VM.prefs || {};
-    const listed = ((prefs.tiles || {})[tabId]) || (tabId === "overview"
-      ? ["alert", "providers", "subscriptions", "tokens", "links"] : ["limits", "resets", "credits", "tokens", "policy", "links"]);
+    const listed = window.tileList(tabId);
     const off = new Set(((prefs.hidden_tiles || {})[tabId]) || []);
     return listed.filter((id) => !off.has(id) && available(tabId, id));
   };
   // B+ pairs two small tiles side by side (design r11); drag.js lays a pair out together.
-  window.isHalf = (dir, id) => dir === "B" && ["tokens", "policy", "credits"].includes(id);
+  window.isHalf = (dir, id) => dir === "B" && ["tokens", "policy", "credits", "balance", "activity"].includes(id);
   window.tileLabel = tileName;
   window.tileAvailable = available;
 
@@ -189,8 +260,9 @@
       if (id === "alert") inner = alertBlock();
       else if (id === "providers") inner = providersBlock();
       else if (id === "subscriptions") inner = subsBlock();
-      else if (id === "tokens") inner = tokensBlock(VM.allTokens);
-      else if (id === "links") inner = linksBlock([{ label: "Usage and cost", href: "/usage" }, { label: "Console", href: "/" }]);
+      else if (id === "tokens") inner = sparkTile(VM.allSeries, "overview", "tokens", "/usage");
+      else if (id === "status") inner = overviewStatusBlock();
+      else if (id === "links") inner = linksBlock([{ label: "Usage and cost", href: "/usage" }]);
     } else if (tabId === "other") {
       inner = otherBlock();
     } else {
@@ -198,13 +270,17 @@
       if (id === "limits") inner = limitsBlock(t);
       else if (id === "resets") inner = resetsBlock(t, o);
       else if (id === "credits") inner = creditsBlock(t);
-      else if (id === "tokens") inner = tokensBlock(t.tokens);
+      else if (id === "tokens") inner = sparkTile(t.series, tabId, "tokens", usageHref(t));
+      else if (id === "activity") inner = sparkTile(t.series, tabId, "activity", usageHref(t));
       else if (id === "policy") inner = policyBlock(t.policy);
+      else if (id === "status") inner = statusBlock(t);
+      else if (id === "spend") inner = spendBlock(t);
+      else if (id === "balance") inner = balanceBlock(t);
+      else if (id === "models") inner = modelsBlock(t);
       else if (id === "links") {
-        const links = [];
-        links.push({ label: "Usage and cost", href: "/usage#" + encodeURIComponent(t.pool) });
+        const links = [{ label: "Usage and cost", href: usageHref(t) }];
         if (t.status_url) links.push({ label: "Status", href: t.status_url });
-        links.push({ label: "Console", href: "/" });
+        if (t.api && t.api.billingUrl) links.push({ label: "Billing", href: t.api.billingUrl });
         inner = linksBlock(links);
       }
     }
@@ -217,7 +293,7 @@
     const all = [{ id: "overview", title: "Overview", icon: "grid" },
       ...order.filter((id) => VM.tabs[id]).map((id) => ({ id, title: VM.tabs[id].title, logo: VM.tabs[id].logo })),
       { id: "other", title: "Other", icon: "dots" }];
-    return `<nav class="tabs" role="tablist">` + all.map((t) => {
+    return `<nav class="tabs${all.length > 7 ? " dense" : ""}" role="tablist">` + all.map((t) => {
       const on = t.id === sel, r = VM.overview[t.id] && VM.overview[t.id].row;
       const mark = t.logo ? logo(t.logo, 17) : `<span class="glyph">${ICON[t.icon]}</span>`;
       const fixed = t.id === "overview" || t.id === "other";
@@ -237,21 +313,13 @@
     return `<header class="hd"><div class="line l1">${logo(t.logo, 18)}<span class="name">${esc(t.fullTitle || t.title)}</span>${t.plan ? `<span class="plan">${esc(t.plan)}</span>` : ""}<span class="sp"></span>${badge}</div>
       <div class="line sub"><span class="q">${esc(t.updated)}</span><span class="sp"></span>${iconBtns()}</div></header>`;
   }
-  // Delta 3: the incident line stays in the provider's header area, without a link of its own.
-  function foot(tabId) {
-    const t = VM.tabs[tabId];
-    if (!t || !t.incident) return "";
-    const i = t.incident;
-    return `<div class="foot"><div class="incident ${i.severe ? "severe" : ""}"><i></i><span><b>${esc(i.level)}</b> · ${esc(i.text)}</span></div></div>`;
-  }
-
   // o: { order: [block ids], tabOrder: [provider ids], confirm: resetKey, used: resetKey, mode }
   window.renderPanel = function (dir, tabId, theme, o = {}) {
     MODE = o.mode || "used";
     const tabOrder = o.tabOrder || VM.order;
     const order = o.order || blocksFor(tabId, dir);
     const blocks = order.map((id) => blockHTML(dir, tabId, id, { ...o, tabOrder })).join("");
-    return `<div class="panel dir${dir} ${theme}" data-dir="${dir}" data-tab="${esc(tabId)}" data-theme="${theme}" data-mode="${MODE}">${tabsHTML(tabId, tabOrder)}<div class="body">${header(tabId, o.tabKey)}<div class="blocks" data-scope="${tabId === "overview" ? "overview" : "provider"}">${blocks}</div>${foot(o.tabKey || tabId)}</div><div class="live" aria-live="polite"></div></div>`;
+    return `<div class="panel dir${dir} ${theme}" data-dir="${dir}" data-tab="${esc(tabId)}" data-theme="${theme}" data-mode="${MODE}">${tabsHTML(tabId, tabOrder)}<div class="body">${header(tabId, o.tabKey)}<div class="blocks" data-scope="${tabId === "overview" ? "overview" : "provider"}">${blocks}</div></div><div class="live" aria-live="polite"></div></div>`;
   };
   window.blockHTML = blockHTML;
   window.ICONS = ICON;

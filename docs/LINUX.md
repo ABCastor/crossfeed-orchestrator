@@ -76,23 +76,46 @@ to keep it there. Building needs Go 1.23 or newer and the C headers `fyne.io/sys
 `sudo apt install golang-go libgtk-3-dev libayatana-appindicator3-dev` on Debian and Ubuntu.
 
 The tray starts its own console (`fleetctl.py console --no-open`), reads the sign-in link that
-console prints, and keeps it in memory: never on disk, never in the menu. Its title is the same
-short line the Mac menu bar shows (`Claude 12% · Codex 40%`), its menu has one line per provider
-with the tightest window, and then:
+console prints, and keeps it in memory: never on disk, never in the menu. Its title is the icon and
+text the operator chose in the panel's Settings > Menu bar (the preview there is the same function):
+the provider's logo, the Crossfeed mark or no icon, then a short line such as `Week 71%`. Its menu
+has one line per provider with the tightest window, and then:
 
-| Item | Opens |
+| Item | Does |
 |---|---|
-| Open panel | `<console>/login?key=…&next=/panel` in a `--app=` window of chromium or google-chrome when one is on PATH, else `xdg-open` |
+| Open panel | `<console>/login?key=…&next=/panel` in a `--app=` window of chromium or google-chrome when one is on PATH, else `xdg-open`; on the tab named by `open_on` (`last` opens on the tab used last) |
 | Usage and cost | `/usage`, signed in the same way |
 | Settings | `/settings` |
+| Refresh now | reads every provider that is due, then redraws the title |
 | Quit | stops the tray and the console it started |
+
+The tray reads the cached glance and `panel.json` every minute, so a change made in the panel's
+Settings reaches the title within a minute, and asks `fleetctl.py glance` to read the sources every
+`refresh.every_minutes` minutes (0 is off). AppIndicator hosts differ in what they draw: some show
+only the icon and ignore the title text; a logo is a 44 px PNG embedded from `menubar/icons`
+(`make-icons.sh` rasterises the panel's SVG logos).
 
 **The panel** is the console's own page, so it needs nothing extra: `fleetctl.py console` prints a
 sign-in link, and `/panel` (or the link with `next=/panel`) draws the tiles. It is 310 px wide and
-fine on a phone, follows `prefers-color-scheme`, loads no font or script from anywhere but the
-console itself, and writes its tile order and choices to `~/.config/orchestrator/panel.json`, the
-same file the Mac app reads. `fleetctl.py panel get` prints that file with defaults filled;
-`fleetctl.py panel set --json '<doc>'` validates and writes it.
+fine on a phone, follows the operator's Appearance choice (System follows `prefers-color-scheme`),
+loads no font or script from anywhere but the console itself, and writes every choice as it is made
+to `~/.config/orchestrator/panel.json`, the same file the Mac app reads. `fleetctl.py panel get`
+prints that file with defaults filled; `fleetctl.py panel set --json '<doc>'` validates and writes it.
+
+What `panel.json` holds, besides the tabs and tiles: `appearance` (`system`, `light`, `dark`),
+`menubar` (`icon`: `crossfeed`, `provider`, `none`; `text`, `show`, `window`, `count`, `extra`, `reset`),
+`refresh` (`on_open`: read again when the page opens and its data is older than a minute;
+`every_minutes`: 0, 1, 5 or 15), `open_on` (`last` or a tab id) with `last_tab`, `budgets` (a monthly
+USD figure per API pool, shown against spend and never enforced) and `tile_options` (a graph's
+`metric` and `days`).
+
+**API pools** (OpenRouter, Gemini API, Crossfeed Chat, and any pool billed per token, by prepaid
+credit or through a relay) are tabs of their own with Spend, Balance, Models, Activity, Status and
+Links tiles. Their figures come from the OpenRouter reader's saved account reading, from an OpenAI or
+Anthropic organisation cost report when an admin key is stored (`fleetctl.py secret set openai-admin`
+or `anthropic-admin`, and `"api_usage": {"source": "admin-cost-api", "provider": "openai"}` in the
+pool's overlay block), or from Crossfeed's own runs, which the tab labels "Measured by Crossfeed".
+They are read with the quota sources, cached in `<state>/api-usage.json`, and never while a page renders.
 
 Tiles can come from plugins: see [PLUGINS.md](PLUGINS.md).
 
@@ -101,7 +124,7 @@ Tiles can come from plugins: see [PLUGINS.md](PLUGINS.md).
 On a headless Debian 12 server (Python 3.12, Node 24, Go 1.23, no desktop session):
 
 - The panel, plugin, console-panel and business suites pass under `python3 -m unittest`, and `node --test tests/panel.test.cjs` passes.
-- Headless Chromium renders `/panel` (Overview, Claude, reset confirm, Settings, a drag in progress) at 310 px in light and dark from a real `/panel.json`.
+- Headless Chromium drives `/panel` against the real console and a fixed glance document (`tests/panel-flows.cjs`: appearance, the menu bar preview, refresh, open on, API tabs, budgets, click targets, the graph's menu, Settings) and renders it at 310 px in light and dark.
 - The tray passes `go vet ./...` and `go test ./...`, builds with `menubar/build.sh`, and runs; with no StatusNotifierWatcher on the session bus it logs `failed to register` and keeps running.
 
 Not covered without a desktop: the tray icon in a real panel (GNOME with the AppIndicator extension, KDE, XFCE) and the `--app=` window it opens.

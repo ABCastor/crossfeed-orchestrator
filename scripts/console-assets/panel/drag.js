@@ -140,6 +140,13 @@
       if ((e.metaKey || e.ctrlKey) && e.key === "z" && undo.length) { e.preventDefault(); const prev = undo.pop(); const A = current; order = prev; current = view(order); settle(A, current); live.textContent = "Move undone."; opts.onOrder && opts.onOrder("blocks", order); log("undo"); }
     });
 
+    // The order a tab starts with: its default tiles, those with something to say, minus the ones turned off.
+    function defaultOrder() {
+      const off = new Set(((VM.prefs.hidden_tiles || {})[panel.dataset.tab]) || []);
+      const listed = ((VM.prefs.tiles || {})[panel.dataset.tab]) || [];
+      const base = window.defaultTiles(panel.dataset.tab).concat(listed.filter((id) => id.startsWith("plugin:")));
+      return base.filter((id) => !off.has(id) && window.tileAvailable(panel.dataset.tab, id));
+    }
     // context menu: the same legal ends without dragging
     function menu(x, y, items) {
       panel.querySelectorAll(".cmenu").forEach((m) => m.remove());
@@ -158,7 +165,7 @@
       menu(e.clientX, e.clientY, [
         { t: "Move up", off: i === 0, f: () => keyMove(id, i - 1) }, { t: "Move down", off: i === order.length - 1, f: () => keyMove(id, i + 1) },
         { t: "Move to top", off: i === 0, f: () => keyMove(id, 0) }, "-",
-        { t: "Reset order", off: same(order, blocksFor(panel.dataset.tab, dir)), f: () => { const A = current; undo.push(order); order = blocksFor(panel.dataset.tab, dir); current = view(order); settle(A, current); opts.onOrder && opts.onOrder("blocks", order); } },
+        { t: "Reset order", off: same(order, defaultOrder()), f: () => { const A = current; undo.push(order); order = defaultOrder(); current = view(order); settle(A, current); opts.onOrder && opts.onOrder("blocks", order); } },
       ]);
     });
 

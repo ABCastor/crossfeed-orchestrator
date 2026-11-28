@@ -70,9 +70,18 @@ function glance(overrides = {}) {
   };
 }
 
+// The real glance marks a pool `measured` and every window `kind: "window"`; the menu bar title reads both.
+function measured(doc) {
+  for (const pool of doc.pools) {
+    if (pool.measured === undefined) pool.measured = pool.used_percent != null && (pool.limits || []).length > 0;
+    for (const limit of pool.limits || []) if (limit.kind === undefined) limit.kind = "window";
+  }
+  return doc;
+}
+
 function build(documentData, preferences) {
   const context = sandbox();
-  const doc = documentData || glance();
+  const doc = measured(documentData || glance());
   const prefs = preferences || { show: "used", tabs: ["overview", "claude", "codex", "copilot", "other"],
                                  tiles: {}, hidden_tiles: {}, hidden_tabs: [] };
   vm.runInContext("window.__doc = " + JSON.stringify(doc) + "; window.__prefs = " + JSON.stringify(prefs) + ";", context);
@@ -126,23 +135,52 @@ test("a surplus run is the deficit's shape in green, from the fill end to the pa
   assert.doesNotMatch(spare, /top: 25%/);                     // full bar height, not an inset run
 });
 
-test("links live in their own tile: usage and cost, status, console", () => {
-  const html = render(build(), "claude");
+test("links live in their own tile: usage and cost and status, no Console (the header already opens it)", () => {
+  const html = render(build(), "claude", ["links"]);
   assert.match(html, /href="\/usage#claude"[^>]*>Usage and cost/);
   assert.match(html, /href="https:\/\/status\.claude\.com\/"[^>]*>Status/);
-  assert.match(html, /href="\/"[^>]*>Console/);
-  // The tokens tile keeps only its number and sparkline.
+  assert.doesNotMatch(html, /Console/);
+  assert.doesNotMatch(render(build(), "overview", ["links"]), /Console/);
+  // The tokens tile keeps only its number and sparkline; the whole tile goes to the usage page.
   const tokens = render(build(), "claude", ["tokens"]);
   assert.match(tokens, /tokens today/);
   assert.match(tokens, /class="spark"/);
+  assert.match(tokens, /data-href="\/usage#claude"/);
   assert.doesNotMatch(tokens, /Usage and cost/);
-  // The incident line stays in the header area without its own link.
+});
+
+test("Status is a tile, not a pinned line: an incident, or a calm word, linked to the provider's page", () => {
   const troubled = glance();
   troubled.pools[0].incident = { level: "minor", text: "Some users are affected" };
-  const withIncident = render(build(troubled), "claude");
-  const incident = /<div class="foot"><div class="incident[\s\S]*?<\/div><\/div>/.exec(withIncident)[0];
-  assert.match(incident, /Some users are affected/);
-  assert.doesNotMatch(incident, /<a |Status/);
+  const context = build(troubled);
+  const html = render(context, "claude");
+  assert.doesNotMatch(html, /class="foot"/);
+  const status = /data-block="status"[\s\S]*?<div class="blk|data-block="status"[\s\S]*$/.exec(html)[0];
+  assert.match(status, /Minor issue/);
+  assert.match(status, /Some users are affected/);
+  assert.match(status, /data-href="https:\/\/status\.claude\.com\/"/);
+  assert.match(render(build(), "claude", ["status"]), /No incident reported/);
+  // Overview lists every current incident by itself, is not drawn when there is none, and is pinned only when the operator adds it.
+  assert.match(render(context, "overview", ["status"]), /Claude<\/b> · Minor issue/);
+  assert.deepEqual([...context.window.blocksFor("overview", "B")], ["alert", "providers", "subscriptions", "tokens", "status", "links"]);
+  const quiet = build();
+  assert.equal(quiet.window.tileAvailable("overview", "status"), false);
+  assert.deepEqual([...quiet.window.blocksFor("overview", "B")], ["alert", "providers", "subscriptions", "tokens", "links"]);
+  assert.deepEqual([...quiet.window.defaultTiles("overview")], ["alert", "providers", "subscriptions", "tokens", "links"]);
+  const pinned = build(null, { show: "used", tabs: ["overview", "claude"], tiles: { overview: ["alert", "status", "links"] }, hidden_tiles: {} });
+  assert.equal(pinned.window.tileAvailable("overview", "status"), true);
+  assert.match(render(pinned, "overview", ["status"]), /No incidents/);
+  // The operator can still turn an incident's Status tile off.
+  const hidden = build(troubled, { show: "used", tabs: ["overview", "claude"], tiles: {}, hidden_tiles: { overview: ["status"] } });
+  assert.equal(hidden.window.blocksFor("overview", "B").includes("status"), false);
+});
+
+test("everything clickable carries an address: limit rows, Overview cards, plugin tiles", () => {
+  const html = render(build(), "claude", ["limits"]);
+  assert.match(html, /class="lrow hit" data-href="\/#pool-claude" role="link" tabindex="0"/);
+  assert.match(render(build(), "overview", ["providers"]), /data-goto="claude"/);
+  const prefs = { show: "used", tabs: ["overview", "claude"], tiles: { claude: ["plugin:hello-tile/bar"] }, hidden_tiles: {}, hidden_tabs: [] };
+  assert.match(render(build(null, prefs), "claude"), /class="ptile hit" data-href="https:\/\/example\.com\/run"/);
 });
 
 test("the preferences file decides which tiles exist, in which order", () => {
@@ -173,7 +211,7 @@ test("a plugin tile is drawn with the panel's own parts, and a missing one says 
   const prefs = { show: "used", tabs: ["overview", "claude"], tiles: { claude: ["limits", "plugin:hello-tile/bar", "plugin:gone/x"] },
                   hidden_tiles: {}, hidden_tabs: [] };
   const html = render(build(null, prefs), "claude");
-  assert.match(html, /class="ptile"/);
+  assert.match(html, /class="ptile( hit)?"/);
   assert.match(html, /A pace bar/);
   assert.match(html, /Failed today/);
   assert.match(html, /href="https:\/\/example\.com\/run"/);
@@ -192,7 +230,7 @@ test("a plugin tile is drawn with the panel's own parts, and a missing one says 
 test("overview keeps the alert, the providers, the subscriptions, the tokens and the links", () => {
   const html = render(build(), "overview");
   const tiles = [...html.matchAll(/data-block="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(tiles, ["alert", "providers", "subscriptions", "tokens", "links"]);
+  assert.deepEqual(tiles, ["alert", "providers", "subscriptions", "tokens", "links"]);   // Status only when there is an incident or it is pinned
   assert.match(html, /Gemini|runs out|Nothing runs out/);
   assert.match(html, /You pay a month/);
   assert.match(html, /≈ \$332|\$332/);
@@ -209,4 +247,145 @@ test("nothing external is loaded: no web font, no import, no remote URL in the s
   assert.match(css, /font-family:[^;}]*system-ui/);          // the machine's own fonts, not a download
   const html = fs.readFileSync(path.join(PANEL, "panel.html"), "utf8");
   assert.doesNotMatch(html, /<style/);
+});
+
+// ---- API pools ------------------------------------------------------------------------------
+const OPENROUTER = { pool: "openrouter-free", label: "OpenRouter", measured: false, plan: { name: "Pay as you go" },
+  status_url: "https://status.openrouter.ai/", limits: [],
+  api: { balance_usd: 1.79, credits_usd: 26, key_limit_usd: 10, key_remaining_usd: 3.39,
+         spend: { today_usd: 0, week_usd: 0.09, month_usd: 6.61 }, budget: { monthly_usd: 20, source: "operator" },
+         days: [{ date: "2026-11-26", usd: 0.4, requests: 12, tokens: 51000 }, { date: "2026-11-27", usd: 0.1, requests: 3 }],
+         top_models: [{ model: "anthropic/claude-sonnet-5.5", usd: 3.1, requests: 221 }],
+         source: "openrouter-api", observed_at: "2026-11-27T09:50:00Z", billing_url: "https://openrouter.ai/settings/credits" } };
+const GEMINI = { pool: "gemini-metered", label: "Gemini API", measured: false, limits: [],
+  api: { spend: { today_usd: 0.42, week_usd: 1.9, month_usd: 3.35 }, days: [{ date: "2026-11-27", usd: 0.42, requests: 5 }],
+         source: "local-meter", source_label: "Measured by Crossfeed", observed_at: "2026-11-27T09:50:00Z" } };
+const apiPrefs = (extra) => ({ show: "used", tabs: ["overview", "claude", "openrouter-free", "gemini-metered", "other"], tiles: {}, hidden_tiles: {}, hidden_tabs: [], ...extra });
+const withApi = () => { const doc = glance(); doc.pools.push(OPENROUTER); doc.pools.splice(doc.pools.findIndex((p) => p.pool === "gemini-metered"), 1, GEMINI); return doc; };
+
+test("an API pool is a tab of its own, not a line in Other", () => {
+  const model = build(withApi(), apiPrefs()).window.VM;
+  assert.deepEqual([...model.order], ["claude", "openrouter-free", "gemini-metered"]);
+  assert.equal(model.tabs["openrouter-free"].title, "OpenRouter");
+  assert.equal(model.tabs["gemini-metered"].title, "Gemini API");
+  assert.deepEqual([...model.other], []);
+  // A pool with an api block and no tab in the preferences still gets one, after the listed ones.
+  const unlisted = build(withApi(), apiPrefs({ tabs: ["overview", "claude", "other"] })).window.VM;
+  assert.ok(unlisted.order.includes("openrouter-free") && unlisted.order.includes("gemini-metered"));
+});
+
+test("the Spend tile paces the month against the operator's budget and says where a local figure comes from", () => {
+  const context = build(withApi(), apiPrefs());
+  const html = render(context, "openrouter-free", ["spend"]);
+  assert.match(html, /\$6\.61 of \$20\.00/);
+  assert.match(html, /This month/);
+  assert.match(html, /Today <\/span> <b class="num">\$0\.00|Today<\/span> <b class="num">\$0\.00/);
+  assert.match(html, /class="tick"/);                                   // the pace tick: the share of the month gone
+  const gemini = render(context, "gemini-metered", ["spend"]);
+  assert.match(gemini, /Measured by Crossfeed/);
+  assert.match(gemini, /No monthly budget/);
+  assert.doesNotMatch(gemini, /class="bar"/);                          // no budget, no bar: figures only
+  // The operator's own figure in the preferences wins over the one the glance carried, and left mode flips the words.
+  const budgeted = build(withApi(), apiPrefs({ budgets: { "gemini-metered": 10, "openrouter-free": 7 } }));
+  assert.match(render(budgeted, "gemini-metered", ["spend"]), /\$3\.35 of \$10\.00/);
+  assert.match(render(budgeted, "openrouter-free", ["spend"]), /\$6\.61 of \$7\.00/);
+  assert.match(render(budgeted, "gemini-metered", ["spend"], "left"), /\$6\.65 left/);
+  const over = build(withApi(), apiPrefs({ budgets: { "openrouter-free": 5 } }));
+  assert.match(render(over, "openrouter-free", ["spend"]), /Over budget/);
+});
+
+test("Balance, Models and Activity draw what the pool reports and nothing else", () => {
+  const context = build(withApi(), apiPrefs());
+  const balance = render(context, "openrouter-free", ["balance"]);
+  assert.match(balance, /Credit[\s\S]*\$26\.00/);
+  assert.match(balance, /Left[\s\S]*\$1\.79/);
+  assert.match(balance, /Key limit[\s\S]*\$10\.00/);
+  assert.match(balance, /data-href="https:\/\/openrouter\.ai\/settings\/credits"/);
+  assert.match(render(context, "openrouter-free", ["models"]), /claude-sonnet-5\.5[\s\S]*\$3\.10/);
+  assert.match(render(context, "openrouter-free", ["activity"]), /\$0\.10<\/b> <span class="q">today/);
+  // Gemini reports no balance and no models: those tiles are not drawn.
+  assert.equal(context.window.tileAvailable("gemini-metered", "balance"), false);
+  assert.equal(context.window.tileAvailable("gemini-metered", "models"), false);
+  assert.equal(context.window.tileAvailable("gemini-metered", "spend"), true);
+  assert.deepEqual([...context.window.blocksFor("gemini-metered", "B")], ["spend", "activity", "status", "links"].filter((id) => id !== "status"));
+});
+
+test("an API tab's links add Billing, and the usage link goes to the pool", () => {
+  const html = render(build(withApi(), apiPrefs()), "openrouter-free", ["links"]);
+  assert.match(html, /href="\/usage#openrouter-free"[^>]*>Usage and cost/);
+  assert.match(html, /href="https:\/\/status\.openrouter\.ai\/"[^>]*>Status/);
+  assert.match(html, /href="https:\/\/openrouter\.ai\/settings\/credits"[^>]*>Billing/);
+});
+
+test("the graph offers the metrics a pool has and a 7, 14 or 30 day range, and keeps the operator's choice", () => {
+  const model = build(withApi(), apiPrefs({ tile_options: { "openrouter-free/activity": { metric: "requests", days: 7 } } })).window;
+  const sp = model.sparkInfo("openrouter-free", "activity");
+  assert.equal(sp.metric, "requests");
+  assert.equal(sp.days, 7);
+  assert.deepEqual([...sp.metrics], ["tokens", "cost", "requests"]);
+  assert.match(render(model, "openrouter-free", ["activity"]), /requests today/);
+  // A choice the pool cannot honour falls back; a bad range falls back to 14.
+  const odd = build(withApi(), apiPrefs({ tile_options: { "gemini-metered/activity": { metric: "tokens", days: 9 } } })).window;
+  assert.equal(odd.sparkInfo("gemini-metered", "activity").metric, "cost");
+  assert.equal(odd.sparkInfo("gemini-metered", "activity").days, 14);
+  // A provider's token tile can show cost when its usage log priced it, over its 30 days.
+  const doc = glance();
+  doc.pools[0].usage_cost = { today_usd: 1.5, daily: Array.from({ length: 30 }, (_, i) => ({ day: "2026-11-" + String(i % 28 + 1).padStart(2, "0"), tokens: 1000 * (i + 1), usd: 0.1 * (i + 1) })) };
+  const costly = build(doc, apiPrefs({ tile_options: { "claude/tokens": { metric: "cost", days: 30 } } })).window;
+  const info = costly.sparkInfo("claude", "tokens");
+  assert.equal(info.values.length, 30);
+  assert.equal(info.metric, "cost");
+  assert.match(render(costly, "claude", ["tokens"]), /\$3\.00<\/b> <span class="q">today/);
+});
+
+test("the menu bar title follows icon, text, provider, window, count and extra", () => {
+  const model = (menubar) => build(withApi(), apiPrefs({ menubar })).window.VM;
+  const base = model({}).barTitle({});
+  assert.equal(base.text, "Week 71%");                      // Codex, most in deficit
+  assert.equal(base.icon, "provider");
+  assert.equal(base.logo, "openai");
+  assert.equal(model({}).barTitle({ text: "full" }).text, "Codex Week 71%");
+  assert.equal(model({}).barTitle({ text: "number", count: "left" }).text, "29% left");
+  assert.equal(model({}).barTitle({ text: "none" }).text, "");
+  assert.equal(model({}).barTitle({ icon: "crossfeed" }).icon, "crossfeed");
+  assert.equal(model({}).barTitle({ icon: "none", text: "none" }).icon, "crossfeed");   // never an invisible item
+  assert.equal(model({}).barTitle({ show: "claude", text: "full" }).text, "Claude Week 50%");
+  assert.equal(model({}).barTitle({ show: "claude", text: "full" }).logo, "claude-color");
+  assert.equal(model({}).barTitle({ window: "Week", show: "claude", text: "window" }).text, "Week 50%");
+  assert.equal(model({}).barTitle({ text: "number", extra: "pace" }).text, "71% · 48% over");
+  assert.equal(model({}).barTitle({ show: "claude", text: "number", extra: "reset" }).text, "50% · 4d 3h");
+  // a provider with no reading falls back to the most pressed one
+  assert.equal(model({}).barTitle({ show: "openrouter-free", text: "number" }).text, "71%");
+});
+
+test("settings do something visible: appearance keys, defaults and the page's own words", () => {
+  const css = fs.readFileSync(path.join(PANEL, "theme.js"), "utf8");
+  assert.match(css, /body\.panelpage\.\$\{theme\}/);        // the page and the sheet take the palette from the chosen theme, not the media query
+  const panelCss = fs.readFileSync(path.join(PANEL, "panel.css"), "utf8");
+  assert.doesNotMatch(panelCss, /prefers-color-scheme/);
+});
+
+test("the panel and the Linux tray title the shared fixture the same way (menubar/title_test.go holds the same table)", () => {
+  const doc = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "panel-r12.json"), "utf8"));
+  const prefs = { show: "used", tabs: ["overview", "claude", "codex", "copilot", "openrouter-free", "gemini-metered", "chatgpt-work", "other"], tiles: {}, hidden_tiles: {}, hidden_tabs: [] };
+  const model = build(doc, prefs).window.VM;
+  const table = [
+    [{}, "Week 71%", "provider", "openai"],
+    [{ text: "full" }, "Codex Week 71%", "provider", "openai"],
+    [{ text: "number", count: "left" }, "29% left", "provider", "openai"],
+    [{ show: "claude", text: "full" }, "Claude Week 58%", "provider", "claude-color"],
+    [{ window: "5h", text: "full" }, "Claude 5h 41%", "provider", "claude-color"],
+    [{ extra: "pace" }, "Week 71% · 48% over", "provider", "openai"],
+    [{ extra: "cost" }, "Week 71% · US$11.68 today", "provider", "openai"],
+    [{ text: "none" }, "", "provider", "openai"],
+    [{ icon: "crossfeed" }, "Week 71%", "crossfeed", "openai"],
+    [{ icon: "none" }, "Week 71%", "none", "openai"],
+    [{ icon: "none", text: "none" }, "", "crossfeed", "openai"],
+    [{ show: "openrouter-free", text: "number" }, "71%", "provider", "openai"],
+    [{ icon: "tanks", text: "loud" }, "Week 71%", "provider", "openai"],
+  ];
+  for (const [choice, text, icon, logo] of table) {
+    const got = model.barTitle({ icon: "provider", text: "window", ...choice });
+    assert.deepEqual([got.text, got.icon, got.logo], [text, icon, logo], JSON.stringify(choice));
+  }
 });

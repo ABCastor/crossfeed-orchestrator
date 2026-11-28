@@ -1,0 +1,835 @@
+{
+ "schema": 1,
+ "title": "Claude 5h 58% \u00b7 Codex 100%",
+ "generated_at": "2026-11-28T08:59:54Z",
+ "refreshed_at": "2026-11-28T08:59:54Z",
+ "pools": [
+  {
+   "pool": "claude",
+   "name": "Claude",
+   "label": "Claude",
+   "measured": true,
+   "state": "healthy",
+   "used_percent": 58,
+   "subscription": "claude",
+   "plan": {
+    "name": "Claude Max 20x"
+   },
+   "status_url": "https://status.claude.com/",
+   "reading_age_s": 240,
+   "reading_observed_at": "2026-11-28T08:59:54Z",
+   "pace": {
+    "status": "deficit",
+    "points": 17
+   },
+   "incident": {
+    "level": "minor",
+    "text": "Elevated errors on Claude Opus requests"
+   },
+   "tokens": {
+    "today": 958000542,
+    "days": [
+     604272573,
+     550288315,
+     564808884,
+     444720851,
+     378273111,
+     420267040,
+     37639449,
+     88197605,
+     10423658,
+     1003307241,
+     905005736,
+     414089197,
+     1186859695,
+     958000542
+    ]
+   },
+   "usage_cost": {
+    "today_usd": 11.26,
+    "daily": [
+     {
+      "day": "2026-10-30",
+      "tokens": 604272573,
+      "usd": 1.2
+     },
+     {
+      "day": "2026-10-31",
+      "tokens": 550288315,
+      "usd": 4.0
+     },
+     {
+      "day": "2026-11-01",
+      "tokens": 564808884,
+      "usd": 2.4
+     },
+     {
+      "day": "2026-11-02",
+      "tokens": 444720851,
+      "usd": 5.2
+     },
+     {
+      "day": "2026-11-03",
+      "tokens": 378273111,
+      "usd": 3.6
+     },
+     {
+      "day": "2026-11-04",
+      "tokens": 420267040,
+      "usd": 2.0
+     },
+     {
+      "day": "2026-11-05",
+      "tokens": 37639449,
+      "usd": 4.8
+     },
+     {
+      "day": "2026-11-06",
+      "tokens": 88197605,
+      "usd": 3.2
+     },
+     {
+      "day": "2026-11-07",
+      "tokens": 10423658,
+      "usd": 1.6
+     },
+     {
+      "day": "2026-11-08",
+      "tokens": 1003307241,
+      "usd": 4.4
+     },
+     {
+      "day": "2026-11-09",
+      "tokens": 905005736,
+      "usd": 2.8
+     },
+     {
+      "day": "2026-11-10",
+      "tokens": 414089197,
+      "usd": 1.2
+     },
+     {
+      "day": "2026-11-11",
+      "tokens": 1186859695,
+      "usd": 4.0
+     },
+     {
+      "day": "2026-11-12",
+      "tokens": 958000542,
+      "usd": 2.4
+     },
+     {
+      "day": "2026-11-13",
+      "tokens": 604272573,
+      "usd": 5.2
+     },
+     {
+      "day": "2026-11-14",
+      "tokens": 550288315,
+      "usd": 3.6
+     },
+     {
+      "day": "2026-11-15",
+      "tokens": 564808884,
+      "usd": 2.0
+     },
+     {
+      "day": "2026-11-16",
+      "tokens": 444720851,
+      "usd": 4.8
+     },
+     {
+      "day": "2026-11-17",
+      "tokens": 378273111,
+      "usd": 3.2
+     },
+     {
+      "day": "2026-11-18",
+      "tokens": 420267040,
+      "usd": 1.6
+     },
+     {
+      "day": "2026-11-19",
+      "tokens": 37639449,
+      "usd": 4.4
+     },
+     {
+      "day": "2026-11-20",
+      "tokens": 88197605,
+      "usd": 2.8
+     },
+     {
+      "day": "2026-11-21",
+      "tokens": 10423658,
+      "usd": 1.2
+     },
+     {
+      "day": "2026-11-22",
+      "tokens": 1003307241,
+      "usd": 4.0
+     },
+     {
+      "day": "2026-11-23",
+      "tokens": 905005736,
+      "usd": 2.4
+     },
+     {
+      "day": "2026-11-24",
+      "tokens": 414089197,
+      "usd": 5.2
+     },
+     {
+      "day": "2026-11-25",
+      "tokens": 1186859695,
+      "usd": 3.6
+     },
+     {
+      "day": "2026-11-26",
+      "tokens": 958000542,
+      "usd": 2.0
+     },
+     {
+      "day": "2026-11-27",
+      "tokens": 604272573,
+      "usd": 4.8
+     },
+     {
+      "day": "2026-11-28",
+      "tokens": 550288315,
+      "usd": 3.2
+     }
+    ]
+   },
+   "limits": [
+    {
+     "name": "session",
+     "title": "5-hour",
+     "kind": "window",
+     "minutes": 300,
+     "used_percent": 41,
+     "active": true,
+     "resets": "Sat 14:00",
+     "reset_at": null,
+     "scope": null,
+     "pace": {
+      "elapsed_percent": 38,
+      "status": "deficit",
+      "words": "3% in deficit",
+      "points": 3,
+      "runs_out_in_s": 240235
+     }
+    },
+    {
+     "name": "weekly",
+     "title": "Weekly",
+     "kind": "window",
+     "minutes": 10080,
+     "used_percent": 58,
+     "active": true,
+     "resets": "Tue 1 Dec 14:00",
+     "reset_at": "2026-12-01T08:59:54Z",
+     "scope": null,
+     "pace": {
+      "elapsed_percent": 41,
+      "status": "deficit",
+      "words": "17% in deficit, runs out in 2d 1h",
+      "points": 17,
+      "runs_out_in_s": 240235
+     }
+    }
+   ],
+   "limit_resets": [
+    {
+     "key": "weekly",
+     "label": "Weekly limit reset",
+     "left": 2,
+     "total": 2,
+     "clears": [
+      "seven_day"
+     ],
+     "expires_at": "2026-12-10T00:00:00Z",
+     "usable_now": true,
+     "next": true
+    }
+   ]
+  },
+  {
+   "pool": "codex",
+   "name": "Codex",
+   "label": "Codex (ChatGPT)",
+   "measured": true,
+   "state": "healthy",
+   "used_percent": 71,
+   "subscription": "codex",
+   "plan": {
+    "name": "ChatGPT Pro"
+   },
+   "status_url": "https://status.openai.com/",
+   "reading_age_s": 300,
+   "tokens": {
+    "today": 0,
+    "days": [
+     604272573,
+     550288315,
+     564808884,
+     444720851,
+     378273111,
+     420267040,
+     37639449,
+     88197605,
+     10423658,
+     1003307241,
+     905005736,
+     414089197,
+     1186859695,
+     958000542
+    ]
+   },
+   "limits": [
+    {
+     "name": "weekly",
+     "title": "Weekly",
+     "kind": "window",
+     "minutes": 10080,
+     "used_percent": 71,
+     "active": true,
+     "resets": "Thu 3 Dec 00:15",
+     "reset_at": null,
+     "scope": null,
+     "pace": {
+      "elapsed_percent": 23,
+      "status": "deficit",
+      "words": "48% in deficit",
+      "points": 48,
+      "runs_out_in_s": 240235
+     }
+    }
+   ],
+   "credits": {
+    "balance": 2,
+    "expires_at": "2026-12-12T22:44:04Z"
+   },
+   "pace": {
+    "status": "deficit",
+    "points": 48
+   }
+  },
+  {
+   "pool": "github-copilot-student",
+   "name": "GitHub Copilot",
+   "label": "GitHub Copilot",
+   "measured": true,
+   "state": "healthy",
+   "used_percent": 37,
+   "status_url": "https://www.githubstatus.com/",
+   "limits": [
+    {
+     "name": "monthly",
+     "title": "Monthly",
+     "kind": "window",
+     "minutes": 43200,
+     "used_percent": 37,
+     "active": true,
+     "resets": "Thu 10 Dec",
+     "reset_at": null,
+     "scope": null,
+     "pace": {
+      "elapsed_percent": 60,
+      "status": "surplus",
+      "words": "23% surplus",
+      "points": 23,
+      "runs_out_in_s": null
+     }
+    }
+   ],
+   "pace": {
+    "status": "surplus",
+    "points": 23
+   }
+  },
+  {
+   "pool": "openrouter-free",
+   "name": "OpenRouter",
+   "label": "OpenRouter",
+   "measured": false,
+   "state": "unknown",
+   "used_percent": null,
+   "status_url": "https://status.openrouter.ai/",
+   "limits": [],
+   "plan": {
+    "name": "Pay as you go"
+   },
+   "api": {
+    "balance_usd": 1.79,
+    "credits_usd": 26.0,
+    "key_limit_usd": 10,
+    "key_remaining_usd": 3.39,
+    "spend": {
+     "today_usd": 0.0,
+     "week_usd": 0.09,
+     "month_usd": 6.61
+    },
+    "budget": {
+     "monthly_usd": 20,
+     "source": "operator"
+    },
+    "days": [
+     {
+      "date": "2026-10-30",
+      "usd": 0.09,
+      "tokens": 3100
+     },
+     {
+      "date": "2026-10-31",
+      "usd": 0.55,
+      "tokens": 21700
+     },
+     {
+      "date": "2026-11-01",
+      "usd": 0.18,
+      "tokens": 40300
+     },
+     {
+      "date": "2026-11-02",
+      "usd": 0.64,
+      "tokens": 58900
+     },
+     {
+      "date": "2026-11-03",
+      "usd": 0.27,
+      "tokens": 6200
+     },
+     {
+      "date": "2026-11-04",
+      "usd": 0.73,
+      "tokens": 24800
+     },
+     {
+      "date": "2026-11-05",
+      "usd": 0.36,
+      "tokens": 43400
+     },
+     {
+      "date": "2026-11-06",
+      "usd": 0.82,
+      "tokens": 62000
+     },
+     {
+      "date": "2026-11-07",
+      "usd": 0.46,
+      "tokens": 9300
+     },
+     {
+      "date": "2026-11-08",
+      "usd": 0.09,
+      "tokens": 27900
+     },
+     {
+      "date": "2026-11-09",
+      "usd": 0.55,
+      "tokens": 46500
+     },
+     {
+      "date": "2026-11-10",
+      "usd": 0.18,
+      "tokens": 65100
+     },
+     {
+      "date": "2026-11-11",
+      "usd": 0.64,
+      "tokens": 12400
+     },
+     {
+      "date": "2026-11-12",
+      "usd": 0.27,
+      "tokens": 31000
+     },
+     {
+      "date": "2026-11-13",
+      "usd": 0.73,
+      "tokens": 49600
+     },
+     {
+      "date": "2026-11-14",
+      "usd": 0.36,
+      "tokens": 68200
+     },
+     {
+      "date": "2026-11-15",
+      "usd": 0.82,
+      "tokens": 15500
+     },
+     {
+      "date": "2026-11-16",
+      "usd": 0.46,
+      "tokens": 34100
+     },
+     {
+      "date": "2026-11-17",
+      "usd": 0.09,
+      "tokens": 52700
+     },
+     {
+      "date": "2026-11-18",
+      "usd": 0.55,
+      "tokens": 71300
+     },
+     {
+      "date": "2026-11-19",
+      "usd": 0.18,
+      "tokens": 18600
+     },
+     {
+      "date": "2026-11-20",
+      "usd": 0.64,
+      "tokens": 37200
+     },
+     {
+      "date": "2026-11-21",
+      "usd": 0.27,
+      "tokens": 55800
+     },
+     {
+      "date": "2026-11-22",
+      "usd": 0.73,
+      "tokens": 3100
+     },
+     {
+      "date": "2026-11-23",
+      "usd": 0.36,
+      "tokens": 21700
+     },
+     {
+      "date": "2026-11-24",
+      "usd": 0.82,
+      "tokens": 40300
+     },
+     {
+      "date": "2026-11-25",
+      "usd": 0.46,
+      "tokens": 58900
+     },
+     {
+      "date": "2026-11-26",
+      "usd": 0.09,
+      "tokens": 6200
+     },
+     {
+      "date": "2026-11-27",
+      "usd": 0.55,
+      "tokens": 24800
+     },
+     {
+      "date": "2026-11-28",
+      "usd": 0.18,
+      "tokens": 43400
+     }
+    ],
+    "top_models": [
+     {
+      "model": "anthropic/claude-sonnet-5.5",
+      "usd": 3.1,
+      "requests": 221
+     },
+     {
+      "model": "google/gemini-3-flash",
+      "usd": 1.4,
+      "requests": 96
+     },
+     {
+      "model": "deepseek/deepseek-v4.1-flash",
+      "usd": 0.62,
+      "requests": 403
+     }
+    ],
+    "source": "openrouter-api",
+    "observed_at": "2026-11-28T08:59:54Z",
+    "billing_url": "https://openrouter.ai/settings/credits"
+   }
+  },
+  {
+   "pool": "gemini-metered",
+   "name": "Gemini API",
+   "label": "Gemini API",
+   "measured": false,
+   "state": "unknown",
+   "used_percent": 0,
+   "limits": [],
+   "plan": {
+    "name": "Gemini API key"
+   },
+   "api": {
+    "spend": {
+     "today_usd": 0.42,
+     "week_usd": 1.9,
+     "month_usd": 3.35
+    },
+    "days": [
+     {
+      "date": "2026-11-08",
+      "usd": 0.07,
+      "requests": 2,
+      "tokens": 3100
+     },
+     {
+      "date": "2026-11-09",
+      "usd": 0.42,
+      "requests": 15,
+      "tokens": 21700
+     },
+     {
+      "date": "2026-11-10",
+      "usd": 0.14,
+      "requests": 11,
+      "tokens": 40300
+     },
+     {
+      "date": "2026-11-11",
+      "usd": 0.49,
+      "requests": 7,
+      "tokens": 58900
+     },
+     {
+      "date": "2026-11-12",
+      "usd": 0.21,
+      "requests": 3,
+      "tokens": 6200
+     },
+     {
+      "date": "2026-11-13",
+      "usd": 0.56,
+      "requests": 16,
+      "tokens": 24800
+     },
+     {
+      "date": "2026-11-14",
+      "usd": 0.28,
+      "requests": 12,
+      "tokens": 43400
+     },
+     {
+      "date": "2026-11-15",
+      "usd": 0.63,
+      "requests": 8,
+      "tokens": 62000
+     },
+     {
+      "date": "2026-11-16",
+      "usd": 0.35,
+      "requests": 4,
+      "tokens": 9300
+     },
+     {
+      "date": "2026-11-17",
+      "usd": 0.07,
+      "requests": 17,
+      "tokens": 27900
+     },
+     {
+      "date": "2026-11-18",
+      "usd": 0.42,
+      "requests": 13,
+      "tokens": 46500
+     },
+     {
+      "date": "2026-11-19",
+      "usd": 0.14,
+      "requests": 9,
+      "tokens": 65100
+     },
+     {
+      "date": "2026-11-20",
+      "usd": 0.49,
+      "requests": 5,
+      "tokens": 12400
+     },
+     {
+      "date": "2026-11-21",
+      "usd": 0.21,
+      "requests": 18,
+      "tokens": 31000
+     },
+     {
+      "date": "2026-11-22",
+      "usd": 0.56,
+      "requests": 14,
+      "tokens": 49600
+     },
+     {
+      "date": "2026-11-23",
+      "usd": 0.28,
+      "requests": 10,
+      "tokens": 68200
+     },
+     {
+      "date": "2026-11-24",
+      "usd": 0.63,
+      "requests": 6,
+      "tokens": 15500
+     },
+     {
+      "date": "2026-11-25",
+      "usd": 0.35,
+      "requests": 2,
+      "tokens": 34100
+     },
+     {
+      "date": "2026-11-26",
+      "usd": 0.07,
+      "requests": 15,
+      "tokens": 52700
+     },
+     {
+      "date": "2026-11-27",
+      "usd": 0.42,
+      "requests": 11,
+      "tokens": 71300
+     },
+     {
+      "date": "2026-11-28",
+      "usd": 0.14,
+      "requests": 7,
+      "tokens": 18600
+     }
+    ],
+    "top_models": [
+     {
+      "model": "gemini-3-flash",
+      "usd": 2.2,
+      "requests": 140
+     },
+     {
+      "model": "gemini-3-pro-image",
+      "usd": 1.1,
+      "requests": 9
+     }
+    ],
+    "source": "local-meter",
+    "source_label": "Measured by Crossfeed",
+    "observed_at": "2026-11-28T08:59:54Z",
+    "billing_url": "https://aistudio.google.com/usage"
+   }
+  },
+  {
+   "pool": "chatgpt-work",
+   "name": "ChatGPT Chat",
+   "label": "ChatGPT Chat via Crossfeed Chat",
+   "measured": false,
+   "state": "unknown",
+   "used_percent": null,
+   "limits": [],
+   "api": {
+    "spend": {
+     "today_usd": 0.0,
+     "week_usd": 0.0,
+     "month_usd": 0.0
+    },
+    "days": [
+     {
+      "date": "2026-11-19",
+      "usd": 0.0,
+      "requests": 2
+     },
+     {
+      "date": "2026-11-20",
+      "usd": 0.0,
+      "requests": 15
+     },
+     {
+      "date": "2026-11-21",
+      "usd": 0.0,
+      "requests": 11
+     },
+     {
+      "date": "2026-11-22",
+      "usd": 0.0,
+      "requests": 7
+     },
+     {
+      "date": "2026-11-23",
+      "usd": 0.0,
+      "requests": 3
+     },
+     {
+      "date": "2026-11-24",
+      "usd": 0.0,
+      "requests": 16
+     },
+     {
+      "date": "2026-11-25",
+      "usd": 0.0,
+      "requests": 12
+     },
+     {
+      "date": "2026-11-26",
+      "usd": 0.0,
+      "requests": 8
+     },
+     {
+      "date": "2026-11-27",
+      "usd": 0.0,
+      "requests": 4
+     },
+     {
+      "date": "2026-11-28",
+      "usd": 0.0,
+      "requests": 17
+     }
+    ],
+    "top_models": [
+     {
+      "model": "chatgpt:pro",
+      "usd": 0.0,
+      "requests": 41
+     }
+    ],
+    "source": "local-meter",
+    "source_label": "Measured by Crossfeed",
+    "observed_at": "2026-11-28T08:59:54Z"
+   }
+  }
+ ],
+ "subscriptions": [
+  {
+   "id": "claude",
+   "level": "normal",
+   "pools": [
+    "claude"
+   ]
+  },
+  {
+   "id": "codex",
+   "level": "forced",
+   "pools": [
+    "codex"
+   ]
+  }
+ ],
+ "subscription_spend": {
+  "plans": [
+   {
+    "id": "claude",
+    "name": "Claude Max 20x",
+    "amount": "183.00",
+    "currency": "GBP",
+    "period": "month",
+    "share": null,
+    "operator_amount": "183.00"
+   },
+   {
+    "id": "codex",
+    "name": "ChatGPT Pro",
+    "amount": "200",
+    "currency": "USD",
+    "period": "month",
+    "share": "1/2",
+    "operator_amount": "100.00"
+   }
+  ],
+  "usd": {
+   "total": "350",
+   "operator": "330"
+  }
+ },
+ "plugins": []
+}
