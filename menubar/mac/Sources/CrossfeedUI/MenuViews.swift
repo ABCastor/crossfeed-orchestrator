@@ -11,11 +11,31 @@ import SwiftUI
 public enum MenuControl: Hashable {
     case refresh, settings, back, reset, notifyLow, notifyReset
     case openTab(String), usage(String?), console, openURL(URL), toggleTab(String), moveTab(String, Int), settingsPage(Int)
-    case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset), refreshEvery(Int)
+    case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset)
+    /// Settings, General: the look, when the menu opens, how it reads, and the budget of an API pool (nil clears it).
+    case appearance(PanelPrefs.Appearance), openOn(String), refreshOnOpen, refreshEvery(Int), budget(String, Double?)
+    /// A tile's chart: what it plots and over how many days (tab, tile).
+    case chartMetric(String, String, ChartMetric), chartRange(String, String, Int)
+    /// A click on a tile or one of its rows: the id keeps frames of two places that go to the same target apart.
+    case at(String, LinkTarget)
     /// Settings, Tiles page: Used or Left, which tab's tiles are listed, a tile on or off, a tile one place up or down, Add tile.
     case panelShow(PanelPrefs.Show), settingsTab(String), toggleTile(String, String), moveTile(String, String, Int), addOpen, addTile(String, String)
     /// The spend policy popup, and the reset flow: Use, Cancel, Use (confirmed).
     case policyOpen, resetAsk(String), resetCancel, resetUse(String)
+}
+
+/// Where a click on a tile (or a row of one) goes: the console's usage page, an https page, another tab, the console.
+public enum LinkTarget: Hashable {
+    case usage(String?), url(URL), tab(String), console
+
+    public var control: MenuControl {
+        switch self {
+        case .usage(let pool): return .usage(pool)
+        case .url(let url): return .openURL(url)
+        case .tab(let id): return .openTab(id)
+        case .console: return .console
+        }
+    }
 }
 
 /// The one reset being asked about, run, or reported.
@@ -63,6 +83,15 @@ public final class MenuState: ObservableObject {
         policyOpen = false
         resetFlow = nil
         withAnimation(Self.animation) { selected = id }
+        // "Open on: Last used" starts here next time, also after a restart.
+        updatePanel { $0.lastTab = id }
+    }
+
+    /// The presenter with the operator's budgets and chart options (panel.json) in it.
+    public var live: Presenter? {
+        guard var presenter else { return nil }
+        presenter.panel = panel
+        return presenter
     }
 
     /// Writes one change to panel.json through the host, and shows it at once.
@@ -86,6 +115,25 @@ public final class MenuState: ObservableObject {
         [TabModel(id: Presenter.overviewID, title: "Overview", logo: nil, used: nil, pace: .unknown, hot: false)]
             + orderedTabs.filter { panel.isTabVisible($0.id) }
     }
+    /// What a tile's chart can plot, what it plots now and over how many days; nil when the tile holds no chart.
+    public struct ChartChoice: Equatable {
+        public var metrics: [ChartMetric]
+        public var metric: ChartMetric
+        public var days: Int
+    }
+
+    /// The chart a tile draws now.
+    public func chartModel(tab: String, tile: String) -> TokensModel? {
+        guard let live else { return nil }
+        if tab == Presenter.overviewID { return tile == TileID.tokens ? live.overviewPage(order: [], show: panel.show).tokens : nil }
+        let page = live.providerPage(for: tab, show: panel.show)
+        return tile == TileID.tokens ? page?.tokens : (tile == TileID.activity ? page?.activity : nil)
+    }
+
+    public func chartOptions(tab: String, tile: String) -> ChartChoice? {
+        chartModel(tab: tab, tile: tile).map { ChartChoice(metrics: $0.available, metric: $0.metric, days: $0.window) }
+    }
+
     public var canEditPolicy = true
     public var onPolicyChange: (PolicyChange) -> Void = { _ in }
     public var onSelect: (String) -> Void = { _ in }
@@ -121,7 +169,7 @@ public final class MenuState: ObservableObject {
 
     /// The provider tabs in the saved order. Hidden ones are still here; `shownTabs` drops them.
     public var orderedTabs: [TabModel] {
-        guard let tabs = presenter?.tabs else { return [] }
+        guard let tabs = live?.tabs else { return [] }
         let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         return panel.orderedTabs(tabs.map(\.id)).compactMap { byID[$0] }
     }
@@ -181,6 +229,11 @@ public final class MenuState: ObservableObject {
         if dropTile != nil { dropTile = nil }
     }
 
+    /// The control under the point; where a tile and a button in it both cover it, the smaller one is meant.
+    func control(at point: CGPoint) -> MenuControl? {
+        controlFrames.filter { $0.value.contains(point) }.min { $0.value.width * $0.value.height < $1.value.width * $1.value.height }?.key
+    }
+
     private func tile(at point: CGPoint) -> String? {
         tileFrames.first { $0.value.contains(point) }?.key
     }
@@ -191,8 +244,8 @@ public final class MenuState: ObservableObject {
             if canEditPolicy, edits.pending == nil { onPolicyChange(hit.key) }
             return true
         }
-        if let hit = controlFrames.first(where: { $0.value.contains(point) }) {
-            onControl(hit.key)
+        if let hit = control(at: point) {
+            onControl(hit)
             return true
         }
         if let hit = tile(at: point) {
@@ -273,7 +326,7 @@ public struct CrossfeedMenuView: View {
     @ViewBuilder private var panes: some View {
         if state.showsSettings {
             scrolling { SettingsPane(state: state) }
-        } else if let presenter = state.presenter {
+        } else if let presenter = state.live {
             ProviderSwitcher(state: state)
                 .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 0)
             scrolling {
@@ -321,6 +374,12 @@ public struct CrossfeedMenuView: View {
 /// The tiles of one tab, in the operator's order, as the views the layout places.
 private func pluginIDs(_ presenter: Presenter) -> [String] { presenter.glance.plugins.map(\.id) }
 
+/// A plugin tile goes to its first link, when it has one.
+private func pluginLink(_ entry: PluginEntry) -> LinkTarget? {
+    for row in entry.doc.rows { if case .link(let url) = row.kind { return .url(url) } }
+    return nil
+}
+
 struct OverviewPageView: View {
     let presenter: Presenter
     @ObservedObject var state: MenuState
@@ -329,7 +388,13 @@ struct OverviewPageView: View {
         var ids = [TileID.alert, TileID.providers, TileID.links] + pluginIDs(presenter)
         if page.subscriptions != nil { ids.append(TileID.subscriptions) }
         if page.tokens != nil { ids.append(TileID.tokens) }
+        // The status tile is there while a provider reports something; pinned by the operator it stays.
+        if !page.incidents.isEmpty || state.panel.tiles[Presenter.overviewID]?.contains(TileID.status) == true { ids.append(TileID.status) }
         return ids
+    }
+
+    private func orderIDs(_ page: OverviewPage) -> [String] {
+        state.panel.tileOrder(Presenter.overviewID, available: available(page), auto: page.incidents.isEmpty ? [] : [TileID.status])
     }
 
     private func items(_ page: OverviewPage, ids: [String]) -> [TileItem] {
@@ -339,12 +404,16 @@ struct OverviewPageView: View {
                 return TileItem(id: id, content: AnyView(ProviderCardTile(card: card, state: state)))
             }
             switch id {
-            case TileID.subscriptions: return page.subscriptions.map { TileItem(id: id, content: AnyView(SubscriptionsTile(model: $0))) }
-            case TileID.tokens: return page.tokens.map { TileItem(id: id, half: false, content: AnyView(TokensTile(tokens: $0))) }
+            case TileID.subscriptions:
+                return page.subscriptions.map { TileItem(id: id, link: .console, content: AnyView(SubscriptionsTile(model: $0))) }
+            case TileID.tokens:
+                return page.tokens.map { TileItem(id: id, half: false, link: .usage(nil), content: AnyView(TokensTile(tokens: $0, tab: Presenter.overviewID, tile: id, state: state))) }
+            case TileID.status:
+                return TileItem(id: id, content: AnyView(OverviewStatusTile(rows: page.incidents, state: state)))
             case TileID.links: return TileItem(id: id, content: AnyView(LinksTile(links: page.links, state: state)))
             default:
                 return presenter.glance.plugins.first { $0.id == id }.map {
-                    TileItem(id: id, content: AnyView(PluginTile(entry: $0, show: state.panel.show, state: state)))
+                    TileItem(id: id, link: pluginLink($0), content: AnyView(PluginTile(entry: $0, show: state.panel.show, state: state)))
                 }
             }
         }
@@ -353,7 +422,7 @@ struct OverviewPageView: View {
     var body: some View {
         let shown = state.shownTabs.map(\.id).filter { $0 != Presenter.overviewID && $0 != "other" }
         let page = presenter.overviewPage(order: shown, show: state.panel.show)
-        let ids = state.panel.tileOrder(Presenter.overviewID, available: available(page))
+        let ids = orderIDs(page)
         let tiles = items(page, ids: ids)
         VStack(alignment: .leading, spacing: 0) {
             OverviewHeader(alert: ids.contains(TileID.alert) ? page.alert : nil, state: state)
@@ -373,20 +442,33 @@ struct ProviderPageView: View {
     @ObservedObject var state: MenuState
 
     private func items(ids: [String]) -> [TileItem] {
-        ids.compactMap { id -> TileItem? in
+        let usage = LinkTarget.usage(page.usagePool)
+        return ids.compactMap { id -> TileItem? in
             switch id {
-            case TileID.limits: return TileItem(id: id, content: AnyView(LimitsTile(groups: page.groups, notMetered: page.notMetered)))
+            case TileID.limits:
+                return TileItem(id: id, link: usage, content: AnyView(LimitsTile(groups: page.groups, notMetered: page.notMetered, usagePool: page.usagePool)))
             case TileID.resets: return TileItem(id: id, content: AnyView(ResetsTile(rows: page.resets, state: state)))
-            case TileID.tokens: return page.tokens.map { TileItem(id: id, half: true, content: AnyView(TokensTile(tokens: $0))) }
+            case TileID.tokens:
+                return page.tokens.map { TileItem(id: id, half: true, link: usage, content: AnyView(TokensTile(tokens: $0, tab: page.id, tile: id, state: state))) }
             case TileID.policy:
                 return page.policy.map {
                     TileItem(id: id, half: !state.policyOpen, content: AnyView(PolicyTile(policy: $0, state: state, now: presenter.now)))
                 }
-            case TileID.credits: return page.credits.map { TileItem(id: id, half: true, content: AnyView(CreditsTile(credits: $0))) }
+            case TileID.credits: return page.credits.map { TileItem(id: id, half: true, link: usage, content: AnyView(CreditsTile(credits: $0))) }
+            case TileID.spend:
+                return page.spend.map { TileItem(id: id, link: usage, content: AnyView(SpendTile(model: $0))) }
+            case TileID.balance:
+                return page.balance.map { TileItem(id: id, half: true, link: page.balanceURL.map(LinkTarget.url) ?? usage, content: AnyView(BalanceTile(model: $0))) }
+            case TileID.models:
+                return page.models.isEmpty ? nil : TileItem(id: id, link: usage, content: AnyView(ModelsTile(rows: page.models)))
+            case TileID.activity:
+                return page.activity.map { TileItem(id: id, half: true, link: usage, content: AnyView(TokensTile(tokens: $0, tab: page.id, tile: id, state: state, title: "Activity"))) }
+            case TileID.status:
+                return page.status.map { TileItem(id: id, link: $0.url.map(LinkTarget.url), content: AnyView(StatusTile(model: $0))) }
             case TileID.links: return TileItem(id: id, content: AnyView(LinksTile(links: page.links, state: state)))
             default:
                 return presenter.glance.plugins.first { $0.id == id }.map {
-                    TileItem(id: id, content: AnyView(PluginTile(entry: $0, show: state.panel.show, state: state)))
+                    TileItem(id: id, link: pluginLink($0), content: AnyView(PluginTile(entry: $0, show: state.panel.show, state: state)))
                 }
             }
         }
@@ -416,10 +498,12 @@ struct OverviewHeader: View {
                     Text(alert.text).font(CF.face(13, .semibold)).monospacedDigit()
                         .foregroundStyle(alert.hot ? CF.humanText : CF.ink).lineLimit(1)
                 }
+                .contentShape(Rectangle())
+                .routedIf(alert.tab.map { .at("alert", .tab($0)) })
                 .accessibilityElement(children: .combine)
             }
             Spacer(minLength: 4)
-            HeaderButton(symbol: "arrow.clockwise", label: state.isReloading ? "Updating" : "Refresh now", control: .refresh, state: state)
+            RefreshButton(state: state)
             HeaderButton(symbol: "slider.horizontal.3", label: "Settings", control: .settings, state: state)
         }
         .padding(.leading, 16).padding(.trailing, 10).padding(.top, 4).padding(.bottom, 8)
@@ -449,21 +533,11 @@ struct ProviderHeader: View {
             HStack(alignment: .center, spacing: 0) {
                 Text(state.isReloading ? "Updating…" : page.updated).font(CF.face(12)).foregroundStyle(CF.quiet).lineLimit(1)
                 Spacer(minLength: 4)
-                HeaderButton(symbol: "arrow.clockwise", label: "Refresh now", control: .refresh, state: state)
+                RefreshButton(state: state)
                 HeaderButton(symbol: "slider.horizontal.3", label: "Settings", control: .settings, state: state)
                     .padding(.trailing, -6)
             }
             .padding(.top, 9)
-            if let incident = page.incident {
-                HStack(alignment: .top, spacing: 7) {
-                    Circle().fill(CF.human).frame(width: 6, height: 6).padding(.top, 5)
-                    (Text(incident.word).font(CF.face(12, .semibold)).foregroundColor(incident.severe ? CF.humanText : CF.ink)
-                        + Text(" · " + incident.text).font(CF.face(12)).foregroundColor(CF.ink))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, 8)
-                .accessibilityElement(children: .combine)
-            }
         }
         .padding(.horizontal, 16).padding(.top, 1).padding(.bottom, 10)
     }
@@ -474,13 +548,21 @@ struct ProviderHeader: View {
 struct ProviderSwitcher: View {
     @ObservedObject var state: MenuState
 
+    /// The width the names need side by side; past the strip's width only the selected tab keeps its name.
+    static func needsCompact(_ tabs: [TabModel]) -> Bool {
+        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        let width = tabs.reduce(CGFloat(0)) { $0 + ($1.title as NSString).size(withAttributes: [.font: font]).width.rounded(.up) + 6 }
+        return width > MenuMetrics.width - 12 - 2
+    }
+
     var body: some View {
         let tabs = state.shownTabs
+        let compact = Self.needsCompact(tabs)
         let source = tabs.firstIndex { $0.id == state.draggedTile }
         HStack(spacing: 0) {
             ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                 if index > 0 { Spacer(minLength: 0) }
-                ProviderTile(tab: tab, isSelected: tab.id == state.current, show: state.panel.show) { state.onSelect(tab.id) }
+                ProviderTile(tab: tab, isSelected: tab.id == state.current, show: state.panel.show, compact: compact) { state.onSelect(tab.id) }
                     .opacity(tab.id == state.draggedTile ? 0.5 : 1)
                     .overlay(alignment: (source ?? index) < index ? .trailing : .leading) {
                         if tab.id == state.dropTile && tab.id != state.draggedTile {
@@ -505,6 +587,8 @@ struct ProviderTile: View {
     let tab: TabModel
     let isSelected: Bool
     var show: PanelPrefs.Show = .used
+    /// A crowded strip: icons only, and the name of the selected tab.
+    var compact = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -517,10 +601,12 @@ struct ProviderTile: View {
                 } else {
                     Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(height: 17)
                 }
-                Text(tab.title).font(CF.face(10, isSelected ? .semibold : .medium)).lineLimit(1).fixedSize()
+                if !compact || isSelected {
+                    Text(compact ? tab.short : tab.title).font(CF.face(10, isSelected ? .semibold : .medium)).lineLimit(1).fixedSize()
+                }
             }
             .foregroundStyle(isSelected ? CF.machineText : CF.ink)
-            .padding(.horizontal, 3).padding(.top, 6).frame(height: 44, alignment: .top)
+            .padding(.horizontal, compact ? 5 : 3).padding(.top, 6).frame(height: 44, alignment: .top)
             .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? CF.tile : (hovering ? CF.hover : Color.clear)))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isSelected ? CF.tileEdge : Color.clear, lineWidth: 0.5))
             .background(GeometryReader { geo in
@@ -546,6 +632,10 @@ struct ControlFrames: PreferenceKey {
 }
 
 extension View {
+    @ViewBuilder func routedIf(_ control: MenuControl?) -> some View {
+        if let control { routed(control) } else { self }
+    }
+
     /// Registers this view's frame so the host can route a click on it (see MenuControl).
     func routed(_ control: MenuControl) -> some View {
         background(GeometryReader { geo in
@@ -580,6 +670,34 @@ struct QuotaTick: View {
             }
         }
         .frame(height: 2)
+    }
+}
+
+/// The refresh icon: it turns while a reading is on its way, so the cached numbers on screen are known to be moving.
+struct RefreshButton: View {
+    @ObservedObject var state: MenuState
+    @State private var hovering = false
+    @State private var turn = 0.0
+
+    var body: some View {
+        Button { state.onControl(.refresh) } label: {
+            Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .regular))
+                .foregroundStyle(hovering || state.isReloading ? CF.ink : CF.quiet)
+                .rotationEffect(.degrees(turn))
+                .frame(width: 26, height: 22)
+                .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? CF.hover : Color.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).routed(.refresh).onHover { hovering = $0 }
+        .accessibilityLabel(state.isReloading ? "Updating" : "Refresh now")
+        .onChange(of: state.isReloading) { reloading in
+            if reloading && !state.reducedMotion {
+                turn = 0
+                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { turn = 360 }
+            } else {
+                withAnimation(nil) { turn = 0 }
+            }
+        }
     }
 }
 

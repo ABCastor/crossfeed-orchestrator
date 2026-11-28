@@ -25,21 +25,18 @@ final class Round9PrefsTests: XCTestCase {
         let prefs = BarPrefs()
         XCTAssertEqual(prefs.icon, .logo)
         XCTAssertEqual(prefs.text, .window)
-        XCTAssertEqual(prefs.refreshSeconds, 300)
         XCTAssertFalse(prefs.notifyLow)
         XCTAssertFalse(prefs.notifyReset)
     }
 
-    func testTheOldTanksWithWindowPickBecomesTheLogoOnceAndAMinuteBecomesFive() {
+    func testTheOldTanksWithWindowPickBecomesTheLogoOnce() {
         let (d, suite) = defaults()
         defer { d.removePersistentDomain(forName: suite) }
         d.set("tanks", forKey: "crossfeed.bar.icon")
         d.set("window", forKey: "crossfeed.bar.text")
-        d.set(60, forKey: "crossfeed.bar.refresh")
         let store = BarPrefsStore(defaults: d)
         var prefs = store.load()
         XCTAssertEqual(prefs.icon, .logo)
-        XCTAssertEqual(prefs.refreshSeconds, 300)
         // Migrated for good: the choice is saved, and a later pick of tanks is respected.
         XCTAssertEqual(d.string(forKey: "crossfeed.bar.icon"), "logo")
         prefs.icon = .tanks
@@ -52,11 +49,9 @@ final class Round9PrefsTests: XCTestCase {
         defer { d.removePersistentDomain(forName: suite) }
         d.set("tanks", forKey: "crossfeed.bar.icon")
         d.set("full", forKey: "crossfeed.bar.text")
-        d.set(900, forKey: "crossfeed.bar.refresh")
         let prefs = BarPrefsStore(defaults: d).load()
         XCTAssertEqual(prefs.icon, .tanks)
         XCTAssertEqual(prefs.text, .full)
-        XCTAssertEqual(prefs.refreshSeconds, 900)
     }
 
     func testNotificationChoicesPersist() {

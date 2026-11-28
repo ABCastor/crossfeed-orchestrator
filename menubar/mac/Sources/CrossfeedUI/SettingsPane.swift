@@ -8,7 +8,7 @@ struct SettingsPane: View {
     @ObservedObject var state: MenuState
 
     private var summary: BarSummary {
-        state.presenter?.barSummary(state.prefs)
+        state.live?.barSummary(state.prefs)
             ?? BarSummary(text: BarPrefs.format(name: "Claude", window: "Week", used: 42, count: state.prefs.count, text: state.prefs.text),
                           left: 42, right: nil, deficit: false, tooltip: "", logo: .claude, icon: state.prefs.effective.icon,
                           name: "Claude", window: "Week", used: 42)
@@ -38,17 +38,19 @@ struct SettingsPane: View {
             .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 10)
 
             HStack(spacing: 2) {
-                Chip("Tiles", selected: state.settingsPage == 0, control: .settingsPage(0), state: state)
-                Chip("Tabs", selected: state.settingsPage == 1, control: .settingsPage(1), state: state)
-                Chip("Menu bar", selected: state.settingsPage == 2, control: .settingsPage(2), state: state)
+                Chip("General", selected: state.settingsPage == 0, control: .settingsPage(0), state: state)
+                Chip("Tiles", selected: state.settingsPage == 1, control: .settingsPage(1), state: state)
+                Chip("Tabs", selected: state.settingsPage == 2, control: .settingsPage(2), state: state)
+                Chip("Menu bar", selected: state.settingsPage == 3, control: .settingsPage(3), state: state)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, MenuMetrics.horizontal - 8).padding(.top, 6)
 
             switch state.settingsPage {
-            case 1: TabsEditor(state: state)
-            case 2: barOptions
-            default: TilesEditor(state: state)
+            case 1: TilesEditor(state: state)
+            case 2: TabsEditor(state: state)
+            case 3: barOptions
+            default: GeneralSettings(state: state)
             }
         }
     }
@@ -80,15 +82,14 @@ struct SettingsPane: View {
                     Chip("Used", selected: prefs.count == .used, control: .count(.used), state: state)
                     Chip("Left", selected: prefs.count == .left, control: .count(.left), state: state)
                 }
-                SettingRow("Tanks") {
-                    Text("Left 5-hour, right weekly.")
-                        .font(CF.face(11)).foregroundStyle(CF.quiet).fixedSize(horizontal: false, vertical: true)
-                }
                 SettingRow("Icon") {
-                    Chip("Tanks", selected: prefs.icon == .tanks, control: .icon(.tanks), state: state)
-                    Chip("Logo", selected: prefs.icon == .logo, control: .icon(.logo), state: state)
-                    Chip("Off", selected: prefs.icon == .none, control: .icon(.none), state: state)
+                    Chip("Crossfeed", selected: prefs.icon == .tanks, control: .icon(.tanks), state: state)
+                    Chip("Provider logo", selected: prefs.icon == .logo, control: .icon(.logo), state: state)
+                    Chip("None", selected: prefs.icon == .none, control: .icon(.none), state: state)
                 }
+                SettingNote(prefs.icon == .tanks ? "Two tanks: the left is the 5-hour window, the right the weekly one."
+                            : (prefs.icon == .logo ? "The logo of the provider the text is about: the tightest one."
+                               : (prefs.text == .none ? "Nothing to draw: the Crossfeed icon comes back." : "Text only.")))
                 SettingRow("Text") {
                     ForEach(texts, id: \.0) { text, sample in
                         Chip(sample, selected: prefs.text == text, control: .text(text), state: state)
@@ -100,17 +101,10 @@ struct SettingsPane: View {
                     Chip("Pace", selected: prefs.extra == .pace, control: .extra(.pace), state: state)
                     Chip("Cost today", selected: prefs.extra == .cost, control: .extra(.cost), state: state)
                 }
-                SettingRow("Resets") {
-                    Chip("Countdown", selected: prefs.reset == .countdown, control: .resets(.countdown), state: state)
-                    Chip("Clock", selected: prefs.reset == .clock, control: .resets(.clock), state: state)
-                }
-                SettingRow("Notify") {
-                    Chip("Running low", selected: prefs.notifyLow, control: .notifyLow, state: state)
-                    Chip("Reset", selected: prefs.notifyReset, control: .notifyReset, state: state)
-                }
-                SettingRow("Refresh") {
-                    ForEach(BarPrefs.refreshChoices, id: \.self) { seconds in
-                        Chip("\(seconds / 60) min", selected: prefs.refreshSeconds == seconds, control: .refreshEvery(seconds), state: state)
+                if prefs.extra == .reset {
+                    SettingRow("Resets") {
+                        Chip("Countdown", selected: prefs.reset == .countdown, control: .resets(.countdown), state: state)
+                        Chip("Clock", selected: prefs.reset == .clock, control: .resets(.clock), state: state)
                     }
                 }
             }
@@ -118,12 +112,100 @@ struct SettingsPane: View {
 
             MenuDivider(inset: true).padding(.top, 10)
             Button { state.onControl(.reset) } label: {
-                Text("Reset to defaults").font(CF.face(12, .medium)).foregroundStyle(CF.machineText)
+                Text("Reset the menu bar to defaults").font(CF.face(12, .medium)).foregroundStyle(CF.machineText)
                     .frame(minHeight: 28, alignment: .leading).contentShape(Rectangle())
             }
             .buttonStyle(.plain).routed(.reset)
             .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 6)
         }
+    }
+}
+
+/// Settings, General: the look, which tab opens, how the numbers read, when the menu reads again, the notifications and
+/// the monthly budget of each API pool.
+struct GeneralSettings: View {
+    @ObservedObject var state: MenuState
+
+    /// The API pools that report money: only those have something a budget can be set against.
+    private var apiTabs: [TabModel] { state.orderedTabs.filter { state.live?.isBudgetable($0.id) == true } }
+
+    var body: some View {
+        let panel = state.panel, prefs = state.prefs
+        let every = Array(Set(PanelPrefs.refreshChoices + [panel.refreshEveryMinutes])).sorted()
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingRow("Appearance") {
+                    ForEach(PanelPrefs.Appearance.allCases, id: \.self) { look in
+                        Chip(look.title, selected: panel.appearance == look, control: .appearance(look), state: state)
+                    }
+                }
+                SettingRow("Show") {
+                    Chip("Used", selected: panel.show == .used, control: .panelShow(.used), state: state)
+                    Chip("Left", selected: panel.show == .left, control: .panelShow(.left), state: state)
+                }
+                SettingRow("Open on") {
+                    Chip("Last used", selected: panel.openOn == "last", control: .openOn("last"), state: state)
+                    Chip("Overview", selected: panel.openOn == Presenter.overviewID, control: .openOn(Presenter.overviewID), state: state)
+                    ForEach(state.shownTabs.filter { $0.id != Presenter.overviewID }) { tab in
+                        Chip(tab.title, selected: panel.openOn == tab.id, control: .openOn(tab.id), state: state)
+                    }
+                }
+                SettingRow("Refresh") {
+                    Chip("When opened", selected: panel.refreshOnOpen, control: .refreshOnOpen, state: state)
+                }
+                SettingNote(panel.refreshOnOpen ? "Opening the menu shows what it has and reads again if that is over a minute old."
+                            : "Opening the menu does not read again.")
+                SettingRow("Every") {
+                    ForEach(every, id: \.self) { minutes in
+                        Chip(minutes == 0 ? "Off" : "\(minutes) min", selected: panel.refreshEveryMinutes == minutes, control: .refreshEvery(minutes), state: state)
+                    }
+                }
+                SettingRow("Notify") {
+                    Chip("Running low", selected: prefs.notifyLow, control: .notifyLow, state: state)
+                    Chip("Reset", selected: prefs.notifyReset, control: .notifyReset, state: state)
+                }
+            }
+            .padding(.horizontal, MenuMetrics.horizontal - 8).padding(.top, 10)
+            if !apiTabs.isEmpty {
+                MenuDivider(inset: true).padding(.vertical, 10)
+                Text("Monthly budget").font(CF.face(12, .semibold)).foregroundStyle(CF.quiet)
+                    .padding(.horizontal, MenuMetrics.horizontal).padding(.bottom, 6)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(apiTabs) { tab in
+                        let set = panel.budgets[tab.id]
+                        let choices = Array(Set(PanelPrefs.budgetChoices + (set.map { [$0] } ?? []))).sorted()
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(tab.title).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet).padding(.leading, 8)
+                            Flow(spacing: 2, rowSpacing: 2) {
+                                Chip("None", selected: set == nil, control: .budget(tab.id, nil), state: state)
+                                ForEach(choices, id: \.self) { usd in
+                                    Chip(Presenter.usdPlain(usd), selected: set == usd, control: .budget(tab.id, usd), state: state)
+                                }
+                            }
+                            if set == nil, let carried = state.live?.readingBudget(tab.id) {
+                                Text("Uses the reading's \(Presenter.usdPlain(carried)) until you pick one.")
+                                    .font(CF.face(11)).foregroundStyle(CF.quiet).padding(.leading, 8)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, MenuMetrics.horizontal - 8)
+                Text("The tab's bar shows spend against it. Nothing stops at it.")
+                    .font(CF.face(11)).foregroundStyle(CF.quiet).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, MenuMetrics.horizontal).padding(.top, 6)
+            }
+            Spacer(minLength: 0).frame(height: 12)
+        }
+    }
+}
+
+struct SettingNote: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text).font(CF.face(11)).foregroundStyle(CF.quiet).fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 8 + SettingRow<EmptyView>.labelWidth).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -158,35 +240,37 @@ struct TilesEditor: View {
 
     private static let names = ["limits": "Limits", "resets": "Resets", "tokens": "Tokens", "policy": "Spend policy",
                                 "credits": "Credits", "links": "Links", "alert": "Alert", "providers": "Providers",
-                                "subscriptions": "Subscriptions"]
+                                "subscriptions": "Subscriptions", "status": "Status", "spend": "Spend", "balance": "Balance",
+                                "models": "Models", "activity": "Activity"]
 
     private func name(_ id: String, plugins: [PluginEntry]) -> String {
         Self.names[id] ?? plugins.first { $0.id == id }?.doc.title ?? String(id.split(separator: "/").last ?? Substring(id))
     }
 
     var body: some View {
-        let presenter = state.presenter
+        let presenter = state.live
         let plugins = presenter?.glance.plugins ?? []
         let tab = state.settingsTab
+        let overview = presenter?.overviewPage(order: [], show: state.panel.show)
         let builtIns: [String] = {
             if tab == Presenter.overviewID {
-                let overview = presenter?.overviewPage(order: [], show: state.panel.show)
-                return [TileID.alert, TileID.providers, TileID.links]
+                return [TileID.alert, TileID.providers, TileID.links, TileID.status]
                     + (overview?.subscriptions != nil ? [TileID.subscriptions] : []) + (overview?.tokens != nil ? [TileID.tokens] : [])
             }
             return presenter?.providerPage(for: tab, show: state.panel.show)?.available ?? PanelPrefs.providerTiles
         }()
-        let listed = state.panel.listed(tab, builtIns: builtIns)
+        // Overview's status tile is on by itself while a provider reports an incident.
+        let auto = tab == Presenter.overviewID && overview?.incidents.isEmpty == false ? [TileID.status] : []
+        let listed = state.panel.listed(tab, builtIns: builtIns, auto: auto)
         let on = listed.on.filter { $0 != TileID.alert }
         let alertOn = listed.on.contains(TileID.alert)
         let pluginCandidates = plugins.map(\.id).filter { !listed.on.contains($0) }
         let candidates = listed.off + builtIns.filter { !listed.on.contains($0) && !listed.off.contains($0) } + pluginCandidates
+        let chart = PanelPrefs.chartTile(on: tab, available: tab == Presenter.overviewID ? (overview?.tokens != nil ? [TileID.tokens] : []) : builtIns)
+            .flatMap { id in listed.on.contains(id) ? id : nil }
+        let choice = chart.flatMap { state.chartOptions(tab: tab, tile: $0) }
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                SettingRow("Show") {
-                    Chip("Used", selected: state.panel.show == .used, control: .panelShow(.used), state: state)
-                    Chip("Left", selected: state.panel.show == .left, control: .panelShow(.left), state: state)
-                }
                 SettingRow("Tab") {
                     ForEach(state.shownTabs) { tab in
                         Chip(tab.title, selected: state.settingsTab == tab.id, control: .settingsTab(tab.id), state: state)
@@ -229,6 +313,24 @@ struct TilesEditor: View {
                     }
                 }
                 .padding(.horizontal, 6)
+            }
+            if let chart, let choice {
+                MenuDivider(inset: true).padding(.vertical, 10)
+                VStack(alignment: .leading, spacing: 10) {
+                    if choice.metrics.count > 1 {
+                        SettingRow("Chart") {
+                            ForEach(choice.metrics, id: \.self) { metric in
+                                Chip(metric.title, selected: choice.metric == metric, control: .chartMetric(tab, chart, metric), state: state)
+                            }
+                        }
+                    }
+                    SettingRow(choice.metrics.count > 1 ? "Range" : "Chart range") {
+                        ForEach(PanelPrefs.rangeChoices, id: \.self) { days in
+                            Chip("\(days) days", selected: choice.days == days, control: .chartRange(tab, chart, days), state: state)
+                        }
+                    }
+                }
+                .padding(.horizontal, MenuMetrics.horizontal - 8)
             }
             Spacer(minLength: 0).frame(height: 10)
         }
@@ -390,6 +492,7 @@ struct Preview: View {
 }
 
 struct SettingRow<Content: View>: View {
+    static var labelWidth: CGFloat { 74 }
     let label: String
     @ViewBuilder let content: Content
 
@@ -400,8 +503,8 @@ struct SettingRow<Content: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(label).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet)
-                .frame(width: 58, alignment: .leading).padding(.leading, 8)
+            Text(label).font(CF.face(11.5, .medium)).foregroundStyle(CF.quiet).lineLimit(2)
+                .frame(width: Self.labelWidth, alignment: .leading).padding(.leading, 8)
             Flow(spacing: 2, rowSpacing: 2) { content }
         }
     }

@@ -131,6 +131,8 @@ public struct Pool: Decodable, Equatable {
     public var tokens: TokenSeries?
     /// Limit resets held: Claude's carry a `key` the menu can use.
     public var limitResets: [LimitReset]
+    /// Spend, balance, models and daily activity of a pool billed per token, by prepaid credit or through a relay.
+    public var api: ApiBlock?
 
     /// A pool whose every model is archived or withdrawn is on its way out: the bar never leads with it.
     public var isRetired: Bool {
@@ -143,7 +145,7 @@ public struct Pool: Decodable, Equatable {
         case resetAt = "reset_at", pace, limits, gaugeError = "gauge_error", staleAgeS = "stale_age_s"
         case levelControl = "level_control", models, archivedModels = "archived"
         case credits, statusURL = "status_url", usageCost = "usage_cost", perModel = "per_model"
-        case incident, billing, modelQuota = "model_quota", tokens, limitResets = "limit_resets"
+        case incident, billing, modelQuota = "model_quota", tokens, limitResets = "limit_resets", api
     }
 
     public init(from decoder: Decoder) throws {
@@ -174,6 +176,7 @@ public struct Pool: Decodable, Equatable {
         staleAgeS = try? c.decodeIfPresent(Double.self, forKey: .staleAgeS)
         tokens = try? c.decodeIfPresent(TokenSeries.self, forKey: .tokens)
         limitResets = (try? c.decodeIfPresent([LimitReset].self, forKey: .limitResets)) ?? []
+        api = try? c.decodeIfPresent(ApiBlock.self, forKey: .api)
         if let text = try? c.decodeIfPresent(String.self, forKey: .gaugeError) {
             gaugeError = text
         } else if let object = try? c.decodeIfPresent([String: JSONScalar].self, forKey: .gaugeError) {

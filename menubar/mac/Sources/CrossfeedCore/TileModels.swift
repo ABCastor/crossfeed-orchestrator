@@ -5,6 +5,7 @@ import Foundation
 public enum TileID {
     public static let limits = "limits", resets = "resets", tokens = "tokens", policy = "policy", credits = "credits", links = "links"
     public static let alert = "alert", providers = "providers", subscriptions = "subscriptions"
+    public static let status = "status", spend = "spend", balance = "balance", models = "models", activity = "activity"
     public static func provider(_ id: String) -> String { "provider:" + id }
     public static func isPlugin(_ id: String) -> Bool { id.hasPrefix("plugin:") }
 }
@@ -100,9 +101,21 @@ public struct ResetRow: Equatable, Identifiable {
     public var effect: String?           // "Weekly 58% → 0% · Fable 16% → 0%"
 }
 
+/// A tile's chart: today's figure and the bars. `days` holds the metric as whole numbers (cost is in cents).
 public struct TokensModel: Equatable {
-    public var today: String             // "958M"
+    public var today: String             // "958M", "$0.40"
     public var days: [Int64]
+    public var metric = ChartMetric.tokens
+    /// The range asked for (7, 14 or 30 days); `days` has at most that many.
+    public var window = 14
+    /// What the pool has to plot; the metric chips offer these.
+    public var available: [ChartMetric] = [.tokens]
+    public var caption = " tokens today"
+
+    public init(today: String, days: [Int64], metric: ChartMetric = .tokens, window: Int = 14, available: [ChartMetric] = [.tokens],
+                caption: String = " tokens today") {
+        self.today = today; self.days = days; self.metric = metric; self.window = window; self.available = available; self.caption = caption
+    }
 }
 
 public struct CreditsModel: Equatable {
@@ -111,7 +124,7 @@ public struct CreditsModel: Equatable {
 }
 
 public struct LinkItem: Equatable, Identifiable {
-    public enum Kind: Equatable { case usage(String?), status(URL), console }
+    public enum Kind: Equatable { case usage(String?), status(URL), billing(URL), console }
     public var title: String
     public var kind: Kind
     public var id: String { title }
@@ -144,14 +157,34 @@ public struct ProviderPage: Equatable {
     public var policy: PolicyModel?
     public var credits: CreditsModel?
     public var links: [LinkItem]
+    /// Status tile: nil on Other, which holds many providers.
+    public var status: StatusModel?
+    /// The pool the console's /usage page opens at for this tab.
+    public var usagePool: String?
+    /// An API tab (OpenRouter, Gemini API, Crossfeed Chat): spend, balance, models and activity instead of limits.
+    public var isAPI = false
+    public var spend: ApiSpendModel?
+    public var balance: ApiBalanceModel?
+    public var models: [ApiModelRow] = []
+    public var activity: TokensModel?
+    public var balanceURL: URL?
 
     /// The built-in tiles that have something to show now.
     public var available: [String] {
-        var ids = [TileID.limits]
-        if !resets.isEmpty { ids.append(TileID.resets) }
-        if tokens != nil { ids.append(TileID.tokens) }
-        if policy != nil { ids.append(TileID.policy) }
-        if credits != nil { ids.append(TileID.credits) }
+        var ids: [String] = []
+        if isAPI {
+            ids.append(TileID.spend)
+            if balance != nil { ids.append(TileID.balance) }
+            if !models.isEmpty { ids.append(TileID.models) }
+            if activity != nil { ids.append(TileID.activity) }
+        } else {
+            ids.append(TileID.limits)
+            if !resets.isEmpty { ids.append(TileID.resets) }
+            if tokens != nil { ids.append(TileID.tokens) }
+            if policy != nil { ids.append(TileID.policy) }
+            if credits != nil { ids.append(TileID.credits) }
+        }
+        if status != nil { ids.append(TileID.status) }
         ids.append(TileID.links)
         return ids
     }
@@ -182,11 +215,14 @@ public struct SubscriptionsModel: Equatable {
 }
 
 public struct OverviewPage: Equatable {
-    public struct Alert: Equatable { public var text: String; public var hot: Bool }
+    /// `tab` is the provider the sentence is about, when it names one: a click opens it.
+    public struct Alert: Equatable { public var text: String; public var hot: Bool; public var tab: String? }
     public var alert: Alert?
     public var providers: [ProviderCard]
     public var subscriptions: SubscriptionsModel?
     public var tokens: TokensModel?
+    /// What the providers report as wrong now. The tile shows by itself only while this is not empty.
+    public var incidents: [IncidentRow] = []
     public var links: [LinkItem]
 }
 
@@ -294,9 +330,8 @@ extension Presenter {
     }
 
     func incidentNote(_ pools: [Pool]) -> IncidentNote? {
-        let words = ["maintenance": "Maintenance", "minor": "Minor issue", "major": "Major outage", "critical": "Major outage"]
         for pool in pools {
-            guard let incident = pool.incident, let word = words[incident.level] else { continue }
+            guard let incident = pool.incident, let word = Self.incidentWords[incident.level] else { continue }
             let text = incident.text ?? incident.affected.joined(separator: ", ")
             guard !text.isEmpty else { continue }
             return IncidentNote(word: word, text: text, severe: incident.level == "major" || incident.level == "critical")
@@ -335,15 +370,8 @@ extension Presenter {
         return rows
     }
 
-    func tokensModel(_ pools: [Pool]) -> TokensModel? {
-        let series = pools.compactMap(\.tokens)
-        guard !series.isEmpty else { return nil }
-        let length = series.map { $0.days.count }.max() ?? 0
-        var days = [Int64](repeating: 0, count: length)
-        for s in series {
-            for (offset, value) in s.days.reversed().enumerated() { days[length - 1 - offset] += value }
-        }
-        return TokensModel(today: Self.big(series.reduce(0) { $0 + $1.today }), days: days)
+    func tokensModel(_ pools: [Pool], tab: String = "overview", tile: String = TileID.tokens) -> TokensModel? {
+        chart(tab: tab, tile: tile, pools: pools)
     }
 
     func creditsModel(_ pools: [Pool]) -> CreditsModel? {
@@ -410,19 +438,46 @@ extension Presenter {
             policy = nil
         }
         let age = pools.compactMap { $0.staleAgeS }.max() ?? ageSeconds()
-        let read = pools.contains { $0.measured || $0.usedPercent != nil }
+        let api = pools.count == 1 && head.map(Self.isAPI) == true
+        let read = pools.contains { $0.measured || $0.usedPercent != nil } || (api && head?.api != nil)
         let title = agy ? "Antigravity" : (Self.titles[tab] ?? (pools.count > 1 ? tab : (head?.label ?? head?.name ?? tab)))
         let status = pools.compactMap { Self.statusURL($0.statusURL) }.first
-        var links = [LinkItem(title: "Usage and cost", kind: .usage(agy ? "antigravity" : head?.pool))]
+        let billing = head.flatMap { api ? Self.billingURL($0) : nil }
+        let usagePool = agy ? "antigravity" : head?.pool
+        var links = [LinkItem(title: "Usage and cost", kind: .usage(usagePool))]
         if let status, tab != "other" { links.append(LinkItem(title: "Status", kind: .status(status))) }
-        links.append(LinkItem(title: "Console", kind: .console))
-        return ProviderPage(id: tab, title: title, plan: tab == "other" ? nil : planLabel(pools, tab: tab),
+        if let billing { links.append(LinkItem(title: "Billing", kind: .billing(billing))) }
+        let apiPool = api ? head : nil
+        let activity = apiPool.flatMap { chart(tab: tab, tile: TileID.activity, pools: [$0]) }
+        return ProviderPage(id: tab, title: title, plan: tab == "other" || api ? nil : planLabel(pools, tab: tab),
                             logo: tab == "other" ? nil : head.flatMap { ProviderLogo.forPool($0.pool) },
-                            updated: tab == "other" ? "Not metered" : Self.updated(age: age, hasReading: read),
-                            badge: headerBadge(pools, lines: allLines), incident: incidentNote(pools),
+                            updated: tab == "other" ? "Not metered" : (api ? Self.apiUpdated(head?.api, now: now, loadedAt: loadedAt) : Self.updated(age: age, hasReading: read)),
+                            badge: api ? nil : headerBadge(pools, lines: allLines), incident: incidentNote(pools),
                             groups: groups, notMetered: tab == "other" ? pools.map { $0.name } : [],
-                            resets: resetRows(pools, tab: tab, lines: allLines), tokens: tokensModel(pools),
-                            policy: policy, credits: creditsModel(pools), links: links)
+                            resets: resetRows(pools, tab: tab, lines: allLines),
+                            tokens: api ? nil : chart(tab: tab, tile: TileID.tokens, pools: pools),
+                            policy: api ? nil : policy, credits: creditsModel(pools), links: links,
+                            status: tab == "other" ? nil : statusModel(pools), usagePool: usagePool, isAPI: api,
+                            spend: apiPool.map { apiSpend($0, show: show) ?? Self.unreadSpend }, balance: apiPool.flatMap { apiBalance($0, show: show) },
+                            models: apiPool.map(apiModels) ?? [], activity: activity, balanceURL: billing)
+    }
+
+    static let unreadSpend = ApiSpendModel(basis: .none, figure: "Not read", caption: "no spend reported", detail: nil, bar: nil, pace: nil,
+                                           runsOut: nil, today: nil, week: nil, month: nil, hot: false, used: nil, expected: nil,
+                                           source: nil, read: false, card: nil)
+
+    /// The billing page of a pool the menu knows, else the one its reading names.
+    static func billingURL(_ pool: Pool) -> URL? {
+        if let url = pool.api?.billingURL { return url }
+        let known = ["openrouter-free": "https://openrouter.ai/settings/credits", "gemini-metered": "https://aistudio.google.com/usage"]
+        return known[pool.pool].flatMap(statusURL)
+    }
+
+    /// "Updated 2 min ago" from the api block's own reading time.
+    static func apiUpdated(_ api: ApiBlock?, now: Date, loadedAt: Date) -> String {
+        guard let api else { return "No reading" }
+        guard let at = api.observedAt.flatMap(controlDate) else { return "Updated just now" }
+        return updated(age: max(0, now.timeIntervalSince(at)), hasReading: true)
     }
 
     // MARK: Overview
@@ -448,10 +503,15 @@ extension Presenter {
         let byID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.pools) })
         let titles = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var cards: [ProviderCard] = []
-        var soonest: (words: String, seconds: Double)?
+        var soonest: (words: String, seconds: Double, tab: String)?
         for id in order {
             guard id != "other", let pools = byID[id], let tab = titles[id] else { continue }
             let tight = tightestLine(pools, tab: id, show: show)
+            if pools.count == 1, let pool = pools.first, Self.isAPI(pool) {
+                let line = apiSpend(pool, show: show)?.card
+                cards.append(ProviderCard(id: id, title: tab.title, logo: tab.logo, tickets: 0, line: line, window: line?.window ?? ""))
+                continue
+            }
             var line = tight?.line
             var window = line?.window ?? ""
             if let section = tight?.section, section != "Claude and GPT", var l = line {
@@ -464,17 +524,17 @@ extension Presenter {
                 line?.window = window
             }
             if let seconds = tight?.runsOut, soonest == nil || seconds < soonest!.seconds {
-                soonest = ("\(tight?.section ?? tab.title) runs out in \(Self.span(seconds))", seconds)
+                soonest = ("\(tight?.section ?? tab.title) runs out in \(Self.span(seconds))", seconds, id)
             }
             let tickets = pools.flatMap(\.limitResets).filter { $0.left > 0 }.count
             cards.append(ProviderCard(id: id, title: tab.title, logo: tab.logo, tickets: tickets, line: line, window: window))
         }
         var alert: OverviewPage.Alert?
-        if let soonest { alert = .init(text: soonest.words, hot: true) }
-        else if cards.contains(where: { $0.line != nil }) { alert = .init(text: "Nothing runs out before it refills", hot: false) }
+        if let soonest { alert = .init(text: soonest.words, hot: true, tab: soonest.tab) }
+        else if cards.contains(where: { $0.line != nil }) { alert = .init(text: "Nothing runs out before it refills", hot: false, tab: nil) }
         return OverviewPage(alert: alert, providers: cards, subscriptions: subscriptionsModel(),
-                            tokens: tokensModel(glance.pools),
-                            links: [LinkItem(title: "Usage and cost", kind: .usage(nil)), LinkItem(title: "Console", kind: .console)])
+                            tokens: tokensModel(glance.pools), incidents: incidents(order: order),
+                            links: [LinkItem(title: "Usage and cost", kind: .usage(nil))])
     }
 
     // MARK: Subscriptions

@@ -30,6 +30,6 @@ public enum PanelSizing {
         var perTab: [String: CGFloat] = [Presenter.overviewID: height(tab: Presenter.overviewID, settings: false)]
         // A hidden provider is not in the strip, so it does not set the panel height.
         for tab in presenter.tabs where panel.isTabVisible(tab.id) { perTab[tab.id] = height(tab: tab.id, settings: false) }
-        return PanelHeights(perTab: perTab, settings: max(height(tab: nil, settings: true, page: 0), height(tab: nil, settings: true, page: 1), height(tab: nil, settings: true, page: 2)), cap: cap)
+        return PanelHeights(perTab: perTab, settings: (0...3).map { height(tab: nil, settings: true, page: $0) }.max() ?? 0, cap: cap)
     }
 }

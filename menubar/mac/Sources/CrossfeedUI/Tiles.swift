@@ -54,6 +54,8 @@ struct PaceWordView: View {
 /// A window: the figure where the eye lands, the window named top right, the bar, then the pace.
 struct LimitRowView: View {
     let line: LimitLine
+    /// A click on the row goes to the provider's section of the console.
+    var usagePool: String??
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -77,6 +79,8 @@ struct LimitRowView: View {
                 .frame(minHeight: 16)
             }
         }
+        .contentShape(Rectangle())
+        .routedIf(usagePool.map { .at("limit:" + line.id, .usage($0)) })
         .accessibilityElement(children: .combine)
     }
 }
@@ -84,6 +88,7 @@ struct LimitRowView: View {
 struct LimitsTile: View {
     let groups: [LimitGroup]
     let notMetered: [String]
+    var usagePool: String?
 
     var body: some View {
         TileChrome {
@@ -102,7 +107,7 @@ struct LimitsTile: View {
                                 (Text(title).font(CF.face(12, .semibold)).foregroundColor(CF.quiet)
                                     + Text(group.note.map { " · " + $0 } ?? "").font(CF.face(12)).foregroundColor(CF.quiet))
                             }
-                            ForEach(group.lines) { line in LimitRowView(line: line) }
+                            ForEach(group.lines) { line in LimitRowView(line: line, usagePool: .some(usagePool)) }
                         }
                         .padding(.top, index > 0 ? 12 : 0)
                     }
@@ -207,17 +212,32 @@ struct ResetsTile: View {
 
 struct TokensTile: View {
     let tokens: TokensModel
+    let tab: String
+    let tile: String
+    @ObservedObject var state: MenuState
+    var title: String?
 
     private var label: some View {
-        (figure(tokens.today).foregroundColor(CF.ink) + Text(" tokens today").font(CF.face(12)).foregroundColor(CF.quiet))
+        (figure(tokens.today).foregroundColor(CF.ink) + Text(tokens.caption).font(CF.face(12)).foregroundColor(CF.quiet))
             .lineLimit(1).fixedSize()
     }
 
+    private var series: String { "\(tokens.metric.title) per day, last \(tokens.days.count) days" }
+
     var body: some View {
         TileChrome {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { label; Spacer(minLength: 0); if !tokens.days.isEmpty { Sparkline(days: tokens.days) } }
-                VStack(alignment: .leading, spacing: 6) { label; if !tokens.days.isEmpty { Sparkline(days: tokens.days) } }
+            VStack(alignment: .leading, spacing: 6) {
+                if let title { Text(title).font(CF.face(12, .semibold)).foregroundStyle(CF.quiet) }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        label; Spacer(minLength: 0)
+                        if !tokens.days.isEmpty { Sparkline(days: tokens.days, width: tokens.days.count > 14 ? 76 : 52, label: series) }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        label
+                        if !tokens.days.isEmpty { Sparkline(days: tokens.days, width: nil, label: series) }
+                    }
+                }
             }
         }
         .accessibilityElement(children: .combine)
@@ -295,7 +315,7 @@ struct LinksTile: View {
     private func control(_ link: LinkItem) -> MenuControl {
         switch link.kind {
         case .usage(let pool): return .usage(pool)
-        case .status(let url): return .openURL(url)
+        case .status(let url), .billing(let url): return .openURL(url)
         case .console: return .console
         }
     }
@@ -305,9 +325,17 @@ struct LinksTile: View {
             HStack(spacing: 8) {
                 ForEach(Array(links.enumerated()), id: \.element.id) { index, link in
                     if index > 0 { Spacer(minLength: 0) }
-                    LinkLabel(title: link.title, control: control(link), state: state)
+                    LinkLabel(title: link.title, control: .at("link:" + link.id, linkTarget(link)), state: state)
                 }
             }
+        }
+    }
+
+    private func linkTarget(_ link: LinkItem) -> LinkTarget {
+        switch link.kind {
+        case .usage(let pool): return .usage(pool)
+        case .status(let url), .billing(let url): return .url(url)
+        case .console: return .console
         }
     }
 }

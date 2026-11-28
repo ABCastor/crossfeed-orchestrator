@@ -137,7 +137,7 @@ final class PanelPrefsTests: XCTestCase {
         let store = PanelPrefsStore(url: tempFile())
         let prefs = store.load()
         XCTAssertEqual(prefs.show, .used)
-        XCTAssertEqual(prefs.tabs, ["overview", "claude", "codex", "copilot", "agy", "go", "other"])
+        XCTAssertEqual(prefs.tabs, ["overview", "claude", "codex", "copilot", "agy", "go", "openrouter-free", "gemini-metered", "chatgpt-work", "other"])
         XCTAssertTrue(prefs.hiddenTabs.isEmpty)
         XCTAssertEqual(prefs.tileOrder("claude", available: PanelPrefs.providerTiles), PanelPrefs.providerTiles)
         XCTAssertEqual(prefs.tileOrder("overview", available: PanelPrefs.overviewTiles), PanelPrefs.overviewTiles)
@@ -313,7 +313,7 @@ final class TileModelTests: XCTestCase {
     func testOverviewSaysWhatRunsOutFirstAndShowsOneTileEachWithTheTightestWindow() throws {
         let p = try presenter()
         let page = p.overviewPage(order: ["claude", "codex", "copilot", "agy", "go"], show: .used)
-        XCTAssertEqual(page.alert, OverviewPage.Alert(text: "Gemini runs out in 1h 52m", hot: true))
+        XCTAssertEqual(page.alert, OverviewPage.Alert(text: "Gemini runs out in 1h 52m", hot: true, tab: "agy"))
         XCTAssertEqual(page.providers.map(\.id), ["claude", "codex", "copilot", "agy", "go"])
         let claude = page.providers[0]
         XCTAssertEqual(claude.line?.figure, "58% used")
@@ -328,7 +328,7 @@ final class TileModelTests: XCTestCase {
         XCTAssertEqual(page.providers[3].window, "Gemini weekly")
         XCTAssertEqual(page.providers[3].line?.figure, "93% used")
         XCTAssertEqual(page.providers[4].line?.pace, PaceWord(text: "15% surplus", kind: .surplus))
-        XCTAssertEqual(page.links.map(\.title), ["Usage and cost", "Console"])
+        XCTAssertEqual(page.links.map(\.title), ["Usage and cost"], "the footer already opens the console")
     }
 
     func testSubscriptionsShowTheShareAndTheYouPayLineFromTheUsdOperatorTotal() throws {
@@ -376,7 +376,7 @@ final class TileModelTests: XCTestCase {
         XCTAssertFalse(page.incident?.severe ?? true)
         XCTAssertEqual(page.tokens?.today, "958M")
         XCTAssertNotNil(page.policy)
-        XCTAssertEqual(page.available, ["limits", "resets", "tokens", "policy", "links"])
+        XCTAssertEqual(page.available, ["limits", "resets", "tokens", "policy", "status", "links"])
     }
 
     func testAFiveHourRowAppearsOnlyWhenTheProviderReportsOne() throws {
@@ -444,10 +444,10 @@ final class TileModelTests: XCTestCase {
         XCTAssertEqual(page.badge?.word, "Low")
     }
 
-    func testTheLinksAreUsageStatusAndConsoleOnEveryProviderTabAndNoStatusOnOverview() throws {
+    func testTheLinksAreUsageAndStatusOnEveryProviderTabWithNoConsoleAndNoStatusOnOverview() throws {
         let p = try presenter()
         let claude = p.providerPage(for: "claude", show: .used)!.links
-        XCTAssertEqual(claude.map(\.title), ["Usage and cost", "Status", "Console"])
+        XCTAssertEqual(claude.map(\.title), ["Usage and cost", "Status"])
         XCTAssertEqual(claude[0].kind, .usage("claude"))
         XCTAssertEqual(claude[1].kind, .status(URL(string: "https://status.claude.com/")!))
         XCTAssertEqual(p.providerPage(for: "agy", show: .used)!.links[0].kind, .usage("antigravity"))
@@ -481,7 +481,12 @@ final class TileModelTests: XCTestCase {
     }
 
     func testOtherListsWhatIsNotMetered() throws {
-        let page = try presenter().providerPage(for: "other", show: .used)!
+        // A pool no tab knows by name and that is billed per nothing: Other lists it as not metered.
+        let page = try presenter(edit: { object in
+            var pools = object["pools"] as! [[String: Any]]
+            pools[6]["pool"] = "mystery-metered"
+            object["pools"] = pools
+        }).providerPage(for: "other", show: .used)!
         XCTAssertFalse(page.notMetered.isEmpty)
         XCTAssertNil(page.plan)
         XCTAssertEqual(page.updated, "Not metered")

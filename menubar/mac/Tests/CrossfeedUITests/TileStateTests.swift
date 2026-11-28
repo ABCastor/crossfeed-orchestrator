@@ -17,7 +17,7 @@ final class TileStateTests: XCTestCase {
         let p = try presenter()
         let heights = PanelSizing.measure(presenter: p, prefs: BarPrefs(), cap: 4000)
         XCTAssertNotNil(heights.perTab[Presenter.overviewID])
-        for tab in p.tabs.map(\.id) + ["settings0", "settings1", "settings2"] {
+        for tab in p.tabs.map(\.id) + ["settings0", "settings1", "settings2", "settings3"] {
             let state = MenuState(presenter: p, selected: tab.hasPrefix("settings") ? nil : tab)
             state.showsSettings = tab.hasPrefix("settings")
             state.settingsPage = Int(tab.dropFirst(8)) ?? 0
