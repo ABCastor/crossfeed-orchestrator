@@ -16,6 +16,7 @@ import datetime as dt
 import fcntl
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -393,6 +394,41 @@ def _window_surplus_forecast(window: dict[str, Any]) -> dict[str, Any]:
 PACE_ON_PACE_POINTS = 1.0
 
 
+# BR-QUOTA-005
+def resets_held_for(resets: Any, name: str, now: dt.datetime | None = None) -> int:
+    """Usable limit resets whose clears include this window: `left` summed over rows not yet expired."""
+    now = now or utc_now()
+    total = 0
+    for row in resets if isinstance(resets, list) else []:
+        if not isinstance(row, dict) or type(row.get("left")) is not int or row["left"] <= 0:
+            continue
+        expires = row.get("expires_at")
+        if expires:
+            try:
+                if parse_iso(expires) <= now:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        if name in (row.get("clears") or []):
+            total += row["left"]
+    return total
+
+
+def raw_used_percent(window: dict[str, Any]) -> float:
+    """What the provider reports, before a held reset widens the window's capacity."""
+    return float(window.get("raw_used_percent", window.get("used_percent", 0)))
+
+
+def display_pace(window: dict[str, Any]) -> dict[str, Any] | None:
+    """The pace a person reads: the provider's own figure, and never a run-out for a window with a reset held."""
+    held = int(window.get("resets_held") or 0)
+    pace = window_pace({**window, "used_percent": raw_used_percent(window)} if held else window)
+    if pace and held:
+        pace = {**pace, "held": held, "runs_out_in_s": None, "run_out_basis": None}
+        pace["words"] = pace_words(pace)
+    return pace
+
+
 # BR-SELECT-002
 def window_pace(window: dict[str, Any]) -> dict[str, Any] | None:
     """Deficit or surplus of one active window, in percentage points of its allowance.
@@ -447,6 +483,8 @@ def pace_words(pace: dict[str, Any] | None) -> str:
     if pace["status"] == "surplus":
         return f"{pace['points']}% surplus"
     text = f"{pace['points']}% in deficit"
+    if pace.get("held"):
+        return text  # a reset is held: nothing is about to run out
     if pace.get("runs_out_in_s") is not None and pace.get("run_out_basis") != "full":
         text += f", runs out in {format_duration(pace['runs_out_in_s'])}"
     elif pace.get("early"):
@@ -721,7 +759,8 @@ def lead_pressure(runtime: dict[str, Any], pool: str | None,
     if pool == "claude" and name and level not in {"low", "off"} and state != "EXHAUSTED":
         state = _state_for_used(window["used_percent"])
     pressure = {"pool": pool, "level": level, "state": state,
-                "used_percent": window.get("used_percent"),
+                "used_percent": window.get("raw_used_percent", window.get("used_percent")),
+                "resets_held": int(window.get("resets_held") or 0),
                 "window": (_compact_window_label(name, window) if name else None),
                 **({"scoped_window": name} if scoped and name else {})}
     if pool == "claude":
@@ -755,6 +794,8 @@ def lead_directive(pressure: dict[str, Any] | None) -> str | None:
     used = pressure["used_percent"]
     reading = (f"{used:g}% of {pressure['window']}" if used is not None else
                f"quota unknown; level {pressure['level']}")
+    if pressure.get("resets_held"):
+        reading += f", 🎟️ {pressure['resets_held']} held"
     return (f"lead: you are spending {pressure['pool']} ({reading}): "
             "delegate every task external via dispatch, keep your own turns short, say so")
 
@@ -964,6 +1005,17 @@ def current_pool_state(
             continue
         enriched = dict(window)
         enriched["seconds_to_reset"] = max(0, int((reset - now).total_seconds()))
+        # BR-QUOTA-005: n held resets widen the window to (1 + n) windows of allowance. `used_percent` here is
+        # the share of that capacity, so pace, pressure and run-out all read it; the provider's figure stays
+        # in `raw_used_percent`. A window already at 100% is gone until someone uses the reset.
+        held = resets_held_for(snapshot.get("resets"), name, now)
+        if held:
+            enriched["resets_held"] = held
+            raw = float(window["used_percent"])
+            enriched["capacity_left_percent"] = round(max(0.0, 100.0 - raw) + 100.0 * held, 1)
+            if raw < 100:
+                enriched["raw_used_percent"] = window["used_percent"]
+                enriched["used_percent"] = raw / (1 + held)
         active_windows[name] = enriched
     applicable_windows = {name: window for name, window in active_windows.items()
                           if quota_window_applies(roster, pool, name, window, model_key)}
@@ -991,7 +1043,7 @@ def current_pool_state(
             "observed_at": snapshot["observed_at"],
             "age_seconds": age_s,
             "bottleneck_used_percent": max(
-                int(window["used_percent"]) for window in applicable_windows.values()
+                int(raw_used_percent(window)) for window in applicable_windows.values()
             ),
             "limit_names": sorted(exhausted_windows),
             "until": until,
@@ -1057,7 +1109,7 @@ def current_pool_state(
         "observed_at": snapshot["observed_at"],
         "age_seconds": age_s,
         # Observed, and reported as such whatever the policy does with it.
-        "bottleneck_used_percent": max_used,
+        "bottleneck_used_percent": max(int(raw_used_percent(window)) for window in applicable_windows.values()),
         # Derived: what still constrains the pool once the surplus windows go.
         "binding_used_percent": binding_used,
         "routing_state": _state_for_used(binding_used),
@@ -1735,6 +1787,7 @@ def refresh_stale_pools(
     *,
     sources: dict[str, dict[str, Any]] | None = None,
     recover_circuits: bool = False,
+    auto_use: bool = True,
 ) -> dict[str, str]:
     """Refresh due readers outside the runtime lock. A busy reader serves the cache.
 
@@ -1754,6 +1807,7 @@ def refresh_stale_pools(
         return snapshot_needs_refresh(runtime, pool, ttl_s=ttl_s, cooldown_s=cooldown_s, sources=sources)
 
     outcomes: dict[str, str] = {}
+    fresh_claude: dict[str, dict[str, Any]] = {}
     try:
         runtime = load_json(state_dir / "runtime.json", {}) or {}
         stale = [pool for pool in wanted if force or due(runtime, pool)]
@@ -1797,6 +1851,15 @@ def refresh_stale_pools(
                 for pool, outcome in committed.items():
                     if outcome == "refreshed":
                         usage_history.record(state_dir, pool, fetched[pool])  # display-only; feeds the console charts
+                for pool, outcome in committed.items():
+                    if outcome == "refreshed" and sources[pool].get("oracle") == "claude" and fetched[pool].get("available"):
+                        fresh_claude[pool] = fetched[pool]
+        if auto_use and fresh_claude and not auto_refresh_disabled():
+            # After every reader claim is released: the claim's own re-read takes the same claim to save its reading.
+            try:  # BR-QUOTA-006: opt-in, and never a reason for a refresh to fail
+                auto_use_resets(state_dir, fresh_claude)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001 - freshness is best-effort, never fatal
         pass
     return outcomes
@@ -5196,17 +5259,19 @@ def pool_limits(
             renews_at = window.get("reset_at")
             continue
         title, scope = limit_name(name, window, pool["label"])
-        used = int(window["used_percent"])
+        used = int(raw_used_percent(window))
         limits.append({
             "name": name, "title": title, "scope": scope, "kind": "window",
             "minutes": window.get("window_minutes"),
             "used_percent": used,
-            "state": "full" if used >= 100 else _state_for_used(used).lower(),
+            # BR-QUOTA-005: a window with a reset held is judged by its widened capacity, not the provider's figure.
+            "state": "full" if used >= 100 else _state_for_used(int(window["used_percent"])).lower(),
             "reset_at": window.get("reset_at"),
             "resets_in_s": int(window.get("seconds_to_reset", 0)),
             "resets": reset_words(window.get("reset_at"), now),
             "spend_down": name in expiring,
-            "pace": window_pace(window) if used < 100 else None,
+            "pace": display_pace(window) if used < 100 else None,
+            "resets_held": int(window.get("resets_held") or 0),
         })
     for name, window in (idle or {}).items():
         if name in windows:
@@ -5659,13 +5724,14 @@ def fleet_overview(
         if applicable:
             name, window = max(
                 applicable.items(),
-                key=lambda item: (int(item[1]["used_percent"]), -int(item[1].get("seconds_to_reset", 0))),
+                key=lambda item: (int(raw_used_percent(item[1])), -int(item[1].get("seconds_to_reset", 0))),
             )
             quota = {
-                "used_percent": int(window["used_percent"]),
+                "used_percent": int(raw_used_percent(window)),
                 "window": window_label(name, window),
                 "resets_in_s": int(window.get("seconds_to_reset", 0)),
-                "pace": window_pace(window) if int(window["used_percent"]) < 100 else None,
+                "pace": display_pace(window) if int(raw_used_percent(window)) < 100 else None,
+                "resets_held": int(window.get("resets_held") or 0),
                 "spend_down": bool(evidence.get("spend_down")),
                 "age_s": evidence.get("age_seconds"),
                 "confidence": evidence.get("confidence"),
@@ -6186,7 +6252,8 @@ def show_usage(
                 f", projects {projected}% at reset]" if projected is not None else "]"
             )
             print(
-                f"  {name}: {exact.get(name, window['used_percent']):g}% used, resets {window['reset_at']} "
+                f"  {name}: {exact.get(name, raw_used_percent(window)):g}% used"
+                f"{', 🎟️ ' + str(window['resets_held']) + ' held' if window.get('resets_held') else ''}, resets {window['reset_at']} "
                 f"(in {format_duration(window.get('seconds_to_reset', 0))}){basis}{note}"
             )
         for name, window in sorted(display.items()):
@@ -6731,6 +6798,106 @@ def _claude_grant_for_key(payload: dict, key: str) -> dict | None:
     return next((row for row in native_usage.claude_claim_grants(payload) if row.get("key") == key), None)
 
 
+AUTO_RESET_FILE = "auto-resets.json"
+AUTO_RESET_LOG = "auto-resets.log"
+AUTO_RESET_USED_PERCENT = 99.5
+AUTO_RESET_MIN_AWAY_S = 12 * 3600
+AUTO_RESET_COOLDOWN_S = 12 * 3600
+AUTO_RESET_NOTICE_S = 24 * 3600
+
+
+def _claim_reset_by_key(key: str, state_dir: Path, overlay: Path | None) -> dict[str, Any]:
+    """The claim `use-reset claude --key K --yes` makes, read back as its JSON outcome."""
+    argv = types.SimpleNamespace(command="use-reset", pool="claude", key=key, yes=True, json=True, overlay=overlay)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(io.StringIO()):
+        try:
+            use_reset_command(argv, state_dir)
+        except Exception as exc:  # noqa: BLE001 - a failed claim is an outcome to log, never a failed refresh
+            return {"ok": False, "sent": False, "error": f"the reset was not used: {type(exc).__name__}"}
+    try:
+        outcome = json.loads(buffer.getvalue().strip() or "{}")
+    except json.JSONDecodeError:
+        return {"ok": False, "sent": False, "error": "the outcome could not be read"}
+    return outcome if isinstance(outcome, dict) else {"ok": False, "sent": False, "error": "the outcome could not be read"}
+
+
+def _reset_word(window: str) -> str:
+    return {"weekly": "weekly", "session": "5-hour"}.get(window) or (
+        window.removeprefix("claude-weekly-scoped-").replace("-", " ") if window.startswith("claude-weekly-scoped-") else window)
+
+
+def auto_reset_notice(state_dir: Path | None, now: dt.datetime | None = None) -> dict[str, Any] | None:
+    """The one line the last automatic use left, while it is recent enough to matter."""
+    if state_dir is None:
+        return None
+    notice = (load_json(state_dir / AUTO_RESET_FILE, {}) or {}).get("notice")
+    if not isinstance(notice, dict) or not isinstance(notice.get("text"), str):
+        return None
+    try:
+        age = ((now or utc_now()) - parse_iso(notice["at"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return notice if 0 <= age <= AUTO_RESET_NOTICE_S else None
+
+
+# BR-QUOTA-006
+def auto_use_resets(state_dir: Path, readings: dict[str, dict[str, Any]], *, now: dt.datetime | None = None,
+                    prefs: dict[str, Any] | None = None, claim: Callable[..., dict[str, Any]] | None = None,
+                    overlay: Path | None = None) -> list[dict[str, Any]]:
+    """Spend one held Claude reset on a window that is used up with its own reset far away, if the operator allows it.
+
+    `readings` are fresh readings by pool. At most one reset is spent per call, never twice for one
+    window within AUTO_RESET_COOLDOWN_S, and only when `panel.json` says `auto_use_resets: when_used_up`.
+    Claude Code's own next grant goes first when it clears the window, else the one expiring soonest.
+    """
+    if os.environ.get("FLEET_NO_AUTO_USE_RESETS", "").strip().lower() not in {"", "0", "false", "no"}:
+        return []
+    now = now or utc_now()
+    if (panel_prefs.load() if prefs is None else prefs).get("auto_use_resets") != "when_used_up":
+        return []
+    path = state_dir / AUTO_RESET_FILE
+    record = load_json(path, {}) or {}
+    last = record.get("windows") if isinstance(record.get("windows"), dict) else {}
+    for pool, reading in readings.items():
+        for name, window in (reading.get("windows") or {}).items():
+            try:
+                used, reset = float(window["used_percent"]), parse_iso(window["reset_at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if used < AUTO_RESET_USED_PERCENT or (reset - now).total_seconds() <= AUTO_RESET_MIN_AWAY_S:
+                continue
+            try:
+                if name in last and (now - parse_iso(last[name])).total_seconds() < AUTO_RESET_COOLDOWN_S:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            usable = [row for row in reading.get("resets") or []
+                      if isinstance(row, dict) and row.get("kind") == native_usage.CLAUDE_GRANT_KIND and row.get("key")
+                      and resets_held_for([row], name, now)]
+            if not usable:
+                continue
+            chosen = next((row for row in usable if row.get("next")), None) or min(
+                usable, key=lambda row: (row.get("expires_at") is None, row.get("expires_at") or ""))
+            outcome = (claim or _claim_reset_by_key)(chosen["key"], state_dir, overlay)
+            line = f"{iso(now)} {pool} {name} used {chosen['key']}: " + (
+                "ok" if outcome.get("ok") else str(outcome.get("error") or "not used"))
+            try:
+                with (state_dir / AUTO_RESET_LOG).open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            except OSError:
+                pass
+            if outcome.get("sent") or outcome.get("ok"):
+                last[name] = iso(now)
+                record = {**record, "windows": last}
+                if outcome.get("ok"):
+                    record["notice"] = {"text": f"Used the {_reset_word(name)} reset automatically",
+                                        "at": iso(now), "window": name}
+                atomic_json(path, record)
+            return [{"pool": pool, "window": name, "key": chosen["key"], **{k: outcome.get(k) for k in ("ok", "sent", "error")}}]
+    return []
+
+
 def _reread_after_reset(args, state_dir: Path) -> None:
     """A sent claim changes the limits, so every pool fed by the Claude reader is read again and saved now
     (BR-QUOTA-004): the menu, the console and routing must not keep the pre-reset reading."""
@@ -6739,7 +6906,7 @@ def _reread_after_reset(args, state_dir: Path) -> None:
         sources = {pool: cfg for pool, cfg in quota_sources(roster).items()
                    if cfg.get("oracle") == "claude" or pool == args.pool}
         if sources:
-            refresh_stale_pools(state_dir, list(sources), roster=roster, force=True)
+            refresh_stale_pools(state_dir, list(sources), roster=roster, force=True, auto_use=False)
     except Exception:  # noqa: BLE001 - the claim already happened; a failed re-read leaves the next refresh to it
         pass
 
@@ -6942,6 +7109,8 @@ def glance_payload(overlay: Path, roster: dict, overview: dict, lead: str | None
     # Enabled plugin tiles ride with the glance, cached per their own refresh_seconds. A broken plugin is
     # one error tile, never a failed reading.
     payload["plugins"] = plugin_tiles.glance(state_dir) if state_dir else []
+    notice = auto_reset_notice(state_dir)
+    payload["notices"] = [{"kind": "auto_reset", "text": notice["text"], "at": notice["at"]}] if notice else []
     pools = {pool["pool"]: pool for pool in overview["pools"]}
     payload["reading_origin"] = ("mac" if any(pool.get("reading_origin") == "mac" for pool in pools.values())
                                  else "local")

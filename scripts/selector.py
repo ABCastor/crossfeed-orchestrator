@@ -360,6 +360,10 @@ def _opus_quota_refusal(roster, runtime, fleet):
         minutes = window.get("window_minutes")
         if used is not None and minutes == 300 and used >= 100:
             return "Claude five-hour window exhausted"
+        # BR-QUOTA-005: a held reset widens a window that still has allowance; a spent one stays spent.
+        held = fleet.resets_held_for(snapshot.get("resets"), name, now)
+        if used is not None and held and used < 100:
+            used = used / (1 + held)
         if used is not None and minutes == 10080 and used >= 90:
             return "Claude weekly window at least 90% used"
     return None
