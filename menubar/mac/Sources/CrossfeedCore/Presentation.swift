@@ -410,7 +410,7 @@ public struct Presenter {
         }
         return RowModel(id: "\(poolID):\(limit.name ?? String(index))", title: title,
                         usedText: used.map { $0 >= Self.usedUp ? "Used up" : "\(Int($0.rounded()))% used" } ?? "Not read",
-                        resetText: resetText(limit), paceText: Self.paceLine(limit.pace),
+                        resetText: resetText(limit), paceText: Self.paceLine(limit.pace, held: limit.held),
                         bar: used.map { Self.bar(used: $0, pace: limit.pace) })
     }
 
@@ -434,9 +434,12 @@ public struct Presenter {
 
     /// fleetctl's own words, once: "46% in deficit, runs out in 9h 39m" -> "46% in deficit · runs out in 9h 39m".
     /// The dot beside it says it is the pace; the word does not repeat.
-    static func paceLine(_ pace: Pace?) -> String? {
-        guard let words = pace?.words, !words.isEmpty else { return nil }
-        let line = words.components(separatedBy: ", ").filter { !$0.isEmpty }.joined(separator: " · ")
+    /// A window with a held reset never "runs out": that part is left out and the held reset is named instead.
+    static func paceLine(_ pace: Pace?, held: Int = 0) -> String? {
+        guard let words = pace?.words, !words.isEmpty else { return held > 0 ? "🎟️ \(held) held" : nil }
+        var parts = words.components(separatedBy: ", ").filter { !$0.isEmpty }
+        if held > 0 { parts = parts.filter { !$0.lowercased().hasPrefix("runs out") } + ["🎟️ \(held) held"] }
+        let line = parts.joined(separator: " · ")
         return line.prefix(1).uppercased() + line.dropFirst()
     }
 
@@ -698,6 +701,7 @@ public struct Presenter {
         } else if let limit = focal.limit, let reset = resetText(limit), reset != "Reset unknown" {
             sentence += " · " + reset
         }
+        if let held = focal.limit?.held, held > 0 { sentence += " · 🎟️ \(held) held" }
         let logo = ProviderLogo.forPool(focal.pool.pool)
         let reset = resetDate.map { resetClock ? clockText($0, today: "") : Self.shortCountdown(to: $0, now: now) }
         let pace = Self.shortPace(focal.limit?.pace ?? focal.pool.pace)

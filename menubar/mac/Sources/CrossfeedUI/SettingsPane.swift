@@ -139,6 +139,13 @@ struct GeneralSettings: View {
                         Chip(look.title, selected: panel.appearance == look, control: .appearance(look), state: state)
                     }
                 }
+                SettingRow("Resets") {
+                    ForEach(PanelPrefs.AutoUseResets.allCases, id: \.self) { choice in
+                        Chip(choice.title, selected: panel.autoUseResets == choice, control: .autoUseResets(choice), state: state)
+                    }
+                }
+                SettingNote(panel.autoUseResets == .off ? "A held reset is only used when you press Use."
+                            : "When a window is used up and its natural reset is over 12 hours away, one held reset is used, at most once per window every 12 hours.")
                 SettingRow("Show") {
                     Chip("Used", selected: panel.show == .used, control: .panelShow(.used), state: state)
                     Chip("Left", selected: panel.show == .left, control: .panelShow(.left), state: state)

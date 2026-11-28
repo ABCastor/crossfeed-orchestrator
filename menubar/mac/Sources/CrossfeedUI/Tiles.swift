@@ -68,12 +68,14 @@ struct LimitRowView: View {
             }
             .frame(minHeight: 17)
             PaceBar(model: line.bar, label: line.accessibility).padding(.top, 5).padding(.bottom, 4)
-            if line.pace != nil || line.runsOut != nil {
+            if line.pace != nil || line.runsOut != nil || line.held > 0 {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if let pace = line.pace { PaceWordView(pace: pace) }
                     Spacer(minLength: 0)
                     if let runs = line.runsOut {
                         Text(runs).font(CF.face(12)).monospacedDigit().foregroundStyle(CF.humanText).lineLimit(1).fixedSize()
+                    } else if let held = line.heldText {
+                        Text(held).font(CF.face(12, .medium)).monospacedDigit().foregroundStyle(CF.betweenText).lineLimit(1).fixedSize()
                     }
                 }
                 .frame(minHeight: 16)

@@ -42,13 +42,18 @@ public struct Limit: Decodable, Equatable {
     /// then `note` says why. A missing key means active.
     public var active: Bool?
     public var note: String?
+    /// Usable limit resets the account holds that clear this window (`resets_held`). Nil or 0 means none.
+    public var resetsHeld: Int?
 
     enum CodingKeys: String, CodingKey {
         case kind, name, title, scope, minutes, usedPercent = "used_percent", resets, resetAt = "reset_at"
         case resetsInS = "resets_in_s", resetUnknown = "reset_unknown", pace, state, active, note
+        case resetsHeld = "resets_held"
     }
 
     public var isActive: Bool { active != false }
+    /// How many resets are held for this window; never negative.
+    public var held: Int { max(0, resetsHeld ?? 0) }
 }
 
 public struct GlanceModel: Decodable, Equatable {
@@ -131,6 +136,8 @@ public struct Pool: Decodable, Equatable {
     public var tokens: TokenSeries?
     /// Limit resets held: Claude's carry a `key` the menu can use.
     public var limitResets: [LimitReset]
+    /// 100 × the resets held for the pool's tightest window (`reset_capacity_percent`); nil when none are held.
+    public var resetCapacityPercent: Double?
     /// Spend, balance, models and daily activity of a pool billed per token, by prepaid credit or through a relay.
     public var api: ApiBlock?
 
@@ -146,6 +153,7 @@ public struct Pool: Decodable, Equatable {
         case levelControl = "level_control", models, archivedModels = "archived"
         case credits, statusURL = "status_url", usageCost = "usage_cost", perModel = "per_model"
         case incident, billing, modelQuota = "model_quota", tokens, limitResets = "limit_resets", api
+        case resetCapacityPercent = "reset_capacity_percent"
     }
 
     public init(from decoder: Decoder) throws {
@@ -177,6 +185,7 @@ public struct Pool: Decodable, Equatable {
         tokens = try? c.decodeIfPresent(TokenSeries.self, forKey: .tokens)
         limitResets = (try? c.decodeIfPresent([LimitReset].self, forKey: .limitResets)) ?? []
         api = try? c.decodeIfPresent(ApiBlock.self, forKey: .api)
+        resetCapacityPercent = try? c.decodeIfPresent(Double.self, forKey: .resetCapacityPercent)
         if let text = try? c.decodeIfPresent(String.self, forKey: .gaugeError) {
             gaugeError = text
         } else if let object = try? c.decodeIfPresent([String: JSONScalar].self, forKey: .gaugeError) {

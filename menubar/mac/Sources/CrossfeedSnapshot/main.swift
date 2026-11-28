@@ -2,7 +2,7 @@
 // the very NSHostingView the app puts in its menu is drawn into a bitmap.
 //
 //   CrossfeedSnapshot --fixture glance.json --now <ISO time> --fonts Resources/Fonts \
-//       --out menu.png [--appearance light|dark] [--tab codex] [--side-by-side mockup.png] [--bare]
+//       --out menu.png [--appearance light|dark] [--theme system|light|dark] [--tab codex] [--side-by-side mockup.png] [--bare]
 //       [--mode used|left] [--panel panel.json] [--confirm] [--middrag] [--settings [--settings-page 0|1|2|3] [--settings-tab ID]]
 //       (pages: 0 General, 1 Tiles, 2 Tabs, 3 Menu bar; --icon crossfeed|provider|none)
 import AppKit
@@ -50,6 +50,8 @@ do {
     let settings = CommandLine.arguments.contains("--settings")
     var panel = argument("--panel").map { PanelPrefsStore(url: URL(fileURLWithPath: $0)).load() } ?? PanelPrefs()
     if let mode = argument("--mode").flatMap(PanelPrefs.Show.init) { panel.show = mode }
+    // The theme switch's state (its icon): system, light or dark. The render's own look is --appearance.
+    if let theme = argument("--theme").flatMap(PanelPrefs.Appearance.init) { panel.appearance = theme }
     for id in (argument("--hide") ?? "").split(separator: ",").map(String.init) where panel.isTabVisible(id) { panel.toggleTab(id) }
     if let order = argument("--order") { panel.tabs = [PanelPrefs.fixedFirst] + order.split(separator: ",").map(String.init) + PanelPrefs.defaultTabs }
     let bare = CommandLine.arguments.contains("--bare")

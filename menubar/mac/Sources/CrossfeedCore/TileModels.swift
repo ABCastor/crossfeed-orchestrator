@@ -73,14 +73,22 @@ public struct LimitLine: Equatable, Identifiable {
     public var runsOut: String?          // "Runs out in 2d 1h"
     public var used: Double
     public var full: Bool
+    /// Limit resets held that clear this window. While one is held the window never "runs out": it says so instead.
+    public var held: Int
 
     public init(id: String, figure: String, hot: Bool, window: String, resets: String, bar: PaceBarModel, pace: PaceWord?,
-                runsOut: String?, used: Double, full: Bool) {
+                runsOut: String?, used: Double, full: Bool, held: Int = 0) {
         self.id = id; self.figure = figure; self.hot = hot; self.window = window; self.resets = resets; self.bar = bar
-        self.pace = pace; self.runsOut = runsOut; self.used = used; self.full = full
+        self.pace = pace; self.runsOut = runsOut; self.used = used; self.full = full; self.held = held
     }
 
-    public var accessibility: String { [figure, window, resets, pace?.text, runsOut].compactMap { $0 }.joined(separator: ", ") }
+    /// "🎟️ 1 held": the words that stand where "Runs out in 2d" would.
+    public var heldText: String? { held > 0 ? "🎟️ \(held) held" : nil }
+
+    public var accessibility: String {
+        [figure, window, resets, pace?.text, runsOut, held > 0 ? "\(held) limit reset\(held == 1 ? "" : "s") held" : nil]
+            .compactMap { $0 }.joined(separator: ", ")
+    }
 }
 
 public struct LimitGroup: Equatable, Identifiable {
@@ -288,11 +296,12 @@ extension Presenter {
                 : PaceWord(text: "\(Int(abs(delta).rounded()))% \(delta > 0 ? "deficit" : "surplus")", kind: delta > 0 ? .deficit : .surplus)
         }
         var runsOut: String?
-        if !full, limit.pace?.status == "deficit", let s = limit.pace?.runsOutInS, s > 0 { runsOut = "Runs out in " + Self.span(s) }
+        // A window with a held reset is not about to run out: the reset is the way on, so the words say that instead.
+        if !full, limit.held == 0, limit.pace?.status == "deficit", let s = limit.pace?.runsOutInS, s > 0 { runsOut = "Runs out in " + Self.span(s) }
         let figure = full ? "Used up" : (show == .used ? "\(Int(used.rounded()))% used" : "\(Int((100 - used).rounded()))% left")
-        return LimitLine(id: id, figure: figure, hot: full || runsOut != nil || used >= 90, window: window, resets: resets,
+        return LimitLine(id: id, figure: figure, hot: full || runsOut != nil || (used >= 90 && limit.held == 0), window: window, resets: resets,
                          bar: PaceBarModel.make(used: used, elapsed: elapsed, show: show, full: full),
-                         pace: full ? nil : pace, runsOut: runsOut, used: used, full: full)
+                         pace: full ? nil : pace, runsOut: runsOut, used: used, full: full, held: limit.held)
     }
 
     /// Only windows the provider reports: a placeholder ("Starts with your next message") is never a row.
@@ -491,7 +500,7 @@ extension Presenter {
             let list: [Limit] = single ? [Limit(kind: "window", title: "Usage", usedPercent: pool.usedPercent, resets: pool.resets, resetAt: pool.resetAt, pace: pool.pace)] : windows
             for (index, limit) in list.enumerated() {
                 let line = limitLine(limit, id: "\(pool.pool):\(limit.name ?? String(index))", show: show)
-                let runs = (limit.pace?.status == "deficit" && !line.full) ? limit.pace?.runsOutInS : nil
+                let runs = (limit.pace?.status == "deficit" && !line.full && limit.held == 0) ? limit.pace?.runsOutInS : nil
                 let score = line.full ? 1e12 : (runs.map { 1e9 - $0 } ?? line.used)
                 if best == nil || score > best!.score { best = (line, Self.agyTitles[pool.pool], runs, score) }
             }
@@ -504,6 +513,8 @@ extension Presenter {
         let titles = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var cards: [ProviderCard] = []
         var soonest: (words: String, seconds: Double, tab: String)?
+        // The tightest window that holds a reset and is 90% used or more: said as "Claude 96% · 🎟️ 1 held", never "runs out".
+        var heldWindow: (words: String, used: Double, full: Bool, tab: String)?
         for id in order {
             guard id != "other", let pools = byID[id], let tab = titles[id] else { continue }
             let tight = tightestLine(pools, tab: id, show: show)
@@ -526,11 +537,16 @@ extension Presenter {
             if let seconds = tight?.runsOut, soonest == nil || seconds < soonest!.seconds {
                 soonest = ("\(tight?.section ?? tab.title) runs out in \(Self.span(seconds))", seconds, id)
             }
+            if let l = line, l.held > 0, l.full || l.used >= 90, heldWindow == nil || l.used > heldWindow!.used {
+                let name = tight?.section ?? tab.title
+                heldWindow = ("\(name) " + (l.full ? "used up" : "\(Int(l.used.rounded()))%") + " · " + (l.heldText ?? ""), l.used, l.full, id)
+            }
             let tickets = pools.flatMap(\.limitResets).filter { $0.left > 0 }.count
             cards.append(ProviderCard(id: id, title: tab.title, logo: tab.logo, tickets: tickets, line: line, window: window))
         }
         var alert: OverviewPage.Alert?
         if let soonest { alert = .init(text: soonest.words, hot: true, tab: soonest.tab) }
+        else if let heldWindow { alert = .init(text: heldWindow.words, hot: heldWindow.full, tab: heldWindow.tab) }
         else if cards.contains(where: { $0.line != nil }) { alert = .init(text: "Nothing runs out before it refills", hot: false, tab: nil) }
         return OverviewPage(alert: alert, providers: cards, subscriptions: subscriptionsModel(),
                             tokens: tokensModel(glance.pools), incidents: incidents(order: order),

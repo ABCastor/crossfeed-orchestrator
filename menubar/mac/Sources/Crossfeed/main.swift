@@ -220,6 +220,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         menu.autoenablesItems = false
         if !config.selftest && Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
+            let use = UNNotificationAction(identifier: "use", title: "Use", options: [.foreground])
+            UNUserNotificationCenter.current().setNotificationCategories([
+                UNNotificationCategory(identifier: Self.useCategory, actions: [use], intentIdentifiers: [])])
         }
         rebuildMenu()
         if config.selftest { selftest(); return }
@@ -319,6 +322,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         case .refresh: reload(refresh: true); return
         case .at(_, let target): handle(target.control); return
         case .appearance(let look): state.updatePanel { $0.appearance = look }; applyAppearance(); return
+        case .themeCycle: state.updatePanel { $0.appearance = $0.appearance.next }; applyAppearance(); return
+        case .autoUseResets(let choice): state.updatePanel { $0.autoUseResets = choice }; return
         case .openOn(let id): state.updatePanel { $0.openOn = id }; return
         case .refreshOnOpen: state.updatePanel { $0.refreshOnOpen.toggle() }; return
         case .refreshEvery(let minutes): state.updatePanel { $0.refreshEveryMinutes = minutes }; scheduleReload(); return
@@ -418,8 +423,25 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             let content = UNMutableNotificationContent()
             content.title = event.title
             content.body = event.body
+            if event.offersUse {
+                // "Use" opens the provider's tab on its reset; the reset itself still asks first.
+                content.categoryIdentifier = Self.useCategory
+                content.userInfo = ["tab": event.tab ?? ""]
+            }
             UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: event.id, content: content, trigger: nil))
         }
+    }
+
+    static let useCategory = "crossfeed.reset-held"
+
+    /// "Use" on a notice about a held reset: open the menu on that provider's tab, where Use asks and runs.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        defer { completionHandler() }
+        guard response.notification.request.content.categoryIdentifier == Self.useCategory else { return }
+        if let tab = response.notification.request.content.userInfo["tab"] as? String, !tab.isEmpty { state.choose(tab) }
+        state.showsSettings = false
+        item?.button?.performClick(nil)
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
@@ -745,7 +767,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         step { // a provider tab: header, links, a reset flow, the policy popup
             let tab = self.state.current
             let page = self.state.presenter?.providerPage(for: tab, show: .used)
-            check("header buttons", click(.refresh) && click(.settings))
+            check("header buttons", click(.refresh) && click(.settings) && click(.themeCycle))
+            // The Castor theme switch cycles System → Light → Dark → System, writes panel.json, and moves the menu's look.
+            let before = self.state.panel.appearance
+            check("theme switch cycles", click(.themeCycle, real: true) && self.state.panel.appearance == before.next
+                  && PanelPrefsStore(url: self.panelStore.url).load().appearance == before.next)
+            _ = click(.themeCycle, real: true); _ = click(.themeCycle, real: true)
+            check("theme switch comes round", self.state.panel.appearance == before
+                  && PanelPrefsStore(url: self.panelStore.url).load().appearance == before)
             if let page {
                 check("no Console link", !page.links.contains { $0.kind == .console })
                 for link in page.links {
@@ -828,7 +857,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
         step {
             let shown = self.state.shownTabs.map(\.id).filter { $0 != Presenter.overviewID }
             var wanted: [MenuControl] = PanelPrefs.Appearance.allCases.map { .appearance($0) } + [.panelShow(.used), .panelShow(.left), .openOn("last"), .openOn("overview"),
-                                                                                                 .refreshOnOpen, .notifyLow, .notifyReset]
+                                                                                                 .refreshOnOpen, .notifyLow, .notifyReset] + PanelPrefs.AutoUseResets.allCases.map { .autoUseResets($0) }
             wanted += shown.map { .openOn($0) } + PanelPrefs.refreshChoices.map { .refreshEvery($0) }
             let apis = self.state.orderedTabs.filter { self.state.live?.isBudgetable($0.id) == true }.map(\.id)
             wanted += apis.flatMap { pool in [MenuControl.budget(pool, nil)] + PanelPrefs.budgetChoices.map { .budget(pool, $0) } }
@@ -840,6 +869,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotifica
             check("appearance light", self.menu.appearance?.name == .aqua && restarted().appearance == .light)
             _ = click(.appearance(.system), real: true)
             check("appearance system", self.menu.appearance == nil && restarted().appearance == .system)
+            check("auto-use resets on", click(.autoUseResets(.whenUsedUp), real: true) && restarted().autoUseResets == .whenUsedUp)
+            check("auto-use resets off", click(.autoUseResets(.off), real: true) && restarted().autoUseResets == .off)
             check("show", click(.panelShow(.left), real: true) && self.state.panel.show == .left && restarted().show == .left)
             _ = click(.panelShow(.used), real: true)
             if let tab = shown.first {

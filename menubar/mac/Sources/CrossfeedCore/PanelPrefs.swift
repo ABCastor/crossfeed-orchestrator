@@ -2,7 +2,7 @@
 //
 //   ~/.config/orchestrator/panel.json   (XDG_CONFIG_HOME respected; FLEET_PANEL_PREFS overrides)
 //   {"schema":1, "show":"used", "tabs":[...], "hidden_tabs":[...], "tiles":{tab:[ids]}, "hidden_tiles":{tab:[ids]},
-//    "appearance":"system|light|dark", "menubar":{"icon":"crossfeed|provider|none"},
+//    "appearance":"system|light|dark", "auto_use_resets":"off|when_used_up", "menubar":{"icon":"crossfeed|provider|none"},
 //    "refresh":{"on_open":true,"every_minutes":5}, "open_on":"last|<tab>", "last_tab":"<tab>",
 //    "budgets":{pool:usd}, "tile_options":{"<tab>/<tile>":{"metric":"cost","days":30}}}
 //
@@ -80,6 +80,14 @@ public struct PanelPrefs: Equatable {
     public enum Appearance: String, CaseIterable {
         case system, light, dark
         public var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+        /// The Castor theme switch's order: System, then Light, then Dark, then round again.
+        public var next: Appearance { self == .system ? .light : (self == .light ? .dark : .system) }
+    }
+
+    /// Whether the app spends a held limit reset by itself when a window is used up. Off until the operator turns it on.
+    public enum AutoUseResets: String, CaseIterable {
+        case off, whenUsedUp = "when_used_up"
+        public var title: String { self == .off ? "Ask first" : "Use when used up" }
     }
 
     public static let schema = 1
@@ -104,6 +112,8 @@ public struct PanelPrefs: Equatable {
 
     public var show = Show.used
     public var appearance = Appearance.system
+    /// panel.json `auto_use_resets`: "off" (default) or "when_used_up". The spending itself is fleetctl's.
+    public var autoUseResets = AutoUseResets.off
     /// The bar item's icon as the file spells it: "crossfeed", "provider" or "none". Nil until the operator chooses.
     public var menubarIcon: String?
     /// Read again when the menu opens, if the last reading is older than a minute.
@@ -277,6 +287,7 @@ public struct PanelPrefs: Equatable {
         }
         if raw["show"]?.stringValue == "left" { show = .left }
         appearance = raw["appearance"]?.stringValue.flatMap(Appearance.init) ?? .system
+        autoUseResets = raw["auto_use_resets"]?.stringValue.flatMap(AutoUseResets.init) ?? .off
         if let icon = raw["menubar"]?.objectValue?["icon"]?.stringValue, ["crossfeed", "provider", "none"].contains(icon) { menubarIcon = icon }
         if let refresh = raw["refresh"]?.objectValue {
             if case .bool(let on)? = refresh["on_open"] { refreshOnOpen = on }
@@ -303,7 +314,7 @@ public struct PanelPrefs: Equatable {
         tiles = lists(raw["tiles"])
         hiddenTiles = lists(raw["hidden_tiles"]).filter { !$0.value.isEmpty }
         let known: Set<String> = ["schema", "show", "tabs", "hidden_tabs", "tiles", "hidden_tiles", "appearance", "menubar",
-                                  "refresh", "open_on", "last_tab", "budgets", "tile_options"]
+                                  "refresh", "open_on", "last_tab", "budgets", "tile_options", "auto_use_resets"]
         extra = raw.filter { !known.contains($0.key) }
 
     }
@@ -319,6 +330,7 @@ public struct PanelPrefs: Equatable {
         out["tiles"] = Dictionary(uniqueKeysWithValues: tiles.map { (PanelIDs.file($0.key), $0.value) })
         out["hidden_tiles"] = Dictionary(uniqueKeysWithValues: hiddenTiles.map { (PanelIDs.file($0.key), $0.value) })
         out["appearance"] = appearance.rawValue
+        out["auto_use_resets"] = autoUseResets.rawValue
         var bar = (base["menubar"] as? [String: Any]) ?? [:]
         bar["icon"] = menubarIcon
         if bar["icon"] == nil { bar.removeValue(forKey: "icon") }

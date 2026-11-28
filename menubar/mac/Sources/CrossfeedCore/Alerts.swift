@@ -13,6 +13,16 @@ public struct AlertWindow: Equatable {
     public var used: Double       // 0...100
     public var resetAt: Date?
     public var resetText: String? // "Resets in 3d 4h", or the clock time when the operator chose clocks
+    public var held = 0           // usable limit resets held that clear this window
+    public var tab: String?       // the provider's tab, where the reset can be used
+
+    public init(key: String, label: String, used: Double, resetAt: Date?, resetText: String?, held: Int = 0, tab: String? = nil) {
+        self.key = key; self.label = label; self.used = used; self.resetAt = resetAt; self.resetText = resetText
+        self.held = held; self.tab = tab
+    }
+
+    /// "🎟️ 1 held" when a reset is held, else nil.
+    public var heldText: String? { held > 0 ? "🎟️ \(held) held" : nil }
 }
 
 public struct AlertMemory: Codable, Equatable {
@@ -33,6 +43,9 @@ public struct AlertEvent: Equatable {
     public var id: String
     public var title: String
     public var body: String
+    /// A reset is held for this window: the notice offers Use, which opens the provider's tab on the reset.
+    public var offersUse = false
+    public var tab: String?
 }
 
 public enum AlertEngine {
@@ -56,7 +69,7 @@ public enum AlertEngine {
                 found.append(AlertWindow(
                     key: "\(pool.pool)|\(limit.name ?? limit.title ?? String(index))|\(limit.scope ?? "")", label: label,
                     used: min(100, max(0, used)), resetAt: limit.resetAt.flatMap { Presenter.iso.date(from: $0) },
-                    resetText: presenter.resetText(limit)))
+                    resetText: presenter.resetText(limit), held: limit.held, tab: Presenter.groupID(pool)))
             }
         }
         return found
@@ -87,12 +100,17 @@ public enum AlertEngine {
                                              body: "Ready to use again."))
                 }
             } else if level > before.level, low {
+                // A held reset changes the news: the window is not about to run out, there is a way on.
                 let when = window.resetText ?? ""
+                let held = window.heldText.map { " · " + $0 }
+                let use = window.held > 0
                 if level == 2 {
-                    events.append(AlertEvent(kind: .out, id: "\(window.key)|out|\(stamp)", title: "\(window.label) used up", body: when))
+                    events.append(AlertEvent(kind: .out, id: "\(window.key)|out|\(stamp)", title: "\(window.label) used up" + (held ?? ""),
+                                             body: use ? "Use a reset to carry on. " + when : when, offersUse: use, tab: window.tab))
                 } else {
                     events.append(AlertEvent(kind: .low, id: "\(window.key)|low|\(stamp)",
-                                             title: "\(window.label) at \(Int(window.used.rounded()))%", body: when))
+                                             title: "\(window.label) at \(Int(window.used.rounded()))%" + (held ?? ""),
+                                             body: use ? "A reset is held. " + when : when, offersUse: use, tab: window.tab))
                 }
             }
             next.windows[window.key] = memory

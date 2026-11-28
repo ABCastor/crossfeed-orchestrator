@@ -10,6 +10,10 @@ import SwiftUI
 /// Every button the host routes by position, because a click inside an open NSMenu reaches the hosting view, not SwiftUI.
 public enum MenuControl: Hashable {
     case refresh, settings, back, reset, notifyLow, notifyReset
+    /// The Castor theme switch in the header: one press moves System → Light → Dark → System.
+    case themeCycle
+    /// Settings, General: whether a held reset is spent by itself when a window is used up.
+    case autoUseResets(PanelPrefs.AutoUseResets)
     case openTab(String), usage(String?), console, openURL(URL), toggleTab(String), moveTab(String, Int), settingsPage(Int)
     case show(String), window(String), count(BarPrefs.Count), icon(BarPrefs.Icon), text(BarPrefs.Text), extra(BarPrefs.Extra), resets(BarPrefs.Reset)
     /// Settings, General: the look, when the menu opens, how it reads, and the budget of an API pool (nil clears it).
@@ -496,7 +500,7 @@ struct OverviewHeader: View {
                     if alert.hot { Triangle().fill(CF.human).frame(width: 8, height: 7) }
                     else { Circle().fill(CF.between).frame(width: 6, height: 6) }
                     Text(alert.text).font(CF.face(13, .semibold)).monospacedDigit()
-                        .foregroundStyle(alert.hot ? CF.humanText : CF.ink).lineLimit(1)
+                        .foregroundStyle(alert.hot ? CF.humanText : CF.ink).lineLimit(1).minimumScaleFactor(0.82)
                 }
                 .contentShape(Rectangle())
                 .routedIf(alert.tab.map { .at("alert", .tab($0)) })
@@ -504,6 +508,7 @@ struct OverviewHeader: View {
             }
             Spacer(minLength: 4)
             RefreshButton(state: state)
+            ThemeToggleButton(state: state)
             HeaderButton(symbol: "slider.horizontal.3", label: "Settings", control: .settings, state: state)
         }
         .padding(.leading, 16).padding(.trailing, 10).padding(.top, 4).padding(.bottom, 8)
@@ -534,6 +539,7 @@ struct ProviderHeader: View {
                 Text(state.isReloading ? "Updating…" : page.updated).font(CF.face(12)).foregroundStyle(CF.quiet).lineLimit(1)
                 Spacer(minLength: 4)
                 RefreshButton(state: state)
+                ThemeToggleButton(state: state)
                 HeaderButton(symbol: "slider.horizontal.3", label: "Settings", control: .settings, state: state)
                     .padding(.trailing, -6)
             }
@@ -698,6 +704,32 @@ struct RefreshButton: View {
                 withAnimation(nil) { turn = 0 }
             }
         }
+    }
+}
+
+/// The Castor theme switch: one button, System → Light → Dark. The icon shows the current choice (half disc, sun, moon).
+struct ThemeToggleButton: View {
+    @ObservedObject var state: MenuState
+    @State private var hovering = false
+
+    var body: some View {
+        let look = state.panel.appearance
+        Button { state.onControl(.themeCycle) } label: {
+            Group {
+                if let image = ToolIcons.image(for: look) {
+                    Image(nsImage: image).renderingMode(.template).resizable().scaledToFit().frame(width: 15, height: 15)
+                } else {
+                    Image(systemName: "circle.lefthalf.filled").font(.system(size: 12))
+                }
+            }
+            .foregroundStyle(hovering ? CF.ink : CF.quiet)
+            .frame(width: 26, height: 22)
+            .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? CF.hover : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).routed(.themeCycle).onHover { hovering = $0 }
+        .accessibilityLabel("Theme: \(look.rawValue). Switch to \(look.next.rawValue)")
+        .help("Theme: \(look.title)")
     }
 }
 
